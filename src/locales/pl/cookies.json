@@ -1,0 +1,19 @@
+{
+  "bannerTitle": "Twoje ustawienia prywatności",
+  "bannerDescription": "Niezbędna pamięć przeglądarki pomaga utrzymać działanie usługi. Za Twoją zgodą analityka i reklamy mogą korzystać z dodatkowej pamięci, aby mierzyć wizyty i skuteczność kampanii. W każdej chwili możesz zmienić swoją decyzję.",
+  "preferencesTitle": "Ustawienia plików cookies",
+  "preferencesDescription": "Wybierz, na jakie opcjonalne kategorie pamięci zezwalasz. Niezbędna pamięć jest zawsze aktywna, ponieważ jest wymagana do działania usługi i zapamiętania tej decyzji.",
+  "acceptAll": "Zaakceptuj wszystkie",
+  "rejectNonEssential": "Odrzuć opcjonalne",
+  "customizePreferences": "Dostosuj ustawienia",
+  "savePreferences": "Zapisz mój wybór",
+  "closePreferences": "Zamknij ustawienia",
+  "essentialTitle": "Niezbędna pamięć",
+  "essentialDescription": "Wymagana do podstawowych funkcji, bezpieczeństwa i zapisania decyzji o zgodzie. Tej kategorii nie można wyłączyć.",
+  "analyticsTitle": "Pamięć analityczna",
+  "analyticsDescription": "Umożliwia analizę sposobu korzystania z usługi z poszanowaniem prywatności. Analityka jest uruchamiana wyłącznie po wyrażeniu zgody.",
+  "advertisingTitle": "Pamięć reklamowa",
+  "advertisingDescription": "Umożliwia używanie pamięci przez tagi mierzące skuteczność reklam i personalizujące je po wyrażeniu zgody.",
+  "settingsLink": "Ustawienia plików cookies",
+  "savedConfirmation": "Zapisaliśmy Twoje ustawienia prywatności. Możesz je zmienić w dowolnym momencie w ustawieniach plików cookies."
+}

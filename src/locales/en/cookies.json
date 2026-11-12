@@ -1,0 +1,19 @@
+{
+  "bannerTitle": "Your privacy choices",
+  "bannerDescription": "We use essential storage to keep this service working. With your permission, analytics and advertising storage help us understand visits and measure campaigns. You can change your choices at any time.",
+  "preferencesTitle": "Cookie preferences",
+  "preferencesDescription": "Choose which optional storage categories you allow. Essential storage is always active because it is required for the service and to remember this choice.",
+  "acceptAll": "Accept all",
+  "rejectNonEssential": "Reject non-essential",
+  "customizePreferences": "Customize preferences",
+  "savePreferences": "Save my choices",
+  "closePreferences": "Close preferences",
+  "essentialTitle": "Essential storage",
+  "essentialDescription": "Required for core functions, security, and saving your consent choice. This category cannot be switched off.",
+  "analyticsTitle": "Analytics storage",
+  "analyticsDescription": "Allows privacy-aware measurement of how the service is used. Analytics are loaded only after you opt in.",
+  "advertisingTitle": "Advertising storage",
+  "advertisingDescription": "Allows advertising measurement and personalization tags to use storage after you opt in.",
+  "settingsLink": "Cookie settings",
+  "savedConfirmation": "Your privacy choices have been saved. You can update them at any time from Cookie settings."
+}

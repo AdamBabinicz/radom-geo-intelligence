@@ -1,0 +1,99 @@
+{
+  "privacyTitle": "Privacy Policy",
+  "privacyDescription": "How Northstar Ops handles personal data and optional analytics.",
+  "termsTitle": "Terms of Service",
+  "termsDescription": "Terms for using the Northstar Ops service and estimates.",
+  "privacyUpdated": "Last reviewed: 12 November 2026",
+  "termsUpdated": "Last reviewed: 12 November 2026",
+  "backToDashboard": "Back to dashboard",
+  "footerNavigationLabel": "Legal information",
+  "privacyLink": "Privacy policy",
+  "termsLink": "Terms of service",
+  "copyrightTemplate": "© {years} Northstar Ops. All rights reserved.",
+  "privacySections": [
+    {
+      "title": "Data controller",
+      "paragraphs": [
+        "The controller is [FULL LEGAL ENTITY NAME], operating the Northstar Ops service, with its registered address at [REGISTERED ADDRESS]. These details must be completed before this policy is published.",
+        "For privacy questions or requests, contact [PRIVACY CONTACT EMAIL]. Do not send sensitive personal data through the market dashboard."
+      ]
+    },
+    {
+      "title": "Data and purposes",
+      "paragraphs": [
+        "The dashboard presents local service coverage, market comparisons, and illustrative price estimates. The current price preview calculates results in your browser; this demonstration does not submit a quote request or save quote inputs to a server.",
+        "If you contact the controller through a separately provided channel, the information you send may be used to answer your enquiry or prepare a requested service quote. The controller must describe that channel and its retention period before launch."
+      ]
+    },
+    {
+      "title": "Analytics and similar storage",
+      "paragraphs": [
+        "Optional analytics and advertising storage are off by default. The site records your category choices in this browser's local storage for up to 180 days. The consent interface itself does not set analytics or advertising cookies.",
+        "In production, Vercel Analytics is loaded only after analytics consent. The consent interface also sends Google Consent Mode v2-compatible dataLayer updates for analytics_storage, ad_storage, ad_user_data, and ad_personalization. No Google Tag Manager container or GA4 property is configured by this component; any tags must honor these signals and be configured before use."
+      ]
+    },
+    {
+      "title": "Legal bases and retention",
+      "paragraphs": [
+        "Consent is the basis for optional analytics and advertising storage. Any future quote or enquiry processing must use the legal basis that applies to that service, such as steps requested before entering a contract. The controller must set and disclose retention periods for enquiry records before accepting them."
+      ]
+    },
+    {
+      "title": "Your rights under GDPR",
+      "paragraphs": [
+        "Subject to applicable law, you may request access, correction, deletion, restriction, or portability of your personal data, object to processing, and withdraw consent at any time. Withdrawing consent does not affect processing that took place before withdrawal.",
+        "You may also lodge a complaint with the Polish supervisory authority, the President of the Personal Data Protection Office (UODO), or your local data protection authority."
+      ]
+    },
+    {
+      "title": "Providers and international transfers",
+      "paragraphs": [
+        "The production hosting, analytics, and any future service providers must be listed by the controller together with their processing locations and applicable safeguards before launch. Do not publish this policy until those deployment-specific details have been verified."
+      ]
+    },
+    {
+      "title": "Contact",
+      "paragraphs": [
+        "Privacy contact: [PRIVACY CONTACT EMAIL]. Controller: [FULL LEGAL ENTITY NAME], [REGISTERED ADDRESS]. Replace each bracketed field with verified business details before publishing."
+      ]
+    }
+  ],
+  "termsSections": [
+    {
+      "title": "About the service",
+      "paragraphs": [
+        "Northstar Ops provides a dashboard for viewing local service-area and market information, together with an illustrative price preview. The current demonstration uses sample market data and is not a booking, payment, or quote-submission system."
+      ]
+    },
+    {
+      "title": "Estimates and availability",
+      "paragraphs": [
+        "Prices and travel fees shown in the preview are estimates for planning only. They are not a binding offer, do not guarantee service availability, and must be confirmed by the service provider before work is agreed."
+      ]
+    },
+    {
+      "title": "Acceptable use",
+      "paragraphs": [
+        "Use the service lawfully and do not interfere with its security, availability, or operation. You are responsible for checking that information is suitable for your circumstances before relying on it."
+      ]
+    },
+    {
+      "title": "Intellectual property and availability",
+      "paragraphs": [
+        "The service interface and its original materials are provided by the controller or its licensors. The service may change or be unavailable during maintenance. Nothing in these terms limits rights that cannot be excluded under applicable consumer law."
+      ]
+    },
+    {
+      "title": "Liability and governing law",
+      "paragraphs": [
+        "The controller must complete the applicable legal entity, governing-law, and consumer-dispute details before publication. These terms do not exclude liability where exclusion is prohibited by law or reduce mandatory consumer protections."
+      ]
+    },
+    {
+      "title": "Contact and changes",
+      "paragraphs": [
+        "Questions about these terms: [CONTACT EMAIL]. Controller: [FULL LEGAL ENTITY NAME], [REGISTERED ADDRESS]. Replace these fields and obtain a legal review before accepting real customers."
+      ]
+    }
+  ]
+}

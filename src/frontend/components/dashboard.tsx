@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Activity, ArrowDownRight, ArrowUpRight, Bell, Bot, ChevronDown, CircleHelp, Command, Globe2, LayoutDashboard, MapPin, Moon, Search, Settings2, Sparkles, Sun, TrendingUp, Users, Waves } from 'lucide-react'
 import { translations, type Locale } from '@/src/locales'
 import { CoverageMap } from './features/radius-map/coverage-map'
@@ -8,14 +8,20 @@ import { CompetitorTable } from './features/competitor-table/competitor-table'
 import { RovoConsole } from './features/rovo-console/rovo-console'
 import { PricingCalculator } from './features/pricing-calculator'
 import { getMarketStats } from './features/radius-map/market-stats'
+import { AppFooter } from './layout/footer'
 
-export function Dashboard() {
+export function Dashboard({ currentYear }: { currentYear: number }) {
   const [locale, setLocale] = useState<Locale>('en')
   const [dark, setDark] = useState(false)
   const [running, setRunning] = useState(false)
   const [city, setCity] = useState('Radom')
   const [radiusKm, setRadiusKm] = useState(30)
   const t = translations[locale]
+  useEffect(() => {
+    document.documentElement.lang = locale
+    document.documentElement.classList.toggle('dark', dark)
+    window.dispatchEvent(new Event('app-locale-change'))
+  }, [locale, dark])
   const activeCity = city.trim() || t.cityRadom
   const stats = getMarketStats(radiusKm, activeCity)
   const runScan = () => {
@@ -43,9 +49,9 @@ export function Dashboard() {
           <div className="mx-auto max-w-[1450px] px-5 py-7 md:px-9 md:py-9">
             <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[.15em] text-teal-700 dark:text-teal-300"><span className="size-1.5 rounded-full bg-teal-600"/>{t.radomRegion.replace('{city}', activeCity.toLocaleUpperCase(locale === 'pl' ? 'pl-PL' : 'en-US'))}</div><h1 className="text-[28px] font-semibold tracking-[-.04em] md:text-[32px]">{t.pageTitle}</h1><p className="mt-1.5 text-sm text-slate-500">{t.pageSubtitle}</p></div><button onClick={runScan} disabled={running} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:opacity-70"><Sparkles size={15}/>{running ? t.scanRunning : t.runScan}</button></div>
             <section aria-label={t.performanceSummary} className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4"><Metric icon={<MapPin size={16}/>} label={t.coverageArea} value={t.radiusValue.replace('{radius}', String(radiusKm))} foot={t.radiusFromRadom.replace('{city}', activeCity)} positive/><Metric icon={<Users size={16}/>} label={t.serviceableTowns} value={String(stats.towns)} foot={t.townsInRadius.replace('{city}', activeCity)} positive/><Metric icon={<Activity size={16}/>} label={t.localCompetitors} value={String(stats.competitors)} foot={t.competitorsTracked.replace('{city}', activeCity)}/><Metric icon={<TrendingUp size={16}/>} label={t.avgMarketGap} value="−12%" foot={t.belowMarketAverage}/></section>
-            <div className="grid gap-5 xl:grid-cols-[1.05fr_.95fr]"><CoverageMap t={t} city={activeCity} radiusKm={radiusKm} stats={stats} onCityChange={setCity} onRadiusChange={setRadiusKm}/><CompetitorTable t={t} city={activeCity} radiusKm={radiusKm} stats={stats} onCityChange={setCity} onRadiusChange={setRadiusKm}/></div>
-            <div className="mt-5 grid gap-5 xl:grid-cols-[1.08fr_.92fr]"><RovoConsole t={t} running={running} onRun={runScan} city={activeCity} radiusKm={radiusKm} stats={stats}/><PricingCalculator t={t}/></div>
-            <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-slate-200 py-5 text-[10px] text-slate-400 sm:flex-row dark:border-slate-800"><span>{t.footerLeft}</span><span>{t.currentCaseStudy.replace('{city}', activeCity).replace('{radius}', String(radiusKm))}</span></footer>
+            <div className="grid min-w-0 gap-5 xl:grid-cols-[1.05fr_.95fr]"><CoverageMap t={t} city={activeCity} radiusKm={radiusKm} stats={stats} onCityChange={setCity} onRadiusChange={setRadiusKm}/><CompetitorTable t={t} locale={locale} city={activeCity} radiusKm={radiusKm} stats={stats} onCityChange={setCity} onRadiusChange={setRadiusKm}/></div>
+            <div className="mt-5 grid min-w-0 gap-5 xl:grid-cols-[1.08fr_.92fr]"><RovoConsole t={t} locale={locale} running={running} onRun={runScan} city={activeCity} radiusKm={radiusKm} stats={stats}/><PricingCalculator t={t} locale={locale}/></div>
+            <AppFooter locale={locale} currentYear={currentYear} caseStudy={t.footerRight.replace('{city}', activeCity).replace('{radius}', String(radiusKm))} />
           </div>
         </main>
       </div>

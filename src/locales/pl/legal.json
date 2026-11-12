@@ -1,0 +1,99 @@
+{
+  "privacyTitle": "Polityka prywatności",
+  "privacyDescription": "Informacje o przetwarzaniu danych osobowych przez Northstar Ops i opcjonalnej analityce.",
+  "termsTitle": "Regulamin usługi",
+  "termsDescription": "Zasady korzystania z usługi Northstar Ops i prezentowanych wycen.",
+  "privacyUpdated": "Ostatnia aktualizacja: 12 listopada 2026 r.",
+  "termsUpdated": "Ostatnia aktualizacja: 12 listopada 2026 r.",
+  "backToDashboard": "Wróć do pulpitu",
+  "footerNavigationLabel": "Informacje prawne",
+  "privacyLink": "Polityka prywatności",
+  "termsLink": "Regulamin",
+  "copyrightTemplate": "© {years} Northstar Ops. Wszelkie prawa zastrzeżone.",
+  "privacySections": [
+    {
+      "title": "Administrator danych",
+      "paragraphs": [
+        "Administratorem jest [PEŁNA NAZWA PODMIOTU], prowadzący usługę Northstar Ops, z siedzibą pod adresem [ADRES SIEDZIBY]. Przed publikacją tej polityki należy uzupełnić te dane.",
+        "Pytania i żądania dotyczące prywatności należy kierować na adres [E-MAIL DO SPRAW PRYWATNOŚCI]. Nie przesyłaj wrażliwych danych przez pulpit analizy rynku."
+      ]
+    },
+    {
+      "title": "Dane i cele przetwarzania",
+      "paragraphs": [
+        "Pulpit prezentuje lokalny zasięg usług, porównania rynkowe i przykładowe wyceny. Obecny podgląd cen oblicza wynik w przeglądarce; ta wersja demonstracyjna nie wysyła zapytania o wycenę ani nie zapisuje danych wyceny na serwerze.",
+        "Jeśli skontaktujesz się z administratorem za pośrednictwem udostępnionego osobno kanału, przekazane informacje mogą posłużyć do odpowiedzi na zapytanie lub przygotowania zamówionej wyceny. Przed uruchomieniem administrator powinien opisać ten kanał i okres przechowywania danych."
+      ]
+    },
+    {
+      "title": "Analityka i podobna pamięć",
+      "paragraphs": [
+        "Opcjonalna analityka i pamięć reklamowa są domyślnie wyłączone. Wybór kategorii zapisujemy w pamięci lokalnej tej przeglądarki przez maksymalnie 180 dni. Sam interfejs zgody nie ustawia analitycznych ani reklamowych plików cookies.",
+        "W środowisku produkcyjnym Vercel Analytics uruchamia się dopiero po zgodzie na analitykę. Interfejs wysyła również aktualizacje dataLayer zgodne z Google Consent Mode v2 dla analytics_storage, ad_storage, ad_user_data i ad_personalization. Ten komponent nie konfiguruje kontenera Google Tag Manager ani usługi GA4; przed użyciem należy skonfigurować tagi tak, aby respektowały te sygnały."
+      ]
+    },
+    {
+      "title": "Podstawa prawna i okres przechowywania",
+      "paragraphs": [
+        "Zgoda jest podstawą opcjonalnej analityki i pamięci reklamowej. Przetwarzanie przyszłych zapytań o wycenę musi opierać się na właściwej podstawie prawnej, na przykład działaniach podejmowanych na żądanie przed zawarciem umowy. Przed przyjmowaniem takich zapytań administrator powinien ustalić i podać okres przechowywania danych."
+      ]
+    },
+    {
+      "title": "Twoje prawa wynikające z RODO",
+      "paragraphs": [
+        "W granicach obowiązujących przepisów możesz żądać dostępu do danych, ich sprostowania, usunięcia, ograniczenia przetwarzania lub przeniesienia, wnieść sprzeciw i w dowolnym momencie wycofać zgodę. Wycofanie zgody nie wpływa na zgodność z prawem przetwarzania sprzed jej wycofania.",
+        "Możesz również złożyć skargę do polskiego organu nadzorczego — Prezesa Urzędu Ochrony Danych Osobowych (UODO) — albo właściwego lokalnego organu ochrony danych."
+      ]
+    },
+    {
+      "title": "Dostawcy i transfery międzynarodowe",
+      "paragraphs": [
+        "Przed uruchomieniem administrator powinien wskazać dostawców hostingu, analityki i przyszłych usług wraz z miejscami przetwarzania danych i stosowanymi zabezpieczeniami. Nie publikuj tej polityki przed zweryfikowaniem szczegółów konkretnego wdrożenia."
+      ]
+    },
+    {
+      "title": "Kontakt",
+      "paragraphs": [
+        "Kontakt w sprawach prywatności: [E-MAIL DO SPRAW PRYWATNOŚCI]. Administrator: [PEŁNA NAZWA PODMIOTU], [ADRES SIEDZIBY]. Przed publikacją zastąp wszystkie pola w nawiasach zweryfikowanymi danymi firmy."
+      ]
+    }
+  ],
+  "termsSections": [
+    {
+      "title": "Informacje o usłudze",
+      "paragraphs": [
+        "Northstar Ops udostępnia pulpit z lokalnymi informacjami o obszarze usług i rynku oraz przykładowy podgląd cen. Obecna wersja demonstracyjna wykorzystuje przykładowe dane i nie obsługuje rezerwacji, płatności ani wysyłania zapytań o wycenę."
+      ]
+    },
+    {
+      "title": "Wyceny i dostępność",
+      "paragraphs": [
+        "Ceny i opłaty za dojazd widoczne w podglądzie mają charakter orientacyjny. Nie stanowią wiążącej oferty, nie gwarantują dostępności usługi i wymagają potwierdzenia przez usługodawcę przed uzgodnieniem realizacji."
+      ]
+    },
+    {
+      "title": "Dozwolone korzystanie",
+      "paragraphs": [
+        "Korzystaj z usługi zgodnie z prawem i nie zakłócaj jej bezpieczeństwa, dostępności ani działania. Przed podjęciem decyzji sprawdź, czy prezentowane informacje odpowiadają Twojej sytuacji."
+      ]
+    },
+    {
+      "title": "Własność intelektualna i dostępność",
+      "paragraphs": [
+        "Interfejs usługi i jej oryginalne materiały należą do administratora lub jego licencjodawców. Usługa może ulec zmianie lub być czasowo niedostępna z powodu prac konserwacyjnych. Regulamin nie ogranicza praw, których nie można wyłączyć na mocy bezwzględnie obowiązujących przepisów konsumenckich."
+      ]
+    },
+    {
+      "title": "Odpowiedzialność i prawo właściwe",
+      "paragraphs": [
+        "Przed publikacją administrator musi uzupełnić informacje o właściwym podmiocie, prawie właściwym i rozwiązywaniu sporów konsumenckich. Regulamin nie wyłącza odpowiedzialności, której wyłączenie jest zabronione, ani nie ogranicza bezwzględnie obowiązujących praw konsumenta."
+      ]
+    },
+    {
+      "title": "Kontakt i zmiany",
+      "paragraphs": [
+        "Pytania dotyczące regulaminu: [E-MAIL KONTAKTOWY]. Administrator: [PEŁNA NAZWA PODMIOTU], [ADRES SIEDZIBY]. Uzupełnij te dane i zleć weryfikację prawną przed przyjęciem prawdziwych klientów."
+      ]
+    }
+  ]
+}
