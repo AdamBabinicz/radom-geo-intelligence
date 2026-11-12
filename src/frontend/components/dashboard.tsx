@@ -7,12 +7,17 @@ import { CoverageMap } from './features/radius-map/coverage-map'
 import { CompetitorTable } from './features/competitor-table/competitor-table'
 import { RovoConsole } from './features/rovo-console/rovo-console'
 import { PricingCalculator } from './features/pricing-calculator'
+import { getMarketStats } from './features/radius-map/market-stats'
 
 export function Dashboard() {
   const [locale, setLocale] = useState<Locale>('en')
   const [dark, setDark] = useState(false)
   const [running, setRunning] = useState(false)
+  const [city, setCity] = useState('Radom')
+  const [radiusKm, setRadiusKm] = useState(30)
   const t = translations[locale]
+  const activeCity = city.trim() || t.cityRadom
+  const stats = getMarketStats(radiusKm, activeCity)
   const runScan = () => {
     setRunning(true)
     window.setTimeout(() => setRunning(false), 3200)
@@ -36,11 +41,11 @@ export function Dashboard() {
         <main id="overview" className="min-h-screen lg:ml-[248px]">
           <header className="sticky top-0 z-[5] flex h-[68px] items-center justify-between border-b border-slate-200/80 bg-white/90 px-5 backdrop-blur-md dark:border-slate-800 dark:bg-[#141c1e]/90 md:px-9"><div className="flex items-center gap-2 text-xs text-slate-400">{t.workspace}<span>/</span><span className="font-semibold text-slate-700 dark:text-slate-200">{t.overview}</span></div><div className="flex items-center gap-2"><button aria-label={t.search} className="hidden size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 md:grid dark:hover:bg-slate-800"><Search size={17}/></button><button aria-label={t.notifications} className="relative grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><Bell size={17}/><span className="absolute right-2 top-2 size-1.5 rounded-full bg-rose-500"/></button><button aria-label={t.toggleTheme} onClick={() => setDark(!dark)} className="grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">{dark ? <Sun size={17}/> : <Moon size={17}/>}</button><button onClick={() => setLocale(locale === 'en' ? 'pl' : 'en')} className="flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-2.5 text-xs font-semibold dark:border-slate-700"><Globe2 size={15}/>{locale.toUpperCase()}</button><button aria-label={t.settings} className="grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"><Settings2 size={17}/></button></div></header>
           <div className="mx-auto max-w-[1450px] px-5 py-7 md:px-9 md:py-9">
-            <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[.15em] text-teal-700 dark:text-teal-300"><span className="size-1.5 rounded-full bg-teal-600"/>{t.radomRegion}</div><h1 className="text-[28px] font-semibold tracking-[-.04em] md:text-[32px]">{t.pageTitle}</h1><p className="mt-1.5 text-sm text-slate-500">{t.pageSubtitle}</p></div><button onClick={runScan} disabled={running} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:opacity-70"><Sparkles size={15}/>{running ? t.scanRunning : t.runScan}</button></div>
-            <section aria-label={t.performanceSummary} className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4"><Metric icon={<MapPin size={16}/>} label={t.coverageArea} value="30 km" foot={t.radiusFromRadom} positive/><Metric icon={<Users size={16}/>} label={t.serviceableTowns} value="8" foot={t.townsInRadius} positive/><Metric icon={<Activity size={16}/>} label={t.localCompetitors} value="24" foot={t.competitorsTracked}/><Metric icon={<TrendingUp size={16}/>} label={t.avgMarketGap} value="−12%" foot={t.belowMarketAverage}/></section>
-            <div className="grid gap-5 xl:grid-cols-[1.05fr_.95fr]"><CoverageMap t={t}/><CompetitorTable t={t}/></div>
-            <div className="mt-5 grid gap-5 xl:grid-cols-[1.08fr_.92fr]"><RovoConsole t={t} running={running} onRun={runScan}/><PricingCalculator t={t}/></div>
-            <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-slate-200 py-5 text-[10px] text-slate-400 sm:flex-row dark:border-slate-800"><span>{t.footerLeft}</span><span>{t.footerRight}</span></footer>
+            <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[.15em] text-teal-700 dark:text-teal-300"><span className="size-1.5 rounded-full bg-teal-600"/>{t.radomRegion.replace('{city}', activeCity.toLocaleUpperCase(locale === 'pl' ? 'pl-PL' : 'en-US'))}</div><h1 className="text-[28px] font-semibold tracking-[-.04em] md:text-[32px]">{t.pageTitle}</h1><p className="mt-1.5 text-sm text-slate-500">{t.pageSubtitle}</p></div><button onClick={runScan} disabled={running} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:opacity-70"><Sparkles size={15}/>{running ? t.scanRunning : t.runScan}</button></div>
+            <section aria-label={t.performanceSummary} className="mb-5 grid grid-cols-2 gap-3 xl:grid-cols-4"><Metric icon={<MapPin size={16}/>} label={t.coverageArea} value={t.radiusValue.replace('{radius}', String(radiusKm))} foot={t.radiusFromRadom.replace('{city}', activeCity)} positive/><Metric icon={<Users size={16}/>} label={t.serviceableTowns} value={String(stats.towns)} foot={t.townsInRadius.replace('{city}', activeCity)} positive/><Metric icon={<Activity size={16}/>} label={t.localCompetitors} value={String(stats.competitors)} foot={t.competitorsTracked.replace('{city}', activeCity)}/><Metric icon={<TrendingUp size={16}/>} label={t.avgMarketGap} value="−12%" foot={t.belowMarketAverage}/></section>
+            <div className="grid gap-5 xl:grid-cols-[1.05fr_.95fr]"><CoverageMap t={t} city={activeCity} radiusKm={radiusKm} stats={stats} onCityChange={setCity} onRadiusChange={setRadiusKm}/><CompetitorTable t={t} city={activeCity} radiusKm={radiusKm} stats={stats} onCityChange={setCity} onRadiusChange={setRadiusKm}/></div>
+            <div className="mt-5 grid gap-5 xl:grid-cols-[1.08fr_.92fr]"><RovoConsole t={t} running={running} onRun={runScan} city={activeCity} radiusKm={radiusKm} stats={stats}/><PricingCalculator t={t}/></div>
+            <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-slate-200 py-5 text-[10px] text-slate-400 sm:flex-row dark:border-slate-800"><span>{t.footerLeft}</span><span>{t.currentCaseStudy.replace('{city}', activeCity).replace('{radius}', String(radiusKm))}</span></footer>
           </div>
         </main>
       </div>
