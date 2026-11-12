@@ -1,0 +1,14 @@
+'use client'
+
+import { useState } from 'react'
+import { ArrowRight, Calculator, Check } from 'lucide-react'
+import type { IntelligenceDictionary } from '@/src/locales'
+
+const prices = [249, 169, 16]
+
+export function PricingCalculator({ t }: { t: IntelligenceDictionary }) {
+  const [service, setService] = useState(0)
+  const [town, setTown] = useState('Radom')
+  const travel = town === 'Radom' ? 0 : town === 'Pionki' || town === 'Skaryszew' ? 20 : 35
+  return <section id="pricing" className="rounded-xl border border-slate-200/80 bg-white dark:border-slate-800 dark:bg-[#172123]"><div className="flex items-center gap-3 p-5 pb-4"><span className="grid size-9 place-items-center rounded-lg bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300"><Calculator size={17}/></span><div><h2 className="text-sm font-semibold">{t.calculatorTitle}</h2><p className="mt-0.5 text-[10px] text-slate-500">{t.calculatorSubtitle}</p></div></div><div className="flex flex-col gap-3 px-5"><label className="text-[10px] font-medium text-slate-500">{t.chooseService}<select value={service} onChange={(e) => setService(Number(e.target.value))} className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:ring-2 focus:ring-teal-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"><option value={0}>{t.cornerSofa}</option><option value={1}>{t.twoSeatCouch}</option><option value={2}>{t.carpetArea}</option></select></label><label className="text-[10px] font-medium text-slate-500">{t.serviceTown}<select value={town} onChange={(e) => setTown(e.target.value)} className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:ring-2 focus:ring-teal-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">{['Radom', 'Pionki', 'Szydłowiec', 'Skaryszew', 'Iłża'].map((name) => <option key={name}>{name}</option>)}</select></label><div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2.5 text-[10px] dark:bg-slate-800"><span className="text-slate-500">{t.estimatedTravel}</span><span className="font-semibold">{travel ? `PLN ${travel}` : t.included}</span></div></div><div className="mx-5 mb-5 mt-4 flex items-center justify-between rounded-lg border border-teal-100 bg-teal-50/70 p-3 dark:border-teal-900 dark:bg-teal-950/40"><div><p className="text-[9px] text-teal-800 dark:text-teal-300">{t.estimatedTotal}</p><p className="mt-0.5 text-lg font-semibold text-teal-950 dark:text-teal-100">PLN {prices[service] + travel}{service === 2 ? ` ${t.perM2}` : ''}</p></div><button aria-label={t.openBooking} className="grid size-8 place-items-center rounded-lg bg-teal-700 text-white hover:bg-teal-800"><ArrowRight size={15}/></button></div><p className="-mt-3 mb-4 flex items-center gap-1.5 px-5 text-[9px] text-slate-400"><Check size={11} className="text-emerald-600"/>{t.priceDisclaimer}</p></section>
+}

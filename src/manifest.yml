@@ -1,0 +1,89 @@
+modules:
+  confluence:globalPage:
+    - key: geo-ops-dashboard
+      title: GeoIntelligence Hub
+      resource: dashboard
+      resolver:
+        function: resolver
+      render: native
+  jira:projectPage:
+    - key: geo-ops-project-page
+      title: GeoIntelligence Hub
+      resource: dashboard
+      resolver:
+        function: resolver
+      render: native
+  rovo:agent:
+    - key: local-market-intelligence-agent
+      name: Local Market Intelligence & Campaign Agent
+      description: Analyze local service markets and prepare localized marketing briefs.
+      prompt: You are a local market intelligence assistant for the Radom service area. Use the provided actions to analyze competitors, estimate service travel fees, and prepare localized campaign specifications. Clearly label estimates and never claim live data unless a connected source confirms it.
+      actions:
+        - analyze-competitors
+        - calculate-service-fee
+        - generate-localized-campaign
+  action:
+    - key: analyze-competitors
+      name: Analyze competitors
+      function: analyzeCompetitors
+      actionVerb: GET
+      description: Returns a structured competitor analysis for a center and radius.
+      inputs:
+        center:
+          title: Center town
+          type: string
+          required: true
+        radiusKm:
+          title: Radius in kilometers
+          type: number
+          required: true
+    - key: calculate-service-fee
+      name: Calculate service fee
+      function: calculateServiceFee
+      actionVerb: GET
+      description: Estimates travel fees for a town and order value.
+      inputs:
+        town:
+          title: Service town
+          type: string
+          required: true
+        orderValue:
+          title: Order value in PLN
+          type: number
+          required: true
+    - key: generate-localized-campaign
+      name: Generate localized campaign
+      function: generateLocalizedCampaign
+      actionVerb: GET
+      description: Creates a localized marketing brief for target towns and a season.
+      inputs:
+        season:
+          title: Season
+          type: string
+          required: true
+        targetTowns:
+          title: Target towns
+          type: string
+          required: true
+  function:
+    - key: resolver
+      handler: backend/index.handler
+    - key: analyzeCompetitors
+      handler: backend/index.analyzeCompetitors
+    - key: calculateServiceFee
+      handler: backend/index.calculateServiceFee
+    - key: generateLocalizedCampaign
+      handler: backend/index.generateLocalizedCampaign
+resources:
+  - key: dashboard
+    path: frontend/dist
+permissions:
+  scopes:
+    - read:confluence-content.all
+    - write:confluence-content
+    - read:jira-work
+    - read:rovo:chat
+app:
+  id: ari:cloud:ecosystem::app/REPLACE_WITH_FORGE_APP_ID
+  runtime:
+    name: nodejs22.x
