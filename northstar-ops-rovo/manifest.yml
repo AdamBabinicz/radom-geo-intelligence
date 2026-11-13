@@ -1,0 +1,145 @@
+modules:
+  rovo:agent:
+    - key: northstar-ops-geo-strategist
+      name: Northstar Ops Geo Strategist
+      description: >
+        AI Geo-Intelligence & Pricing Strategist for local service operators.
+        Audits local competition, publishes strategy playbooks to Confluence,
+        and creates execution tasks in Jira.
+      prompt: >
+        You are Northstar Ops Geo Strategist, an operational Atlassian Rovo
+        teammate for local service businesses (upholstery & carpet cleaning,
+        HVAC, and plumbing).
+
+        Follow these rules:
+        1. When a user asks about a city, regional pricing, or competitors, call
+           get-market-brief first to load regional pricing benchmarks, customer
+           pain points, and live Jira/Confluence workspace status.
+        2. When asked to document a strategy or export a report to Confluence,
+           call publish-confluence-playbook. Use spaceKey "northstarg" if the
+           user does not specify another space.
+        3. When asked to create marketing or operational expansion tasks in
+           Jira, call create-jira-campaign. Use projectKey "KAN" if the user
+           does not specify another project. Provide 3 to 4 concrete tasks
+           separated by semicolons in actionItems.
+        4. Reply concisely in the user's language (Polish or English) with
+           concrete numbers and links/keys of any created pages or Jira issues.
+      conversationStarters:
+        - Audit the Radom upholstery cleaning market and suggest pricing
+        - Publish a Northstar Ops strategy playbook to Confluence space northstarg
+        - Create a local expansion task plan in Jira project KAN
+      actions:
+        - get-market-brief
+        - publish-confluence-playbook
+        - create-jira-campaign
+
+  action:
+    - key: get-market-brief
+      name: Get Northstar Ops Market Brief
+      function: getMarketBriefFn
+      actionVerb: GET
+      description: >
+        Retrieves Northstar Ops geo-intelligence benchmarks, competitor gaps,
+        local customer pain points, and live Jira/Confluence status for a city
+        and service industry.
+      inputs:
+        city:
+          title: City
+          type: string
+          required: true
+          description: Target city name (for example Radom, Kielce, or Warsaw)
+        industry:
+          title: Industry
+          type: string
+          required: true
+          description: Service industry key (upholstery, hvac, or plumbing)
+
+    - key: publish-confluence-playbook
+      name: Publish Confluence Strategy Playbook
+      function: publishPlaybookFn
+      actionVerb: CREATE
+      description: >
+        Creates a formatted strategy playbook page inside Atlassian Confluence
+        with local pricing recommendations and service expansion priorities.
+      inputs:
+        title:
+          title: Page Title
+          type: string
+          required: true
+          description: Clear title for the new Confluence strategy page
+        city:
+          title: City
+          type: string
+          required: true
+          description: City analyzed in this strategy playbook
+        industry:
+          title: Industry
+          type: string
+          required: true
+          description: Service industry (upholstery, hvac, or plumbing)
+        summary:
+          title: Strategy Summary
+          type: string
+          required: true
+          description: Executive summary, recommended prices, and rollout plan
+        spaceKey:
+          title: Confluence Space Key
+          type: string
+          required: false
+          description: Optional Confluence space key (defaults to northstarg)
+
+    - key: create-jira-campaign
+      name: Create Jira Expansion Campaign
+      function: createCampaignFn
+      actionVerb: CREATE
+      description: >
+        Creates real operational Jira tasks in the target project for executing
+        a local pricing update or regional geo-marketing campaign.
+      inputs:
+        campaignTitle:
+          title: Campaign Title
+          type: string
+          required: true
+          description: Name of the pricing or regional expansion campaign
+        city:
+          title: City
+          type: string
+          required: true
+          description: Target city for the campaign
+        industry:
+          title: Industry
+          type: string
+          required: true
+          description: Service industry (upholstery, hvac, or plumbing)
+        actionItems:
+          title: Action Items
+          type: string
+          required: true
+          description: Semicolon-separated list of concrete tasks to create in Jira
+        projectKey:
+          title: Jira Project Key
+          type: string
+          required: false
+          description: Optional Jira project key (defaults to KAN)
+
+  function:
+    - key: getMarketBriefFn
+      handler: index.getMarketBrief
+    - key: publishPlaybookFn
+      handler: index.publishConfluencePlaybook
+    - key: createCampaignFn
+      handler: index.createJiraCampaign
+
+permissions:
+  scopes:
+    - read:space:confluence
+    - write:page:confluence
+    - read:jira-work
+    - write:jira-work
+
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/0f3e249d-8d6d-42b2-a2a8-dc3aa49696d0

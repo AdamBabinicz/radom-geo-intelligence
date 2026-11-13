@@ -1,40 +1,46 @@
 modules:
   confluence:globalPage:
     - key: geo-ops-dashboard
-      title: GeoIntelligence Hub
+      title: Northstar Ops — GeoIntelligence Hub
       resource: dashboard
       resolver:
         function: resolver
       render: native
   jira:projectPage:
     - key: geo-ops-project-page
-      title: GeoIntelligence Hub
+      title: Northstar Ops — GeoIntelligence Hub
       resource: dashboard
       resolver:
         function: resolver
       render: native
   rovo:agent:
-    - key: local-market-intelligence-agent
-      name: Local Market Intelligence & Campaign Agent
-      description: Analyze local service markets and prepare localized marketing briefs.
-      prompt: You are a local market intelligence assistant for the Radom service area. Use the provided actions to analyze competitors, estimate service travel fees, and prepare localized campaign specifications. Clearly label estimates and never claim live data unless a connected source confirms it.
+    - key: northstar-market-intelligence-agent
+      name: Northstar Market Intelligence & Campaign Agent
+      description: Autonomous GeoIntelligence advisor analyzing local service radius, competitor gaps, and generating Confluence/Jira execution plans.
+      prompt: >
+        You are the Northstar Ops operational and marketing advisor.
+        Use your MCP-compatible Rovo actions to analyze competitors in a 10-100 km radius,
+        calculate zone travel fees, export localized strategies to Confluence, and create Jira marketing epics.
+        Clearly label demo data vs live connected sources.
       actions:
         - analyze-competitors
         - calculate-service-fee
         - generate-localized-campaign
-  action:
+        - export-strategy-to-confluence
+        - create-jira-marketing-epics
+  rovo:action:
     - key: analyze-competitors
       name: Analyze competitors
       function: analyzeCompetitors
       actionVerb: GET
-      description: Returns a structured competitor analysis for a center and radius.
+      description: Returns structured competitor benchmarks, town counts, and pain points for a center and radius.
       inputs:
         center:
           title: Center town
           type: string
           required: true
         radiusKm:
-          title: Radius in kilometers
+          title: Radius in kilometers (10-100)
           type: number
           required: true
     - key: calculate-service-fee
@@ -65,6 +71,38 @@ modules:
           title: Target towns
           type: string
           required: true
+    - key: export-strategy-to-confluence
+      name: Export strategy to Confluence page
+      function: exportStrategyToConfluence
+      actionVerb: CREATE
+      description: Prepares and publishes a GeoIntelligence marketing strategy draft to Confluence.
+      inputs:
+        center:
+          title: Center town
+          type: string
+          required: true
+        radiusKm:
+          title: Radius in kilometers
+          type: number
+          required: true
+        season:
+          title: Campaign season
+          type: string
+          required: true
+    - key: create-jira-marketing-epics
+      name: Create Jira marketing epics
+      function: createJiraMarketingEpics
+      actionVerb: CREATE
+      description: Creates a Jira marketing Epic with localized town subtasks for the active service radius.
+      inputs:
+        center:
+          title: Center town
+          type: string
+          required: true
+        radiusKm:
+          title: Radius in kilometers
+          type: number
+          required: true
   function:
     - key: resolver
       handler: backend/index.handler
@@ -74,6 +112,10 @@ modules:
       handler: backend/index.calculateServiceFee
     - key: generateLocalizedCampaign
       handler: backend/index.generateLocalizedCampaign
+    - key: exportStrategyToConfluence
+      handler: backend/index.exportStrategyToConfluence
+    - key: createJiraMarketingEpics
+      handler: backend/index.createJiraMarketingEpics
 resources:
   - key: dashboard
     path: frontend/dist
@@ -82,6 +124,7 @@ permissions:
     - read:confluence-content.all
     - write:confluence-content
     - read:jira-work
+    - write:jira-work
     - read:rovo:chat
 app:
   id: ari:cloud:ecosystem::app/REPLACE_WITH_FORGE_APP_ID

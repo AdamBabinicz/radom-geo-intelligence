@@ -1,0 +1,18 @@
+{
+  "cookieTitle": "Privacy & cookie preferences",
+  "cookieDescription": "We use essential storage for core functionality and optional consent signals via Google Consent Mode v2.",
+  "acceptAll": "Accept all",
+  "rejectOptional": "Reject non-essential",
+  "customize": "Customize",
+  "savePreferences": "Save preferences",
+  "necessaryLabel": "Essential (always active)",
+  "necessaryDesc": "Stores your active theme, language preference, and consent choice.",
+  "analyticsLabel": "Analytics (analytics_storage)",
+  "analyticsDesc": "Helps measure Core Web Vitals performance and feature usage.",
+  "marketingLabel": "Marketing (ad_storage)",
+  "marketingDesc": "Supports campaign attribution for localized service promotions.",
+  "cookieSettingsBtn": "Cookie settings",
+  "privacyPolicy": "Privacy policy",
+  "termsOfService": "Terms of service",
+  "scrollToTop": "Scroll back to top"
+}

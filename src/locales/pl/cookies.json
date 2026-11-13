@@ -1,0 +1,18 @@
+{
+  "cookieTitle": "Prywatność i pliki cookies",
+  "cookieDescription": "Używamy niezbędnych plików cookies do działania aplikacji oraz opcjonalnych zgód analitycznych (Google Consent Mode v2).",
+  "acceptAll": "Zaakceptuj wszystkie",
+  "rejectOptional": "Odrzuć opcjonalne",
+  "customize": "Dostosuj",
+  "savePreferences": "Zapisz ustawienia",
+  "necessaryLabel": "Niezbędne (zawsze aktywne)",
+  "necessaryDesc": "Przechowują wybrany motyw, język oraz zapisaną decyzję o zgodzie.",
+  "analyticsLabel": "Analityka (analytics_storage)",
+  "analyticsDesc": "Pomaga mierzyć wydajność Core Web Vitals i jakość działania funkcji.",
+  "marketingLabel": "Marketing (ad_storage)",
+  "marketingDesc": "Obsługuje pomiary skuteczności kampanii lokalnych.",
+  "cookieSettingsBtn": "Ustawienia plików cookies",
+  "privacyPolicy": "Polityka prywatności",
+  "termsOfService": "Regulamin",
+  "scrollToTop": "Wróć na górę strony"
+}

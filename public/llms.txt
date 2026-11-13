@@ -1,0 +1,41 @@
+# Northstar Ops — GeoIntelligence & Service Operations Hub
+
+> Parameterized GeoIntelligence platform and Atlassian Forge / Rovo MCP hub for local service operations. Features a live OpenStreetMap case study (Radom, Poland, 10–100 km radius) and supports dynamic multi-city, multi-industry, and multi-currency (PLN/USD) market intelligence.
+
+## Core Capabilities
+
+- Dynamic GIS service radius visualization (10–100 km)
+- Localized competitor price benchmarking and customer review pain-point analysis
+- Zone-based travel fee and service quote calculation
+- Automated Atlassian Confluence strategy drafting and Jira marketing Epic generation
+
+## MCP Server & Agent Endpoints
+
+- Discovery & JSON Schemas (`GET`): `/api/mcp`
+- MCP JSON-RPC 2.0 Execution (`POST`): `/api/mcp`
+  - Supported JSON-RPC methods: `initialize`, `tools/list`, `tools/call`
+
+## Available MCP Tools
+
+- `analyzeCompetitors({ center: string, radiusKm: number })`
+  - Analyzes competitor price positioning, towns covered inside `radiusKm` (10–100), and customer review pain points.
+- `calculateServiceFee({ town: string, orderValue: number })`
+  - Computes zone travel fee and total customer quote in PLN for a supported town.
+- `generateLocalizedCampaign({ season: string, targetTowns: string[], locale?: "en" | "pl" })`
+  - Builds a localized campaign brief addressing regional pain points.
+- `exportStrategyToConfluence({ center: string, radiusKm: number, season: string, locale?: "en" | "pl" })`
+  - Generates a structured Confluence strategy page payload synced with active radius metrics.
+- `createJiraMarketingEpics({ center: string, radiusKm: number, locale?: "en" | "pl" })`
+  - Produces a Jira marketing Epic (`OPS-101`) with localized town subtasks for the active coverage zone.
+
+## Atlassian Forge Integration
+
+- Manifest location: `src/manifest.yml`
+- Modules: `confluence:globalPage`, `jira:projectPage`, `rovo:agent`, `rovo:action`, `function`
+- Required scopes: `read:confluence-content.all`, `write:confluence-content`, `read:jira-work`, `write:jira-work`, `read:rovo:chat`
+
+## Public Pages
+
+- Interactive Dashboard: `/`
+- Privacy Policy: `/privacy`
+- Terms of Service: `/terms`

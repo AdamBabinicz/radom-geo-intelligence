@@ -1,0 +1,19 @@
+{
+  "backToDashboard": "Back to dashboard",
+  "privacyHeading": "Privacy Policy",
+  "privacyMeta": "Project Controller: Northstar Ops (Codegeist 2026 Open-Source) · Radom, Poland · Contact: 100najlepszychfirm@gmail.com",
+  "privacySec1Title": "1. Scope of data processing",
+  "privacySec1Body": "Northstar Ops processes workspace configuration, publicly available regional market data, and user consent choices strictly for service operations and Atlassian Forge / Rovo integrations.",
+  "privacySec2Title": "2. Cookies & Google Consent Mode v2",
+  "privacySec2Body": "Essential localStorage preserves your active language, color theme, and GDPR consent record. Optional analytics_storage and ad_storage signals remain denied by default unless explicitly granted.",
+  "privacySec3Title": "3. Privacy & GDPR contact",
+  "privacySec3Body": "Requests regarding access, rectification, or erasure of personal data should be sent to: 100najlepszychfirm@gmail.com.",
+  "termsHeading": "Terms of Service",
+  "termsMeta": "Project Operator: Northstar Ops (Codegeist 2026 Open-Source) · Radom, Poland · Contact: 100najlepszychfirm@gmail.com",
+  "termsSec1Title": "1. Service purpose",
+  "termsSec1Body": "Northstar Ops provides localized geo-intelligence analytics, dynamic service radius visualization, and Atlassian Confluence/Jira workflow automation.",
+  "termsSec2Title": "2. Operational estimates",
+  "termsSec2Body": "Price previews and competitor benchmarks shown in the workspace serve as operational estimates and are finalized prior to service execution.",
+  "termsSec3Title": "3. Governing law",
+  "termsSec3Body": "Any matters not governed by these Terms are subject to the laws of the Republic of Poland (EU)."
+}

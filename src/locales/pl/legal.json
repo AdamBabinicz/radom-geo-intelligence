@@ -1,0 +1,19 @@
+{
+  "backToDashboard": "Wróć do pulpitu",
+  "privacyHeading": "Polityka Prywatności",
+  "privacyMeta": "Administrator projektu: Northstar Ops (Codegeist 2026 Open-Source) · Radom, Polska · Kontakt: 100najlepszychfirm@gmail.com",
+  "privacySec1Title": "1. Zakres przetwarzania danych",
+  "privacySec1Body": "Platforma Northstar Ops przetwarza konfigurację przestrzeni roboczej, publicznie dostępne dane rynkowe regionu oraz zapisane zgody użytkownika wyłącznie w celu realizacji analiz operacyjnych i integracji z Atlassian Forge / Rovo.",
+  "privacySec2Title": "2. Pliki cookies i Google Consent Mode v2",
+  "privacySec2Body": "Niezbędny magazyn localStorage zapisuje wybrany język, motyw kolorystyczny oraz decyzję o zgodzie RODO. Opcjonalne sygnały analytics_storage i ad_storage pozostają domyślnie wyłączone (denied) do momentu wyrażenia wyraźnej zgody.",
+  "privacySec3Title": "3. Kontakt w sprawach RODO",
+  "privacySec3Body": "Wszelkie żądania dotyczące dostępu, sprostowania lub usunięcia danych prosimy kierować na adres: 100najlepszychfirm@gmail.com.",
+  "termsHeading": "Regulamin Usługi",
+  "termsMeta": "Operator projektu: Northstar Ops (Codegeist 2026 Open-Source) · Radom, Polska · Kontakt: 100najlepszychfirm@gmail.com",
+  "termsSec1Title": "1. Przedmiot usługi",
+  "termsSec1Body": "Northstar Ops dostarcza narzędzia analityki geoprzestrzennej rynku lokalnego, dynamiczną wizualizację zasięgu operacyjnego oraz automatyzację przepływów pracy w Atlassian Confluence i Jira.",
+  "termsSec2Title": "2. Szacunkowy charakter wycen",
+  "termsSec2Body": "Prezentowane w kalkulatorze kwoty oraz zestawienia konkurencji stanowią wycenę orientacyjną i podlegają ostatecznemu potwierdzeniu przed realizacją zlecenia.",
+  "termsSec3Title": "3. Postanowienia końcowe i prawo właściwe",
+  "termsSec3Body": "W sprawach nieuregulowanych niniejszym regulaminem zastosowanie mają przepisy prawa polskiego (Rzeczpospolita Polska, UE)."
+}
