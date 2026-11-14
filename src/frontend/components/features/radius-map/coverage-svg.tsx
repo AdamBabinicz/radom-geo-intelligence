@@ -18,6 +18,32 @@ const CX = 400;
 const CY = 400;
 const RADAR_RINGS = [15, 30, 50, 75, 100];
 
+function getLabelPlacement(posX: number, posY: number, town: TownGeo) {
+  let anchor: "start" | "end" | "middle" =
+    town.dxKm > 2 ? "start" : town.dxKm < -2 ? "end" : "middle";
+  let offsetX = town.dxKm > 2 ? 14 : town.dxKm < -2 ? -14 : 0;
+
+  if (posX > 635) {
+    anchor = "end";
+    offsetX = -14;
+  } else if (posX < 165) {
+    anchor = "start";
+    offsetX = 14;
+  }
+
+  let placeBelow = town.dyKm <= 0;
+  if (posY < 58) {
+    placeBelow = true;
+  } else if (posY > 730) {
+    placeBelow = false;
+  }
+
+  const offsetY = placeBelow ? 20 : -13;
+  const subOffsetY = placeBelow ? 16 : -16;
+
+  return { anchor, offsetX, offsetY, subOffsetY };
+}
+
 export function CoverageSvg({
   t,
   centerName,
@@ -139,10 +165,11 @@ export function CoverageSvg({
 
         const inRange = town.distKm <= radiusKm;
         const isSelected = selectedTown?.name === town.name;
-        const anchor =
-          town.dxKm > 2 ? "start" : town.dxKm < -2 ? "end" : "middle";
-        const offsetX = town.dxKm > 2 ? 14 : town.dxKm < -2 ? -14 : 0;
-        const offsetY = town.dyKm > 0 ? -13 : 20;
+        const { anchor, offsetX, offsetY, subOffsetY } = getLabelPlacement(
+          posX,
+          posY,
+          town,
+        );
 
         if (town.isRegionalHub) {
           const overlapsNorthPill = posY < 96 && posX < 340;
@@ -239,7 +266,7 @@ export function CoverageSvg({
             </text>
             <text
               x={posX + offsetX}
-              y={posY + offsetY + (town.dyKm > 0 ? -16 : 16)}
+              y={posY + offsetY + subOffsetY}
               textAnchor={anchor}
               strokeWidth="3.5"
               paintOrder="stroke"
@@ -273,9 +300,9 @@ export function CoverageSvg({
       />
       <g>
         <rect
-          x={CX - 95}
+          x={CX - 102}
           y={CY + 18}
-          width="190"
+          width="204"
           height="28"
           rx="8"
           strokeWidth="1.5"

@@ -63,19 +63,18 @@ export function CoverageMap({
                 {t.zoomBadge} {Math.round(zoomMultiplier * 100)}%
               </span>
             </div>
-            <p className="mt-0.5 text-[11px] text-slate-500">
-              {t.radiusLabel}:{" "}
+            <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
               <b className="text-slate-800 dark:text-slate-200">
-                {radiusKm} {t.kmUnit}
+                {market.centerName}
               </b>{" "}
-              · {localInRangeCount} {t.ofLabel} {localTowns.length}{" "}
+              + {localInRangeCount} {t.ofLabel} {localTowns.length}{" "}
               {t.townsCountSuffix}
             </p>
           </div>
 
           <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-800/60">
             <Sliders size={13} className="text-teal-700 dark:text-teal-400" />
-            <span className="text-[10px] font-medium text-slate-500">
+            <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
               {t.radiusLabel}:
             </span>
             <span className="text-xs font-bold text-teal-800 dark:text-teal-300">
@@ -156,7 +155,7 @@ export function CoverageMap({
         <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-md bg-white/95 px-3 py-1.5 text-[11px] font-semibold text-slate-700 shadow-sm backdrop-blur-sm dark:bg-slate-900/90 dark:text-slate-200">
           <Navigation2 size={13} className="text-teal-600" />
           <span>
-            {t.activeRangeLabel}: {radiusKm} {t.kmUnit}
+            {t.coverageLegend}: {localInRangeCount}/{localTowns.length}
           </span>
           {farthestHubInRange && (
             <span className="font-bold text-indigo-600 dark:text-indigo-400">

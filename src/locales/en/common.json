@@ -26,11 +26,12 @@
   "coverageArea": "Coverage area",
   "radiusFromRadom": "Radius from center",
   "serviceableTowns": "Serviceable towns",
-  "townsInRadius": "Included in radius",
+  "townsInRadius": "In range (base + surrounding)",
   "localCompetitors": "Local competitors",
-  "competitorsTracked": "Tracked in your service area",
+  "competitorsTracked": "Baseline market index",
+  "competitorsLiveFoot": "Verified live by AI market scan",
   "avgMarketGap": "Average market gap",
   "belowMarketAverage": "Our prices vs. local average",
   "footerLeft": "GeoIntelligence & Service Operations Hub",
-  "footerRight": "Radom case study · Data shown for demonstration"
+  "footerRight": "Radom case study · Verified baseline + live data"
 }

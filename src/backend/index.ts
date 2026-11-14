@@ -4,6 +4,13 @@ import {
   getTownTravelFeePln,
   RADOM_UPHOLSTERY_MARKET,
 } from "../config/markets";
+import {
+  formatTemplate,
+  resolveLocale,
+  translations,
+  type AppDictionary,
+  type Locale,
+} from "../locales";
 import type {
   CampaignSpec,
   CompetitorAnalysisInput,
@@ -21,56 +28,28 @@ const SUPPORTED_TOWNS = [
     .map((t) => t.name),
 ];
 
-const SERVICE_NAMES: Record<string, { en: string; pl: string }> = {
-  cornerSofa: { en: "Corner sofa cleaning", pl: "Czyszczenie narożnika" },
-  twoSeatCouch: {
-    en: "Two-seat couch cleaning",
-    pl: "Czyszczenie kanapy 2-osobowej",
+const CAMPAIGN_KEYS: Record<
+  IndustryId,
+  {
+    headlineKey: keyof AppDictionary;
+    audienceKey: keyof AppDictionary;
+    offerKey: keyof AppDictionary;
+  }
+> = {
+  upholstery: {
+    headlineKey: "campaignUpholsteryHeadline",
+    audienceKey: "campaignUpholsteryAudience",
+    offerKey: "campaignUpholsteryOffer",
   },
-  carpetArea: { en: "Carpet washing / m2", pl: "Pranie dywanów / m2" },
-  carpetFlooring: {
-    en: "Fitted carpet cleaning / m2",
-    pl: "Pranie wykładzin / m2",
+  hvac: {
+    headlineKey: "campaignHvacHeadline",
+    audienceKey: "campaignHvacAudience",
+    offerKey: "campaignHvacOffer",
   },
-  upholsteryChair: {
-    en: "Upholstery — chair / pc",
-    pl: "Tapicerka — krzesło / szt.",
-  },
-  acService: { en: "AC unit inspection", pl: "Przegląd klimatyzacji" },
-  heatPumpCheck: { en: "Heat pump service", pl: "Serwis pompy ciepła" },
-  ductCleaning: {
-    en: "Air duct cleaning / m2",
-    pl: "Czyszczenie wentylacji / m2",
-  },
-  leakRepair: { en: "Urgent leak repair", pl: "Usuwanie wycieku (pilne)" },
-  boilerService: { en: "Boiler inspection", pl: "Przegląd kotła / pieca" },
-  drainUnclog: { en: "Drain unclogging", pl: "Udrażnianie kanalizacji" },
-};
-
-const PAIN_NAMES: Record<string, { en: string; pl: string }> = {
-  dryingTime: { en: "Long drying time", pl: "Długi czas schnięcia" },
-  hiddenFees: { en: "Hidden fees", pl: "Ukryte opłaty" },
-  punctuality: { en: "Punctuality", pl: "Punktualność" },
-  peakWaitTime: {
-    en: "Long peak-season wait",
-    pl: "Długi czas oczekiwania w sezonie",
-  },
-  refrigerantFees: {
-    en: "Hidden refrigerant fees",
-    pl: "Ukryte koszty czynnika",
-  },
-  noProtocol: {
-    en: "No tightness protocol",
-    pl: "Brak protokołu szczelności",
-  },
-  emergencyDelay: {
-    en: "Emergency dispatch delays",
-    pl: "Opóźnienia w awariach",
-  },
-  unclearQuote: { en: "Unclear upfront quote", pl: "Niejasna wycena wstępna" },
-  cleanupQuality: {
-    en: "Poor post-job cleanup",
-    pl: "Brak sprzątania po pracy",
+  plumbing: {
+    headlineKey: "campaignPlumbingHeadline",
+    audienceKey: "campaignPlumbingAudience",
+    offerKey: "campaignPlumbingOffer",
   },
 };
 
@@ -84,7 +63,29 @@ export interface ExtendedAnalysisInput extends CompetitorAnalysisInput {
   industryId?: IndustryId;
   townsInRadius?: string[];
   competitorsTracked?: number;
-  locale?: "en" | "pl";
+  locale?: Locale;
+}
+
+export interface CustomerQuoteInput {
+  center: string;
+  town: string;
+  serviceKey: string;
+  serviceLabel?: string;
+  quantity?: number;
+  unitLabel?: string;
+  unitPricePln: number;
+  travelFeePln: number;
+  totalPln: number;
+  inZone?: boolean;
+  locale?: Locale;
+}
+
+export interface CustomerQuoteResult {
+  issueKey: string;
+  projectKey: string;
+  summary: string;
+  status: "draft" | "created";
+  issueUrl?: string;
 }
 
 interface AtlassianConfig {
@@ -98,6 +99,10 @@ interface JiraIssueTypeInfo {
   id: string;
   name: string;
   subtask: boolean;
+}
+
+function getDictLabel(t: AppDictionary, key: string): string {
+  return key in t ? String(t[key as keyof AppDictionary]) : key;
 }
 
 function getAtlassianConfig(): AtlassianConfig | null {
@@ -137,6 +142,65 @@ function buildAdfDocument(paragraphs: string[]) {
   };
 }
 
+async function resolveJiraProject(atlassian: AtlassianConfig): Promise<{
+  projectKey: string;
+  issueTypes: JiraIssueTypeInfo[];
+} | null> {
+  const fetchProject = async (key: string) =>
+    fetch(
+      `${atlassian.baseUrl}/rest/api/3/project/${encodeURIComponent(key)}`,
+      {
+        headers: {
+          Authorization: atlassian.authHeader,
+          Accept: "application/json",
+        },
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+
+  const directRes = await fetchProject(atlassian.projectKey);
+  if (directRes.ok) {
+    const project = (await directRes.json()) as {
+      key?: string;
+      issueTypes?: JiraIssueTypeInfo[];
+    };
+    return {
+      projectKey: project.key ?? atlassian.projectKey,
+      issueTypes: project.issueTypes ?? [],
+    };
+  }
+
+  const searchRes = await fetch(
+    `${atlassian.baseUrl}/rest/api/3/project/search?maxResults=10`,
+    {
+      headers: {
+        Authorization: atlassian.authHeader,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  if (!searchRes.ok) return null;
+
+  const searchData = (await searchRes.json()) as {
+    values?: Array<{ key: string }>;
+  };
+  const fallbackKey = searchData.values?.[0]?.key;
+  if (!fallbackKey) return null;
+
+  const fallbackRes = await fetchProject(fallbackKey);
+  if (!fallbackRes.ok) return null;
+
+  const fallbackProject = (await fallbackRes.json()) as {
+    key?: string;
+    issueTypes?: JiraIssueTypeInfo[];
+  };
+  return {
+    projectKey: fallbackProject.key ?? fallbackKey,
+    issueTypes: fallbackProject.issueTypes ?? [],
+  };
+}
+
 export async function analyzeCompetitors(
   input: ExtendedAnalysisInput,
 ): Promise<{
@@ -157,8 +221,9 @@ export async function analyzeCompetitors(
     throw new Error("Invalid center or radiusKm (expected 10-100)");
   }
 
+  const locale = resolveLocale(input.locale);
+  const t = translations[locale];
   const industry = INDUSTRY_TEMPLATES[input.industryId ?? "upholstery"];
-  const lang = input.locale === "pl" ? "pl" : "en";
   const metrics = getMarketMetrics(RADOM_UPHOLSTERY_MARKET, input.radiusKm);
 
   const townsInRadius =
@@ -167,8 +232,8 @@ export async function analyzeCompetitors(
       : [
           input.center.trim(),
           ...metrics.localTowns
-            .filter((t) => t.distKm <= input.radiusKm)
-            .map((t) => t.name),
+            .filter((town) => town.distKm <= input.radiusKm)
+            .map((town) => town.name),
         ];
 
   const serviceableTownsCount = townsInRadius.length;
@@ -178,12 +243,12 @@ export async function analyzeCompetitors(
       : metrics.competitorsTracked;
 
   const painPoints = industry.painPoints.map((p) => ({
-    topic: PAIN_NAMES[p.topicKey]?.[lang] ?? p.topicKey,
+    topic: t[p.topicKey],
     mentions: p.percent,
   }));
 
   const insights: CompetitorInsight[] = industry.services.map((svc, idx) => ({
-    service: SERVICE_NAMES[svc.serviceKey]?.[lang] ?? svc.serviceKey,
+    service: t[svc.serviceKey],
     averagePricePln: svc.localPricePln,
     ourPricePln: svc.ourPricePln,
     sourceStatus: "demo",
@@ -224,75 +289,27 @@ export function generateLocalizedCampaign(input: {
   season: string;
   targetTowns: string[];
   industryId?: IndustryId;
-  locale?: "en" | "pl";
+  locale?: Locale;
 }): CampaignSpec {
   if (!input.season.trim() || !input.targetTowns.length) {
     throw new Error("Invalid campaign request");
   }
 
-  const isPl = input.locale === "pl";
+  const locale = resolveLocale(input.locale);
+  const t = translations[locale];
   const industryId = input.industryId ?? "upholstery";
-
-  const copyByIndustry: Record<
-    IndustryId,
-    {
-      headlineEn: string;
-      headlinePl: string;
-      audienceEn: string;
-      audiencePl: string;
-      offerEn: string;
-      offerPl: string;
-    }
-  > = {
-    upholstery: {
-      headlineEn: `A fresher home this ${input.season} — upfront pricing`,
-      headlinePl: `Czyste wnętrza na ${input.season} — przejrzysta wycena`,
-      audienceEn:
-        "Local households seeking transparent pricing and fast-drying care",
-      audiencePl:
-        "Gospodarstwa domowe w strefie szukające szybkiego schnięcia i jasnej ceny",
-      offerEn:
-        "Zero hidden fees + clear drying-time SLA and predictable zone travel rates",
-      offerPl:
-        "Brak ukrytych opłat + gwarantowany czas schnięcia i stały dojazd w strefie",
-    },
-    hvac: {
-      headlineEn: `Peak-ready HVAC & Heat Pumps (${input.season}) — certified SLA`,
-      headlinePl: `Sprawna klimatyzacja i pompa ciepła na ${input.season} — z protokołem`,
-      audienceEn:
-        "Homeowners & offices frustrated by peak wait times and surprise fees",
-      audiencePl:
-        "Domy i biura w strefie zmęczone kolejkami w sezonie i dopłatami za czynnik",
-      offerEn:
-        "48h booking slot + upfront refrigerant pricing and full tightness protocol",
-      offerPl:
-        "Termin do 48h + jawny cennik czynnika i pełny protokół szczelności",
-    },
-    plumbing: {
-      headlineEn: `24/7 Rapid Plumbing Dispatch (${input.season}) — fixed arrival rate`,
-      headlinePl: `Pogotowie hydrauliczne 24/7 na ${input.season} — znana cena z góry`,
-      audienceEn:
-        "Property owners needing fast emergency response with clean post-job handoff",
-      audiencePl:
-        "Właściciele mieszkań i domów oczekujący szybkiego dojazdu i czystego montażu",
-      offerEn:
-        "Guaranteed dispatch ETA + upfront quote before repair and clean workspace",
-      offerPl:
-        "Gwarantowany czas dojazdu + wycena przed pracą i porządek po naprawie",
-    },
-  };
-
-  const copy = copyByIndustry[industryId];
+  const keys = CAMPAIGN_KEYS[industryId];
 
   return {
     season: input.season,
     targetTowns: input.targetTowns,
-    headline: isPl ? copy.headlinePl : copy.headlineEn,
-    audience: isPl ? copy.audiencePl : copy.audienceEn,
-    offer: isPl ? copy.offerPl : copy.offerEn,
-    confluencePageTitle: isPl
-      ? `Strategia kampanii (${input.season}) — ${input.targetTowns.slice(0, 4).join(", ")}`
-      : `${input.season} Go-To-Market Strategy — ${input.targetTowns.slice(0, 4).join(", ")}`,
+    headline: formatTemplate(t[keys.headlineKey], { season: input.season }),
+    audience: t[keys.audienceKey],
+    offer: t[keys.offerKey],
+    confluencePageTitle: formatTemplate(t.campaignConfluenceTitleTemplate, {
+      season: input.season,
+      towns: input.targetTowns.slice(0, 4).join(", "),
+    }),
     sourceStatus: "draft",
   };
 }
@@ -305,12 +322,12 @@ export async function exportStrategyToConfluence(input: {
   townsInRadius?: string[];
   competitorsTracked?: number;
   benchmarks?: ServiceBenchmarkInput[];
-  locale?: "en" | "pl";
+  locale?: Locale;
 }): Promise<ConfluenceExportResult> {
+  const locale = resolveLocale(input.locale);
+  const t = translations[locale];
   const industryId = input.industryId ?? "upholstery";
   const template = INDUSTRY_TEMPLATES[industryId];
-  const isPl = input.locale === "pl";
-  const lang = isPl ? "pl" : "en";
 
   const activeBenchmarks =
     input.benchmarks && input.benchmarks.length > 0
@@ -338,20 +355,24 @@ export async function exportStrategyToConfluence(input: {
     industryId,
     townsInRadius: input.townsInRadius,
     competitorsTracked: input.competitorsTracked,
-    locale: input.locale,
+    locale,
   });
   const campaign = generateLocalizedCampaign({
     season: input.season,
     targetTowns: analysis.townsInRadius,
     industryId,
-    locale: input.locale,
+    locale,
   });
 
-  const topPain = PAIN_NAMES[template.painPoints[0].topicKey]?.[lang] ?? "";
+  const topPain = t[template.painPoints[0].topicKey];
   const gapText = `${avgGapPct > 0 ? "+" : ""}${avgGapPct}%`;
-  const summary = isPl
-    ? `Zasięg ${analysis.radiusKm} km (${analysis.serviceableTownsCount} miejscowości, ${analysis.competitorsTracked} konkurentów). Różnica cenowa ${gapText} i odpowiedź na problem: ${topPain}.`
-    : `${analysis.radiusKm} km zone (${analysis.serviceableTownsCount} towns, ${analysis.competitorsTracked} competitors). Price delta ${gapText} addressing: ${topPain}.`;
+  const summary = formatTemplate(t.confluenceSummaryTemplate, {
+    radius: analysis.radiusKm,
+    townsCount: analysis.serviceableTownsCount,
+    competitorsCount: analysis.competitorsTracked,
+    gap: gapText,
+    pain: topPain,
+  });
 
   const atlassian = getAtlassianConfig();
   if (atlassian) {
@@ -405,8 +426,7 @@ export async function exportStrategyToConfluence(input: {
       if (spaceId) {
         const rowsHtml = activeBenchmarks
           .map((row) => {
-            const label =
-              SERVICE_NAMES[row.serviceKey]?.[lang] ?? row.serviceKey;
+            const label = getDictLabel(t, row.serviceKey);
             const delta =
               row.localPricePln > 0
                 ? Math.round(
@@ -421,21 +441,21 @@ export async function exportStrategyToConfluence(input: {
           .join("");
 
         const storageHtml = `
-          <h1>Northstar Ops — ${escapeHtml(campaign.headline)}</h1>
-          <p><strong>${isPl ? "Centrum operacyjne" : "Service Hub"}:</strong> ${escapeHtml(analysis.center)} (${analysis.radiusKm} km)<br/>
-          <strong>${isPl ? "Obsługiwane miejscowości" : "Target Towns"}:</strong> ${escapeHtml(analysis.townsInRadius.join(", "))}<br/>
-          <strong>${isPl ? "Analizowani konkurenci" : "Tracked Competitors"}:</strong> ${analysis.competitorsTracked}</p>
-          <h2>${isPl ? "Podsumowanie strategiczne" : "Executive Summary"}</h2>
+          <h1>${escapeHtml(t.brand)} — ${escapeHtml(campaign.headline)}</h1>
+          <p><strong>${escapeHtml(t.confluenceServiceHubLabel)}:</strong> ${escapeHtml(analysis.center)} (${analysis.radiusKm} ${escapeHtml(t.kmUnit)})<br/>
+          <strong>${escapeHtml(t.confluenceTargetTownsLabel)}:</strong> ${escapeHtml(analysis.townsInRadius.join(", "))}<br/>
+          <strong>${escapeHtml(t.confluenceTrackedCompetitorsLabel)}:</strong> ${analysis.competitorsTracked}</p>
+          <h2>${escapeHtml(t.confluenceExecSummaryHeading)}</h2>
           <p>${escapeHtml(summary)}</p>
-          <p><strong>${isPl ? "Propozycja wartości" : "Offer"}:</strong> ${escapeHtml(campaign.offer)}</p>
-          <h2>${isPl ? "Porównanie cennika z rynkiem lokalnym" : "Live Pricing vs Local Market"}</h2>
+          <p><strong>${escapeHtml(t.confluenceOfferLabel)}:</strong> ${escapeHtml(campaign.offer)}</p>
+          <h2>${escapeHtml(t.confluencePricingHeading)}</h2>
           <table>
             <thead>
               <tr>
-                <th>${isPl ? "Usługa" : "Service"}</th>
-                <th>${isPl ? "Nasza cena" : "Our Price"}</th>
-                <th>${isPl ? "Średnia rynku" : "Market Avg"}</th>
-                <th>${isPl ? "Różnica" : "Delta"}</th>
+                <th>${escapeHtml(t.confluenceColService)}</th>
+                <th>${escapeHtml(t.confluenceColOurPrice)}</th>
+                <th>${escapeHtml(t.confluenceColMarketAvg)}</th>
+                <th>${escapeHtml(t.confluenceColDelta)}</th>
               </tr>
             </thead>
             <tbody>${rowsHtml}</tbody>
@@ -512,56 +532,44 @@ export async function createJiraMarketingEpics(input: {
   industryId?: IndustryId;
   townsInRadius?: string[];
   competitorsTracked?: number;
-  locale?: "en" | "pl";
+  locale?: Locale;
 }): Promise<JiraEpicResult> {
+  const locale = resolveLocale(input.locale);
+  const t = translations[locale];
   const analysis = await analyzeCompetitors({
     center: input.center,
     radiusKm: input.radiusKm,
     industryId: input.industryId,
     townsInRadius: input.townsInRadius,
     competitorsTracked: input.competitorsTracked,
-    locale: input.locale,
+    locale,
   });
-  const isPl = input.locale === "pl";
-  const epicTitle = isPl
-    ? `[${input.center} ${input.radiusKm} km] Pozyskanie klientów i kalkulator strefowy`
-    : `[${input.center} ${input.radiusKm} km] Local Service Expansion & Zone Pricing`;
+
+  const epicTitle = formatTemplate(t.jiraEpicTitleTemplate, {
+    center: input.center,
+    radius: input.radiusKm,
+  });
 
   const plannedSubtasks = analysis.townsInRadius.slice(0, 4).map((town) => ({
     town,
-    summary: isPl
-      ? `Kampania lokalna i cennik dojazdu: ${town}`
-      : `Localized ads & travel-fee landing card: ${town}`,
+    summary: formatTemplate(t.jiraSubtaskTemplate, { town }),
   }));
 
   const atlassian = getAtlassianConfig();
   if (atlassian) {
     try {
-      const projectRes = await fetch(
-        `${atlassian.baseUrl}/rest/api/3/project/${encodeURIComponent(atlassian.projectKey)}`,
-        {
-          headers: {
-            Authorization: atlassian.authHeader,
-            Accept: "application/json",
-          },
-          signal: AbortSignal.timeout(8000),
-        },
-      );
-
-      if (projectRes.ok) {
-        const project = (await projectRes.json()) as {
-          issueTypes?: JiraIssueTypeInfo[];
-        };
-        const allTypes = project.issueTypes ?? [];
-        const standardTypes = allTypes.filter((t) => !t.subtask);
-        const epicType = standardTypes.find((t) =>
-          /^(epic|epik)$/i.test(t.name),
+      const resolved = await resolveJiraProject(atlassian);
+      if (resolved) {
+        const allTypes = resolved.issueTypes;
+        const standardTypes = allTypes.filter((type) => !type.subtask);
+        const epicType = standardTypes.find((type) =>
+          /^(epic|epik)$/i.test(type.name),
         );
         const taskType =
-          standardTypes.find((t) =>
-            /^(task|zadanie|story|historia)$/i.test(t.name),
+          standardTypes.find((type) =>
+            /^(task|zadanie|story|historia)$/i.test(type.name),
           ) ?? standardTypes[0];
-        const subtaskType = allTypes.find((t) => t.subtask);
+        const subtaskType = allTypes.find((type) => type.subtask);
         const parentType = epicType ?? taskType;
 
         if (parentType) {
@@ -578,14 +586,21 @@ export async function createJiraMarketingEpics(input: {
             });
 
           const parentRes = await createIssue({
-            project: { key: atlassian.projectKey },
+            project: { key: resolved.projectKey },
             summary: epicTitle,
             issuetype: { id: parentType.id },
             description: buildAdfDocument([
-              `Hub: ${analysis.center} (${analysis.radiusKm} km)`,
-              `Target towns: ${analysis.townsInRadius.join(", ")}`,
-              `Tracked competitors: ${analysis.competitorsTracked}`,
-              "Created live from Northstar Ops Geo-Intelligence Dashboard.",
+              formatTemplate(t.jiraEpicDescHub, {
+                center: analysis.center,
+                radius: analysis.radiusKm,
+              }),
+              formatTemplate(t.jiraEpicDescTowns, {
+                towns: analysis.townsInRadius.join(", "),
+              }),
+              formatTemplate(t.jiraEpicDescCompetitors, {
+                count: analysis.competitorsTracked,
+              }),
+              t.jiraCreatedNote,
             ]),
           });
 
@@ -607,12 +622,15 @@ export async function createJiraMarketingEpics(input: {
                   childType.subtask;
 
                 const baseFields: Record<string, unknown> = {
-                  project: { key: atlassian.projectKey },
+                  project: { key: resolved.projectKey },
                   summary: item.summary,
                   issuetype: { id: childType.id },
                   description: buildAdfDocument([
-                    `Town: ${item.town} | Hub: ${analysis.center} (${analysis.radiusKm} km)`,
-                    `Parent plan: ${parentCreated.key}`,
+                    `${item.town} · ${formatTemplate(t.jiraEpicDescHub, {
+                      center: analysis.center,
+                      radius: analysis.radiusKm,
+                    })}`,
+                    `${t.jiraEpicBadge}: ${parentCreated.key}`,
                   ]),
                 };
 
@@ -642,7 +660,7 @@ export async function createJiraMarketingEpics(input: {
 
             return {
               epicKey: parentCreated.key,
-              projectKey: atlassian.projectKey,
+              projectKey: resolved.projectKey,
               epicTitle,
               subtasks: createdChildren,
               radiusKm: analysis.radiusKm,
@@ -672,6 +690,87 @@ export async function createJiraMarketingEpics(input: {
   };
 }
 
+export async function createCustomerQuote(
+  input: CustomerQuoteInput,
+): Promise<CustomerQuoteResult> {
+  const locale = resolveLocale(input.locale);
+  const t = translations[locale];
+  const serviceName =
+    input.serviceLabel?.trim() || getDictLabel(t, input.serviceKey);
+  const qtySuffix =
+    input.unitLabel && typeof input.quantity === "number"
+      ? ` (${input.quantity} ${input.unitLabel})`
+      : "";
+
+  const summary = `${t.jiraQuotePrefix} ${serviceName}${qtySuffix} · ${input.town} · ${input.totalPln} PLN`;
+
+  const atlassian = getAtlassianConfig();
+  if (atlassian) {
+    try {
+      const resolved = await resolveJiraProject(atlassian);
+      if (resolved) {
+        const standardTypes = resolved.issueTypes.filter(
+          (type) => !type.subtask,
+        );
+        const taskType =
+          standardTypes.find((type) =>
+            /^(task|zadanie|story|historia)$/i.test(type.name),
+          ) ?? standardTypes[0];
+
+        if (taskType) {
+          const issueRes = await fetch(
+            `${atlassian.baseUrl}/rest/api/3/issue`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: atlassian.authHeader,
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                fields: {
+                  project: { key: resolved.projectKey },
+                  summary,
+                  issuetype: { id: taskType.id },
+                  description: buildAdfDocument([
+                    `${t.jiraQuoteServiceLabel}: ${serviceName}${qtySuffix}`,
+                    `${t.jiraQuoteTownLabel}: ${input.town} (${t.jiraQuoteHubLabel}: ${input.center})`,
+                    `${t.jiraQuoteZoneLabel}: ${input.inZone === false ? t.outOfZoneStatus : t.inZoneStatus}`,
+                    `${t.jiraQuoteUnitPriceLabel}: ${input.unitPricePln} PLN | ${t.jiraQuoteTravelLabel}: ${input.travelFeePln} PLN`,
+                    `${t.jiraQuoteTotalLabel}: ${input.totalPln} PLN`,
+                    t.jiraQuoteCreatedNote,
+                  ]),
+                },
+              }),
+              signal: AbortSignal.timeout(8000),
+            },
+          );
+
+          if (issueRes.ok) {
+            const created = (await issueRes.json()) as { key: string };
+            return {
+              issueKey: created.key,
+              projectKey: resolved.projectKey,
+              summary,
+              status: "created",
+              issueUrl: `${atlassian.baseUrl}/browse/${created.key}`,
+            };
+          }
+        }
+      }
+    } catch (error) {
+      console.error("[Atlassian Customer Quote Error]:", error);
+    }
+  }
+
+  return {
+    issueKey: `${atlassian?.projectKey ?? "KAN"}-QUOTE`,
+    projectKey: atlassian?.projectKey ?? "KAN",
+    summary,
+    status: "draft",
+  };
+}
+
 export const handler = async () => ({
   status: "ready",
   tools: [
@@ -680,5 +779,6 @@ export const handler = async () => ({
     "generateLocalizedCampaign",
     "exportStrategyToConfluence",
     "createJiraMarketingEpics",
+    "createCustomerQuote",
   ],
 });

@@ -4,8 +4,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   Activity,
-  ArrowDownRight,
-  ArrowUpRight,
   Bot,
   ChevronDown,
   CircleHelp,
@@ -184,6 +182,7 @@ export function Dashboard() {
   const isCaseStudy = (market.source ?? "case-study") === "case-study";
   const currentYear = new Date().getFullYear();
   const copyrightRange = currentYear >= 2027 ? `2026 - ${currentYear}` : "2026";
+  const liveCompetitorsCount = liveScan?.competitors.length ?? 0;
 
   const handleSyncPrices = async () => {
     const trimmed = websiteUrl.trim();
@@ -506,7 +505,7 @@ export function Dashboard() {
               isScanningMarket={isScanningMarket}
               syncError={syncError}
               syncedCount={syncedCount}
-              scannedCompetitorsCount={liveScan?.competitors.length ?? 0}
+              scannedCompetitorsCount={liveCompetitorsCount}
             />
 
             <section
@@ -518,34 +517,34 @@ export function Dashboard() {
                 label={t.coverageArea}
                 value={`${radiusKm} ${t.kmUnit}`}
                 foot={`${t.radiusFromRadom} (${market.centerName})`}
-                positive
               />
               <Metric
                 icon={<Users size={16} />}
                 label={t.serviceableTowns}
                 value={String(metrics.serviceableTownsCount)}
                 foot={t.townsInRadius}
-                positive
               />
               <Metric
                 icon={<Activity size={16} />}
                 label={t.localCompetitors}
                 value={String(
-                  liveScan?.competitors.length
-                    ? Math.max(
-                        metrics.competitorsTracked,
-                        liveScan.competitors.length,
-                      )
+                  liveCompetitorsCount > 0
+                    ? liveCompetitorsCount
                     : metrics.competitorsTracked,
                 )}
-                foot={t.competitorsTracked}
+                foot={
+                  liveCompetitorsCount > 0
+                    ? t.competitorsLiveFoot
+                    : t.competitorsTracked
+                }
+                badge={liveCompetitorsCount > 0 ? "LIVE AI" : undefined}
               />
               <Metric
                 icon={<TrendingUp size={16} />}
                 label={t.avgMarketGap}
                 value={gapMetricLabel}
                 foot={t.belowMarketAverage}
-                positive={metrics.avgGapPct <= 0}
+                highlight={metrics.avgGapPct <= 0}
               />
             </section>
 
@@ -629,13 +628,15 @@ function Metric({
   label,
   value,
   foot,
-  positive,
+  badge,
+  highlight,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   foot: string;
-  positive?: boolean;
+  badge?: string;
+  highlight?: boolean;
 }) {
   return (
     <article className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_2px_8px_rgba(20,40,45,.025)] dark:border-slate-800 dark:bg-[#172123] md:p-5">
@@ -648,13 +649,20 @@ function Metric({
         </span>
       </div>
       <div className="mt-3 flex items-baseline gap-2">
-        <span className="text-[25px] font-semibold tracking-tight">
+        <span
+          className={`text-[25px] font-semibold tracking-tight ${
+            highlight
+              ? "text-emerald-700 dark:text-emerald-300"
+              : "text-slate-900 dark:text-slate-100"
+          }`}
+        >
           {value}
         </span>
-        <span className="flex items-center text-[10px] font-semibold text-emerald-700 dark:text-emerald-400">
-          {positive ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}{" "}
-          {positive ? "+8.4%" : "−3.2%"}
-        </span>
+        {badge && (
+          <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700 dark:bg-teal-950/70 dark:text-teal-300">
+            {badge}
+          </span>
+        )}
       </div>
       <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
         {foot}

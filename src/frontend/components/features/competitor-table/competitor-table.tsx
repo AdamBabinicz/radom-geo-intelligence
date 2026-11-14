@@ -4,7 +4,6 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   ExternalLink,
-  MoreHorizontal,
   Sparkles,
   Store,
 } from "lucide-react";
@@ -104,35 +103,26 @@ export function CompetitorTable({
       id="market"
       className="rounded-xl border border-slate-200/80 bg-white dark:border-slate-800 dark:bg-[#172123]"
     >
-      <div className="flex items-start justify-between p-5 pb-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-semibold">{t.competitorTitle}</h2>
-            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-              {t[activeIndustry.labelKey]}
+      <div className="p-5 pb-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-sm font-semibold">{t.competitorTitle}</h2>
+          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            {t[activeIndustry.labelKey]}
+          </span>
+          {syncedCount > 0 && (
+            <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300">
+              {t.websiteSyncedBadge} · {syncedCount}
             </span>
-            {syncedCount > 0 && (
-              <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300">
-                {t.websiteSyncedBadge} · {syncedCount}
-              </span>
-            )}
-            {hasLiveCompetitors && (
-              <span className="rounded-md bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-950/70 dark:text-sky-300">
-                {t.competitorsScannedBadge}
-              </span>
-            )}
-          </div>
-          <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-            {t.competitorSubtitle}
-          </p>
+          )}
+          {hasLiveCompetitors && (
+            <span className="rounded-md bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-950/70 dark:text-sky-300">
+              {t.competitorsScannedBadge}
+            </span>
+          )}
         </div>
-        <button
-          type="button"
-          aria-label={t.moreOptions}
-          className="grid size-8 place-items-center rounded-md text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-        >
-          <MoreHorizontal size={18} />
-        </button>
+        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+          {t.competitorSubtitle}
+        </p>
       </div>
 
       <div className="overflow-x-auto">
@@ -241,7 +231,7 @@ export function CompetitorTable({
           </div>
 
           {liveScan!.summary && (
-            <p className="mb-3 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+            <p className="mb-3 break-words text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
               {cleanDisplayText(liveScan!.summary)}
             </p>
           )}
@@ -255,13 +245,13 @@ export function CompetitorTable({
               return (
                 <div
                   key={`${comp.name}-${comp.website ?? ""}`}
-                  className="rounded-md border border-slate-200/70 bg-white p-2.5 text-[11px] dark:border-slate-800 dark:bg-[#172123]"
+                  className="min-w-0 rounded-md border border-slate-200/70 bg-white p-2.5 text-[11px] dark:border-slate-800 dark:bg-[#172123]"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 font-semibold text-slate-800 dark:text-slate-100">
+                    <span className="inline-flex min-w-0 items-center gap-1.5 break-words font-semibold text-slate-800 dark:text-slate-100">
                       <Store
                         size={12}
-                        className="text-teal-700 dark:text-teal-400"
+                        className="shrink-0 text-teal-700 dark:text-teal-400"
                       />
                       {cleanDisplayText(comp.name)}
                     </span>
@@ -270,18 +260,18 @@ export function CompetitorTable({
                         href={safeHref}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-[10px] font-medium text-teal-700 hover:underline dark:text-teal-300"
+                        className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-teal-700 hover:underline dark:text-teal-300"
                       >
                         WWW
                         <ExternalLink size={10} />
                       </a>
                     )}
                   </div>
-                  <p className="mt-1 text-slate-600 dark:text-slate-300">
+                  <p className="mt-1 break-words text-slate-600 dark:text-slate-300">
                     {cleanDisplayText(comp.priceSummary)}
                   </p>
                   {comp.travelFeeNote && (
-                    <p className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+                    <p className="mt-0.5 break-words text-[10px] text-slate-500 dark:text-slate-400">
                       {cleanDisplayText(comp.travelFeeNote)}
                     </p>
                   )}
@@ -295,19 +285,21 @@ export function CompetitorTable({
               <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
                 {t.verifiedSourcesLabel}:{" "}
               </span>
-              <span className="inline-flex flex-wrap gap-x-3 gap-y-1">
+              <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
                 {liveScan!.sources.map((src) => {
                   const safeHref = getSafeHref(src.uri);
                   if (!safeHref) return null;
+                  const cleanTitle = cleanDisplayText(src.title);
                   return (
                     <a
                       key={safeHref}
                       href={safeHref}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-[10px] text-teal-700 hover:underline dark:text-teal-300"
+                      title={cleanTitle}
+                      className="inline-block max-w-[220px] truncate align-bottom text-[10px] text-teal-700 hover:underline dark:text-teal-300"
                     >
-                      {cleanDisplayText(src.title)}
+                      {cleanTitle}
                     </a>
                   );
                 })}

@@ -1,7 +1,9 @@
 import type { IndustryId } from "../../config/industries";
+import { resolveLocale, SUPPORTED_LOCALES } from "../../locales";
 import {
   analyzeCompetitors,
   calculateServiceFee,
+  createCustomerQuote,
   createJiraMarketingEpics,
   exportStrategyToConfluence,
   generateLocalizedCampaign,
@@ -63,7 +65,7 @@ export const mcpTools = [
         },
         townsInRadius: { type: "array", items: { type: "string" } },
         competitorsTracked: { type: "number", minimum: 0 },
-        locale: { type: "string", enum: ["en", "pl"] },
+        locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
       },
       required: ["center", "radiusKm"],
     },
@@ -93,7 +95,7 @@ export const mcpTools = [
           type: "string",
           enum: ["upholstery", "hvac", "plumbing"],
         },
-        locale: { type: "string", enum: ["en", "pl"] },
+        locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
       },
       required: ["season", "targetTowns"],
     },
@@ -125,7 +127,7 @@ export const mcpTools = [
             },
           },
         },
-        locale: { type: "string", enum: ["en", "pl"] },
+        locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
       },
       required: ["center", "radiusKm", "season"],
     },
@@ -145,9 +147,38 @@ export const mcpTools = [
         },
         townsInRadius: { type: "array", items: { type: "string" } },
         competitorsTracked: { type: "number", minimum: 0 },
-        locale: { type: "string", enum: ["en", "pl"] },
+        locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
       },
       required: ["center", "radiusKm"],
+    },
+  },
+  {
+    name: "createCustomerQuote",
+    description:
+      "Create a Jira customer quote ticket with unit quantity, travel fee, and zone estimate.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        center: { type: "string" },
+        town: { type: "string" },
+        serviceKey: { type: "string" },
+        serviceLabel: { type: "string" },
+        quantity: { type: "number", minimum: 1 },
+        unitLabel: { type: "string" },
+        unitPricePln: { type: "number", minimum: 0 },
+        travelFeePln: { type: "number", minimum: 0 },
+        totalPln: { type: "number", minimum: 0 },
+        inZone: { type: "boolean" },
+        locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
+      },
+      required: [
+        "center",
+        "town",
+        "serviceKey",
+        "unitPricePln",
+        "travelFeePln",
+        "totalPln",
+      ],
     },
   },
 ] as const;
@@ -160,7 +191,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       industryId: parseIndustryId(args.industryId),
       townsInRadius: parseStringArray(args.townsInRadius),
       competitorsTracked: parseOptionalNumber(args.competitorsTracked),
-      locale: args.locale === "pl" ? "pl" : "en",
+      locale: resolveLocale(args.locale),
     });
   }
   if (name === "calculateServiceFee") {
@@ -176,7 +207,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
         ? args.targetTowns.map(String)
         : ["Radom"],
       industryId: parseIndustryId(args.industryId),
-      locale: args.locale === "pl" ? "pl" : "en",
+      locale: resolveLocale(args.locale),
     });
   }
   if (name === "exportStrategyToConfluence") {
@@ -188,7 +219,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       townsInRadius: parseStringArray(args.townsInRadius),
       competitorsTracked: parseOptionalNumber(args.competitorsTracked),
       benchmarks: parseBenchmarks(args.benchmarks),
-      locale: args.locale === "pl" ? "pl" : "en",
+      locale: resolveLocale(args.locale),
     });
   }
   if (name === "createJiraMarketingEpics") {
@@ -198,7 +229,24 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       industryId: parseIndustryId(args.industryId),
       townsInRadius: parseStringArray(args.townsInRadius),
       competitorsTracked: parseOptionalNumber(args.competitorsTracked),
-      locale: args.locale === "pl" ? "pl" : "en",
+      locale: resolveLocale(args.locale),
+    });
+  }
+  if (name === "createCustomerQuote") {
+    return createCustomerQuote({
+      center: String(args.center ?? "Radom"),
+      town: String(args.town ?? "Radom"),
+      serviceKey: String(args.serviceKey ?? "cornerSofa"),
+      serviceLabel:
+        typeof args.serviceLabel === "string" ? args.serviceLabel : undefined,
+      quantity: parseOptionalNumber(args.quantity),
+      unitLabel:
+        typeof args.unitLabel === "string" ? args.unitLabel : undefined,
+      unitPricePln: Number(args.unitPricePln ?? 0),
+      travelFeePln: Number(args.travelFeePln ?? 0),
+      totalPln: Number(args.totalPln ?? 0),
+      inZone: typeof args.inZone === "boolean" ? args.inZone : true,
+      locale: resolveLocale(args.locale),
     });
   }
   throw new Error(`Unknown MCP tool: ${name}`);
