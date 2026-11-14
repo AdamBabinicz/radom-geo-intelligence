@@ -3,20 +3,24 @@ import api, { route } from "@forge/api";
 const DEFAULT_CONFLUENCE_SPACE_KEY = "northstarg";
 const DEFAULT_JIRA_PROJECT_KEY = "KAN";
 
+const RADOM_TOWNS = [
+  { name: "Radom", distKm: 0, driveMin: 0, travelFeePln: 0 },
+  { name: "Skaryszew", distKm: 12.6, driveMin: 15, travelFeePln: 20 },
+  { name: "Jedlińsk", distKm: 14.0, driveMin: 16, travelFeePln: 25 },
+  { name: "Przytyk", distKm: 18.2, driveMin: 22, travelFeePln: 25 },
+  { name: "Wierzbica", distKm: 18.3, driveMin: 21, travelFeePln: 30 },
+  { name: "Pionki", distKm: 22.7, driveMin: 25, travelFeePln: 20 },
+  { name: "Iłża", distKm: 27.4, driveMin: 28, travelFeePln: 35 },
+  { name: "Szydłowiec", distKm: 27.8, driveMin: 29, travelFeePln: 35 },
+  { name: "Kozienice", distKm: 34.1, driveMin: 35, travelFeePln: 35 },
+  { name: "Zwoleń", distKm: 32.0, driveMin: 34, travelFeePln: 35 },
+  { name: "Przysucha", distKm: 41.0, driveMin: 42, travelFeePln: 45 },
+];
+
 const INDUSTRY_BASELINES = {
   upholstery: {
     label: "Upholstery & Carpet Cleaning (Pranie dywanów i tapicerki)",
-    targetRadiusKm: 35,
-    regionalHubs: [
-      "Radom",
-      "Pionki",
-      "Kozienice",
-      "Szydłowiec",
-      "Skaryszew",
-      "Zwoleń",
-      "Przysucha",
-      "Iłża",
-    ],
+    targetRadiusKm: 30,
     services: [
       { name: "Carpet washing (per m2)", ourPln: 28, marketAvgPln: 27 },
       {
@@ -38,14 +42,6 @@ const INDUSTRY_BASELINES = {
   hvac: {
     label: "HVAC & Heat Pump Service (Klimatyzacja i pompy ciepła)",
     targetRadiusKm: 45,
-    regionalHubs: [
-      "Radom",
-      "Kozienice",
-      "Grójec",
-      "Białobrzegi",
-      "Szydłowiec",
-      "Starachowice",
-    ],
     services: [
       { name: "Split AC seasonal maintenance", ourPln: 240, marketAvgPln: 310 },
       { name: "Heat pump inspection", ourPln: 380, marketAvgPln: 450 },
@@ -63,14 +59,6 @@ const INDUSTRY_BASELINES = {
   plumbing: {
     label: "Plumbing & Heating Hydraulics (Hydraulika i CO)",
     targetRadiusKm: 30,
-    regionalHubs: [
-      "Radom",
-      "Skaryszew",
-      "Jedlińsk",
-      "Kowala",
-      "Pionki",
-      "Wierzbica",
-    ],
     services: [
       { name: "Leak detection & sealing", ourPln: 190, marketAvgPln: 260 },
       {
@@ -96,6 +84,12 @@ function cleanString(value, fallback = "") {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : fallback;
+}
+
+function clampNumber(raw, min, max, fallback) {
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, num));
 }
 
 function normalizeIndustry(raw) {
@@ -148,6 +142,16 @@ function buildAdfDocument(paragraphs) {
   };
 }
 
+function computeZoneTravelFeePln(distanceKm) {
+  if (distanceKm <= 0) return 0;
+  if (distanceKm <= 15) return 20;
+  if (distanceKm <= 25) return 25;
+  if (distanceKm <= 35) return 35;
+  if (distanceKm <= 50) return 45;
+  if (distanceKm <= 75) return 65;
+  return 85;
+}
+
 async function resolveConfluenceSpace(requestedKey) {
   const targetKey = cleanString(requestedKey, DEFAULT_CONFLUENCE_SPACE_KEY);
   const byKeyRes = await api
@@ -155,7 +159,6 @@ async function resolveConfluenceSpace(requestedKey) {
     .requestConfluence(route`/wiki/api/v2/spaces?keys=${targetKey}&limit=5`, {
       headers: { Accept: "application/json" },
     });
-
   if (byKeyRes.ok) {
     const byKeyData = await byKeyRes.json();
     if (Array.isArray(byKeyData?.results) && byKeyData.results.length > 0) {
@@ -168,7 +171,6 @@ async function resolveConfluenceSpace(requestedKey) {
     .requestConfluence(route`/wiki/api/v2/spaces?limit=5`, {
       headers: { Accept: "application/json" },
     });
-
   if (fallbackRes.ok) {
     const fallbackData = await fallbackRes.json();
     if (
@@ -182,11 +184,64 @@ async function resolveConfluenceSpace(requestedKey) {
   throw new Error(`Could not resolve Confluence space "${targetKey}".`);
 }
 
+async function resolveJiraProject(requestedKey) {
+  const targetKey = cleanString(
+    requestedKey,
+    DEFAULT_JIRA_PROJECT_KEY,
+  ).toUpperCase();
+
+  const directRes = await api
+    .asUser()
+    .requestJira(route`/rest/api/3/project/${targetKey}`, {
+      headers: { Accept: "application/json" },
+    });
+  if (directRes.ok) {
+    return directRes.json();
+  }
+
+  const searchRes = await api
+    .asUser()
+    .requestJira(route`/rest/api/3/project/search?maxResults=10`, {
+      headers: { Accept: "application/json" },
+    });
+  if (searchRes.ok) {
+    const searchData = await searchRes.json();
+    const candidates = Array.isArray(searchData?.values)
+      ? searchData.values
+      : [];
+    const preferred =
+      candidates.find((p) => p.projectTypeKey === "software") ||
+      candidates.find((p) => p.projectTypeKey === "business") ||
+      candidates[0];
+
+    if (preferred?.key) {
+      const fallbackRes = await api
+        .asUser()
+        .requestJira(route`/rest/api/3/project/${preferred.key}`, {
+          headers: { Accept: "application/json" },
+        });
+      if (fallbackRes.ok) {
+        return fallbackRes.json();
+      }
+    }
+  }
+
+  throw new Error(
+    `No accessible Jira project found (tried "${targetKey}" and workspace fallback). Create a Jira project first.`,
+  );
+}
+
 export async function getMarketBrief(rawPayload) {
   const input = extractPayload(rawPayload);
   const city = cleanString(input.city, "Radom");
   const industryKey = normalizeIndustry(input.industry);
   const baseline = INDUSTRY_BASELINES[industryKey];
+  const radiusKm = clampNumber(
+    input.radiusKm,
+    10,
+    100,
+    baseline.targetRadiusKm,
+  );
 
   let confluenceSpace = null;
   let jiraProject = null;
@@ -201,36 +256,33 @@ export async function getMarketBrief(rawPayload) {
   }
 
   try {
-    const projRes = await api
-      .asUser()
-      .requestJira(route`/rest/api/3/project/${DEFAULT_JIRA_PROJECT_KEY}`, {
-        headers: { Accept: "application/json" },
-      });
-    if (projRes.ok) {
-      const proj = await projRes.json();
-      jiraProject = {
-        key: proj.key,
-        name: proj.name,
-        issueTypes: Array.isArray(proj.issueTypes)
-          ? proj.issueTypes.filter((t) => !t.subtask).map((t) => t.name)
-          : [],
-      };
-    } else {
-      jiraProject = { key: DEFAULT_JIRA_PROJECT_KEY, status: projRes.status };
-    }
+    const proj = await resolveJiraProject(DEFAULT_JIRA_PROJECT_KEY);
+    jiraProject = {
+      key: proj.key,
+      name: proj.name,
+      issueTypes: Array.isArray(proj.issueTypes)
+        ? proj.issueTypes.filter((t) => !t.subtask).map((t) => t.name)
+        : [],
+    };
   } catch (err) {
     jiraProject = {
       error: err instanceof Error ? err.message : "Project unavailable",
     };
   }
 
+  const isRadom = city.toLowerCase() === "radom";
+  const townsInRadius = isRadom
+    ? RADOM_TOWNS.filter((t) => t.distKm <= radiusKm)
+    : [{ name: city, distKm: 0, driveMin: 0, travelFeePln: 0 }];
+
   return {
     city,
     industry: industryKey,
     industryLabel: baseline.label,
-    targetRadiusKm: baseline.targetRadiusKm,
-    regionalHubs:
-      city.toLowerCase() === "radom" ? baseline.regionalHubs : [city],
+    targetRadiusKm: radiusKm,
+    serviceableTownsCount: townsInRadius.length,
+    townsInRadius: townsInRadius.map((t) => t.name),
+    townDetails: townsInRadius,
     pricingBenchmarks: baseline.services,
     topCustomerPainPoints: baseline.painPoints,
     atlassianWorkspace: {
@@ -240,18 +292,60 @@ export async function getMarketBrief(rawPayload) {
   };
 }
 
+export async function calculateServiceFee(rawPayload) {
+  const input = extractPayload(rawPayload);
+  const townName = cleanString(input.town, "Radom");
+  const orderValuePln = clampNumber(input.orderValuePln, 0, 50000, 200);
+  const radiusKm = clampNumber(input.radiusKm, 10, 100, 30);
+
+  const knownTown = RADOM_TOWNS.find(
+    (t) => t.name.toLowerCase() === townName.toLowerCase(),
+  );
+
+  const distanceKm = knownTown
+    ? knownTown.distKm
+    : clampNumber(input.distanceKm, 0, 200, 0);
+
+  const travelFeePln = knownTown
+    ? knownTown.travelFeePln
+    : computeZoneTravelFeePln(distanceKm);
+
+  const inStandardZone = distanceKm <= radiusKm;
+  const totalPln = Math.round((orderValuePln + travelFeePln) * 100) / 100;
+
+  return {
+    town: knownTown ? knownTown.name : townName,
+    distanceKm,
+    radiusKm,
+    inStandardZone,
+    orderValuePln,
+    travelFeePln,
+    totalPln,
+    currency: "PLN",
+    note: inStandardZone
+      ? "Within active operational radius."
+      : `Outside ${radiusKm} km radius — out-of-zone travel surcharge applies.`,
+  };
+}
+
 export async function publishConfluencePlaybook(rawPayload) {
   const input = extractPayload(rawPayload);
   const city = cleanString(input.city, "Radom");
   const industryKey = normalizeIndustry(input.industry);
   const baseline = INDUSTRY_BASELINES[industryKey];
+  const radiusKm = clampNumber(
+    input.radiusKm,
+    10,
+    100,
+    baseline.targetRadiusKm,
+  );
   const baseTitle = cleanString(
     input.title,
-    `Northstar Ops Playbook: ${city} (${industryKey})`,
+    `Northstar Ops Playbook: ${city} (${industryKey}, ${radiusKm} km)`,
   );
   const summary = cleanString(
     input.summary,
-    `Regional pricing and expansion strategy for ${city} in ${baseline.label}.`,
+    `Regional pricing and expansion strategy for ${city} (${radiusKm} km radius) in ${baseline.label}.`,
   );
 
   const space = await resolveConfluenceSpace(input.spaceKey);
@@ -275,7 +369,7 @@ export async function publishConfluencePlaybook(rawPayload) {
 
   const storageHtml = `
     <h1>Northstar Ops — Geo-Intelligence &amp; Pricing Playbook</h1>
-    <p><strong>City / Region:</strong> ${escapeHtml(city)} (Coverage radius: ${baseline.targetRadiusKm} km)<br/>
+    <p><strong>City / Region:</strong> ${escapeHtml(city)} (Coverage radius: ${radiusKm} km)<br/>
     <strong>Industry:</strong> ${escapeHtml(baseline.label)}<br/>
     <strong>Generated:</strong> ${escapeHtml(new Date().toISOString().slice(0, 16).replace("T", " "))} UTC</p>
     <h2>Executive Strategy Summary</h2>
@@ -339,10 +433,6 @@ export async function publishConfluencePlaybook(rawPayload) {
 
 export async function createJiraCampaign(rawPayload) {
   const input = extractPayload(rawPayload);
-  const projectKey = cleanString(
-    input.projectKey,
-    DEFAULT_JIRA_PROJECT_KEY,
-  ).toUpperCase();
   const city = cleanString(input.city, "Radom");
   const industryKey = normalizeIndustry(input.industry);
   const campaignTitle = cleanString(
@@ -350,33 +440,57 @@ export async function createJiraCampaign(rawPayload) {
     `Northstar Ops Expansion — ${city} (${industryKey})`,
   );
 
-  const projRes = await api
-    .asUser()
-    .requestJira(route`/rest/api/3/project/${projectKey}`, {
-      headers: { Accept: "application/json" },
-    });
+  const projectData = await resolveJiraProject(input.projectKey);
+  const projectKey = projectData.key;
 
-  if (!projRes.ok) {
-    const errText = await projRes.text();
-    throw new Error(
-      `Jira project "${projectKey}" lookup failed (${projRes.status}): ${errText.slice(0, 200)}`,
-    );
-  }
-
-  const projectData = await projRes.json();
   const validIssueTypes = Array.isArray(projectData?.issueTypes)
     ? projectData.issueTypes.filter((t) => !t.subtask)
     : [];
 
-  const chosenType =
+  const epicType = validIssueTypes.find((t) => /^(epic|epik)$/i.test(t.name));
+  const taskType =
     validIssueTypes.find((t) =>
       /^(task|zadanie|story|historia)$/i.test(t.name),
     ) || validIssueTypes[0];
 
-  if (!chosenType) {
+  if (!taskType) {
     throw new Error(
       `No usable standard issue type found in Jira project "${projectKey}".`,
     );
+  }
+
+  async function postJiraIssue(fields) {
+    return api.asUser().requestJira(route`/rest/api/3/issue`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ fields }),
+    });
+  }
+
+  let epicIssue = null;
+  if (epicType && epicType.id !== taskType.id) {
+    const epicRes = await postJiraIssue({
+      project: { key: projectKey },
+      summary: `[Northstar Ops | ${city}] ${campaignTitle}`.slice(0, 240),
+      issuetype: { id: epicType.id },
+      description: buildAdfDocument([
+        `Campaign: ${campaignTitle}`,
+        `Market: ${city} | Industry: ${industryKey}`,
+        "Parent campaign Epic created by Northstar Ops Geo Strategist (Atlassian Rovo + Forge).",
+      ]),
+    });
+
+    if (epicRes.ok) {
+      const createdEpic = await epicRes.json();
+      epicIssue = {
+        id: createdEpic.id,
+        key: createdEpic.key,
+        browsePath: `/browse/${createdEpic.key}`,
+      };
+    }
   }
 
   const rawItems = cleanString(input.actionItems, "")
@@ -399,26 +513,30 @@ export async function createJiraCampaign(rawPayload) {
 
   for (const taskText of tasks) {
     const summary = `[Northstar Ops | ${city}] ${taskText}`.slice(0, 240);
-    const issueRes = await api.asUser().requestJira(route`/rest/api/3/issue`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        fields: {
-          project: { key: projectKey },
-          summary,
-          issuetype: { id: chosenType.id },
-          description: buildAdfDocument([
-            `Campaign: ${campaignTitle}`,
-            `Market: ${city} | Industry: ${industryKey}`,
-            `Action item: ${taskText}`,
-            "Generated automatically by Northstar Ops Geo Strategist (Atlassian Rovo + Forge).",
-          ]),
-        },
-      }),
-    });
+    const baseFields = {
+      project: { key: projectKey },
+      summary,
+      issuetype: { id: taskType.id },
+      description: buildAdfDocument([
+        `Campaign: ${campaignTitle}`,
+        `Market: ${city} | Industry: ${industryKey}`,
+        `Action item: ${taskText}`,
+        epicIssue
+          ? `Parent Epic: ${epicIssue.key}`
+          : "Standalone campaign task.",
+        "Generated automatically by Northstar Ops Geo Strategist (Atlassian Rovo + Forge).",
+      ]),
+    };
+
+    let issueRes = await postJiraIssue(
+      epicIssue
+        ? { ...baseFields, parent: { key: epicIssue.key } }
+        : baseFields,
+    );
+
+    if (!issueRes.ok && epicIssue) {
+      issueRes = await postJiraIssue(baseFields);
+    }
 
     if (issueRes.ok) {
       const created = await issueRes.json();
@@ -439,9 +557,10 @@ export async function createJiraCampaign(rawPayload) {
   }
 
   return {
-    ok: createdIssues.length > 0,
+    ok: createdIssues.length > 0 || epicIssue !== null,
     projectKey,
-    issueTypeUsed: chosenType.name,
+    epicIssue,
+    issueTypeUsed: taskType.name,
     campaignTitle,
     createdCount: createdIssues.length,
     createdIssues,

@@ -4,44 +4,66 @@ modules:
       name: Northstar Ops Geo Strategist
       description: >
         AI Geo-Intelligence & Pricing Strategist for local service operators.
-        Audits local competition, publishes strategy playbooks to Confluence,
-        and creates execution tasks in Jira.
+        Audits local competition, calculates zone travel fees, publishes
+        strategy playbooks to Confluence, and creates execution campaigns in Jira.
       prompt: >
         You are Northstar Ops Geo Strategist, an operational Atlassian Rovo
         teammate for local service businesses (upholstery & carpet cleaning,
         HVAC, and plumbing).
-
         Follow these rules:
-        1. When a user asks about a city, regional pricing, or competitors, call
-           get-market-brief first to load regional pricing benchmarks, customer
-           pain points, and live Jira/Confluence workspace status.
-        2. When asked to document a strategy or export a report to Confluence,
+        1. When a user asks about a city, service radius, regional pricing, or
+           competitors, call get-market-brief first to load benchmarks, towns
+           within radiusKm (10-100 km), customer pain points, and live
+           Jira/Confluence workspace status.
+        2. When asked to quote a customer order or estimate a travel fee for a
+           town, call calculate-service-fee.
+        3. When asked to document a strategy or export a report to Confluence,
            call publish-confluence-playbook. Use spaceKey "northstarg" if the
            user does not specify another space.
-        3. When asked to create marketing or operational expansion tasks in
-           Jira, call create-jira-campaign. Use projectKey "KAN" if the user
-           does not specify another project. Provide 3 to 4 concrete tasks
+        4. When asked to create marketing or operational expansion tasks in
+           Jira, call create-jira-campaign. Use projectKey "KAN" if the
+           user does not specify another project. Provide 3 to 4 concrete tasks
            separated by semicolons in actionItems.
-        4. Reply concisely in the user's language (Polish or English) with
+        5. Reply concisely in the user's language (Polish or English) with
            concrete numbers and links/keys of any created pages or Jira issues.
       conversationStarters:
-        - Audit the Radom upholstery cleaning market and suggest pricing
+        - Audit the Radom upholstery cleaning market within 30 km and suggest pricing
+        - Calculate total quote with travel fee for Pionki on a 200 PLN order
         - Publish a Northstar Ops strategy playbook to Confluence space northstarg
-        - Create a local expansion task plan in Jira project KAN
+        - Create a local expansion campaign in Jira project KAN
       actions:
         - get-market-brief
+        - calculate-service-fee
         - publish-confluence-playbook
         - create-jira-campaign
-
+      skills:
+        - geo-pricing-strategist
+  rovo:skill:
+    - key: geo-pricing-strategist
+      source:
+        dir: skills/geo-pricing-strategist
+      dependencies:
+        tools:
+          - get-market-brief
+          - calculate-service-fee
+          - publish-confluence-playbook
+          - create-jira-campaign
+  rovo:mcp:
+    - key: northstar-ops-mcp
+      name: Northstar Ops MCP Server
+      tools:
+        - get-market-brief
+        - calculate-service-fee
+        - publish-confluence-playbook
+        - create-jira-campaign
   action:
     - key: get-market-brief
       name: Get Northstar Ops Market Brief
       function: getMarketBriefFn
       actionVerb: GET
       description: >
-        Retrieves Northstar Ops geo-intelligence benchmarks, competitor gaps,
-        local customer pain points, and live Jira/Confluence status for a city
-        and service industry.
+        Retrieves Northstar Ops geo-intelligence benchmarks, towns inside the
+        service radius, customer pain points, and live Jira/Confluence status.
       inputs:
         city:
           title: City
@@ -53,7 +75,39 @@ modules:
           type: string
           required: true
           description: Service industry key (upholstery, hvac, or plumbing)
-
+        radiusKm:
+          title: Radius (km)
+          type: number
+          required: false
+          description: Operational coverage radius in kilometers (10-100)
+    - key: calculate-service-fee
+      name: Calculate Zone Service Fee
+      function: calculateServiceFeeFn
+      actionVerb: GET
+      description: >
+        Calculates zone travel fee and total customer quote in PLN for a
+        target town, order value, and operational radius.
+      inputs:
+        town:
+          title: Town
+          type: string
+          required: true
+          description: Target service town (for example Pionki, Jedlinsk, or Radom)
+        orderValuePln:
+          title: Order Value (PLN)
+          type: number
+          required: true
+          description: Base order value in PLN before travel surcharge
+        radiusKm:
+          title: Radius (km)
+          type: number
+          required: false
+          description: Active operational radius in kilometers (10-100, default 30)
+        distanceKm:
+          title: Distance (km)
+          type: number
+          required: false
+          description: Optional straight-line distance in km for towns outside Radom
     - key: publish-confluence-playbook
       name: Publish Confluence Strategy Playbook
       function: publishPlaybookFn
@@ -82,19 +136,23 @@ modules:
           type: string
           required: true
           description: Executive summary, recommended prices, and rollout plan
+        radiusKm:
+          title: Radius (km)
+          type: number
+          required: false
+          description: Operational coverage radius in kilometers (10-100)
         spaceKey:
           title: Confluence Space Key
           type: string
           required: false
           description: Optional Confluence space key (defaults to northstarg)
-
     - key: create-jira-campaign
       name: Create Jira Expansion Campaign
       function: createCampaignFn
       actionVerb: CREATE
       description: >
-        Creates real operational Jira tasks in the target project for executing
-        a local pricing update or regional geo-marketing campaign.
+        Creates a Jira Epic and operational tasks in the target project for
+        executing a local pricing update or regional geo-marketing campaign.
       inputs:
         campaignTitle:
           title: Campaign Title
@@ -121,22 +179,21 @@ modules:
           type: string
           required: false
           description: Optional Jira project key (defaults to KAN)
-
   function:
     - key: getMarketBriefFn
       handler: index.getMarketBrief
+    - key: calculateServiceFeeFn
+      handler: index.calculateServiceFee
     - key: publishPlaybookFn
       handler: index.publishConfluencePlaybook
     - key: createCampaignFn
       handler: index.createJiraCampaign
-
 permissions:
   scopes:
     - read:space:confluence
     - write:page:confluence
     - read:jira-work
     - write:jira-work
-
 app:
   runtime:
     name: nodejs24.x
