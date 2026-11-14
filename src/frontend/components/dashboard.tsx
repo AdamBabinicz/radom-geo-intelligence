@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   Bot,
+  BrainCircuit,
   CircleHelp,
   Command,
   Globe2,
@@ -34,6 +35,7 @@ import {
   type TownGeo,
 } from "@/src/config/markets";
 import { translations, type Locale } from "@/src/locales";
+import { AiCouncilPanel } from "./features/ai-council/ai-council-panel";
 import {
   CompetitorTable,
   type LiveMarketScanResult,
@@ -475,6 +477,13 @@ export function Dashboard() {
               <Command size={17} />
               {t.pricePreview}
             </a>
+            <a
+              href="#council"
+              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <BrainCircuit size={17} />
+              {t.councilTitle}
+            </a>
           </nav>
 
           <div className="mt-auto rounded-xl border border-slate-200 p-3.5 dark:border-slate-700">
@@ -689,6 +698,17 @@ export function Dashboard() {
                 selectedTown={selectedTown}
               />
             </div>
+
+            <AiCouncilPanel
+              t={t}
+              market={market}
+              locale={locale}
+              industryId={industryId}
+              radiusKm={radiusKm}
+              avgGapPct={metrics.avgGapPct}
+              townsInRadius={townsInRadius}
+              liveScan={liveScan}
+            />
 
             <footer className="mt-8 flex flex-col justify-between gap-3 border-t border-slate-200 py-5 text-[11px] text-slate-600 sm:flex-row sm:items-center dark:border-slate-800 dark:text-slate-400">
               <span>

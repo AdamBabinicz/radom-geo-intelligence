@@ -64,6 +64,17 @@ export interface ServiceBenchmarkInput {
   localPricePln: number;
 }
 
+export interface CouncilExecutionContext {
+  selectedOptionTitle: string;
+  selectedOptionSummary?: string;
+  strategistModel?: string;
+  criticModel?: string;
+  riskScore?: number;
+  criticObjections?: string[];
+  humanConstraint?: string;
+  actionItems?: string[];
+}
+
 export interface ExtendedAnalysisInput extends CompetitorAnalysisInput {
   industryId?: IndustryId;
   townsInRadius?: string[];
@@ -132,14 +143,68 @@ function escapeHtml(text: string): string {
 }
 
 function buildAdfDocument(paragraphs: string[]) {
+  const safeParagraphs = paragraphs
+    .map((text) => text.trim())
+    .filter((text) => text.length > 0);
   return {
     type: "doc",
     version: 1,
-    content: paragraphs.map((text) => ({
+    content: safeParagraphs.map((text) => ({
       type: "paragraph",
       content: [{ type: "text", text }],
     })),
   };
+}
+
+function buildConfluenceCouncilSection(
+  ctx: CouncilExecutionContext,
+  locale: Locale,
+): string {
+  const isPl = locale === "pl";
+  const heading = isPl
+    ? "Protokół Rady Strategicznej AI i decyzja operatora"
+    : "AI Strategy Council Protocol & Human Decision";
+  const modelsText = [ctx.strategistModel, ctx.criticModel]
+    .filter(Boolean)
+    .join(" ↔ ");
+
+  const metaLines: string[] = [
+    `<p><strong>${escapeHtml(isPl ? "Zatwierdzony wariant" : "Approved option")}:</strong> ${escapeHtml(ctx.selectedOptionTitle)}${ctx.selectedOptionSummary ? ` — ${escapeHtml(ctx.selectedOptionSummary)}` : ""}</p>`,
+  ];
+
+  if (modelsText) {
+    const riskPart =
+      typeof ctx.riskScore === "number"
+        ? ` · ${isPl ? "Wskaźnik ryzyka krytyka" : "Critic risk score"}: ${ctx.riskScore}%`
+        : "";
+    metaLines.push(
+      `<p><strong>${escapeHtml(isPl ? "Debata modeli AI" : "AI debate models")}:</strong> ${escapeHtml(modelsText)}${escapeHtml(riskPart)}</p>`,
+    );
+  }
+
+  if (ctx.humanConstraint?.trim()) {
+    metaLines.push(
+      `<p><strong>${escapeHtml(isPl ? "Reguła / limit operatora" : "Human operator rule")}:</strong> ${escapeHtml(ctx.humanConstraint.trim())}</p>`,
+    );
+  }
+
+  const objectionsBlock =
+    ctx.criticObjections && ctx.criticObjections.length > 0
+      ? `<h3>${escapeHtml(isPl ? "Kluczowe zastrzeżenia Krytyka" : "Key Critic objections")}</h3><ul>${ctx.criticObjections
+          .slice(0, 4)
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join("")}</ul>`
+      : "";
+
+  const actionsBlock =
+    ctx.actionItems && ctx.actionItems.length > 0
+      ? `<h3>${escapeHtml(isPl ? "Plan wdrożenia zatwierdzony do Jira" : "Approved action plan for Jira")}</h3><ol>${ctx.actionItems
+          .slice(0, 5)
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join("")}</ol>`
+      : "";
+
+  return `<h2>${escapeHtml(heading)}</h2>${metaLines.join("")}${objectionsBlock}${actionsBlock}`;
 }
 
 async function resolveJiraProject(atlassian: AtlassianConfig): Promise<{
@@ -190,7 +255,6 @@ async function resolveJiraProject(atlassian: AtlassianConfig): Promise<{
 
   const fallbackRes = await fetchProject(fallbackKey);
   if (!fallbackRes.ok) return null;
-
   const fallbackProject = (await fallbackRes.json()) as {
     key?: string;
     issueTypes?: JiraIssueTypeInfo[];
@@ -234,13 +298,11 @@ export async function analyzeCompetitors(
             .filter((town) => town.distKm <= input.radiusKm)
             .map((town) => town.name),
         ];
-
   const serviceableTownsCount = townsInRadius.length;
   const competitorsTracked =
     typeof input.competitorsTracked === "number"
       ? input.competitorsTracked
       : metrics.competitorsTracked;
-
   const painPoints = industry.painPoints.map((p) => ({
     topic: t[p.topicKey],
     mentions: p.percent,
@@ -319,9 +381,11 @@ export async function exportStrategyToConfluence(input: {
   townsInRadius?: string[];
   competitorsTracked?: number;
   benchmarks?: ServiceBenchmarkInput[];
+  councilContext?: CouncilExecutionContext;
   locale?: Locale;
 }): Promise<ConfluenceExportResult> {
   const locale = resolveLocale(input.locale);
+  const isPl = locale === "pl";
   const t = translations[locale];
   const industryId = input.industryId ?? "upholstery";
   const template = INDUSTRY_TEMPLATES[industryId];
@@ -364,6 +428,17 @@ export async function exportStrategyToConfluence(input: {
     locale,
   });
 
+  const ctx = input.councilContext;
+  const topTownsShort = analysis.townsInRadius.slice(0, 4).join(", ");
+  const pageTitle = ctx
+    ? isPl
+      ? `Strategia Rady AI (${ctx.selectedOptionTitle}) — ${topTownsShort}`
+      : `AI Council Strategy (${ctx.selectedOptionTitle}) — ${topTownsShort}`
+    : campaign.confluencePageTitle;
+  const pageHeadline = ctx
+    ? `${t.brand} — ${isPl ? "Rada Strategiczna AI" : "AI Strategy Council"}: ${ctx.selectedOptionTitle}`
+    : `${t.brand} — ${campaign.headline}`;
+
   const topPain = t[template.painPoints[0].topicKey];
   const gapText = `${avgGapPct > 0 ? "+" : ""}${avgGapPct}%`;
   const summary = formatTemplate(t.confluenceSummaryTemplate, {
@@ -379,7 +454,6 @@ export async function exportStrategyToConfluence(input: {
     try {
       let spaceId: string | null = null;
       let resolvedSpaceKey = atlassian.spaceKey;
-
       const byKeyRes = await fetch(
         `${atlassian.baseUrl}/wiki/api/v2/spaces?keys=${encodeURIComponent(atlassian.spaceKey)}&limit=5`,
         {
@@ -445,8 +519,12 @@ export async function exportStrategyToConfluence(input: {
           })
           .join("");
 
+        const councilSectionHtml = ctx
+          ? buildConfluenceCouncilSection(ctx, locale)
+          : "";
+
         const storageHtml = `
-          <h1>${escapeHtml(t.brand)} — ${escapeHtml(campaign.headline)}</h1>
+          <h1>${escapeHtml(pageHeadline)}</h1>
           <p><strong>${escapeHtml(t.confluenceServiceHubLabel)}:</strong> ${escapeHtml(analysis.center)} (${analysis.radiusKm} ${escapeHtml(t.kmUnit)})<br/>
           <strong>${escapeHtml(t.confluenceTargetTownsLabel)}:</strong> ${escapeHtml(analysis.townsInRadius.join(", "))}<br/>
           <strong>${escapeHtml(t.confluenceTrackedCompetitorsLabel)}:</strong> ${analysis.competitorsTracked}</p>
@@ -465,6 +543,7 @@ export async function exportStrategyToConfluence(input: {
             </thead>
             <tbody>${rowsHtml}</tbody>
           </table>
+          ${councilSectionHtml}
         `.trim();
 
         const publishPage = async (title: string) =>
@@ -484,14 +563,14 @@ export async function exportStrategyToConfluence(input: {
             signal: AbortSignal.timeout(8000),
           });
 
-        let finalTitle = campaign.confluencePageTitle;
+        let finalTitle = pageTitle;
         let createRes = await publishPage(finalTitle);
         if (createRes.status === 400) {
           const suffix = new Date()
             .toISOString()
             .slice(11, 19)
             .replace(/:/g, "");
-          finalTitle = `${campaign.confluencePageTitle} [${suffix}]`;
+          finalTitle = `${pageTitle} [${suffix}]`;
           createRes = await publishPage(finalTitle);
         }
 
@@ -520,7 +599,7 @@ export async function exportStrategyToConfluence(input: {
   }
 
   return {
-    pageTitle: campaign.confluencePageTitle,
+    pageTitle,
     spaceKey: atlassian?.spaceKey ?? "northstarg",
     summary,
     targetTowns: analysis.townsInRadius,
@@ -535,9 +614,11 @@ export async function createJiraMarketingEpics(input: {
   industryId?: IndustryId;
   townsInRadius?: string[];
   competitorsTracked?: number;
+  councilContext?: CouncilExecutionContext;
   locale?: Locale;
 }): Promise<JiraEpicResult> {
   const locale = resolveLocale(input.locale);
+  const isPl = locale === "pl";
   const t = translations[locale];
   const analysis = await analyzeCompetitors({
     center: input.center,
@@ -548,15 +629,73 @@ export async function createJiraMarketingEpics(input: {
     locale,
   });
 
-  const epicTitle = formatTemplate(t.jiraEpicTitleTemplate, {
-    center: input.center,
-    radius: input.radiusKm,
-  });
+  const ctx = input.councilContext;
+  const epicTitle = ctx
+    ? `[${input.center} ${input.radiusKm} km] ${ctx.selectedOptionTitle}`.slice(
+        0,
+        220,
+      )
+    : formatTemplate(t.jiraEpicTitleTemplate, {
+        center: input.center,
+        radius: input.radiusKm,
+      });
 
-  const plannedSubtasks = analysis.townsInRadius.slice(0, 4).map((town) => ({
-    town,
-    summary: formatTemplate(t.jiraSubtaskTemplate, { town }),
-  }));
+  const councilActionSubtasks = (ctx?.actionItems ?? [])
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((item) => ({
+      contextLabel: isPl ? "Akcja z Rady AI" : "AI Council Action",
+      summary: `${isPl ? "[Rada AI]" : "[AI Council]"} ${item}`.slice(0, 200),
+    }));
+
+  const townLimit = councilActionSubtasks.length > 0 ? 2 : 4;
+  const townSubtasks = analysis.townsInRadius
+    .slice(0, townLimit)
+    .map((town) => ({
+      contextLabel: town,
+      summary: formatTemplate(t.jiraSubtaskTemplate, { town }),
+    }));
+
+  const plannedSubtasks = [...councilActionSubtasks, ...townSubtasks];
+
+  const epicParagraphs = [
+    formatTemplate(t.jiraEpicDescHub, {
+      center: analysis.center,
+      radius: analysis.radiusKm,
+    }),
+    formatTemplate(t.jiraEpicDescTowns, {
+      towns: analysis.townsInRadius.join(", "),
+    }),
+    formatTemplate(t.jiraEpicDescCompetitors, {
+      count: analysis.competitorsTracked,
+    }),
+  ];
+
+  if (ctx) {
+    const modelsText = [ctx.strategistModel, ctx.criticModel]
+      .filter(Boolean)
+      .join(" ↔ ");
+    epicParagraphs.push(
+      `${isPl ? "Wybrany wariant Rady AI" : "Approved AI Council option"}: ${ctx.selectedOptionTitle}${ctx.selectedOptionSummary ? ` — ${ctx.selectedOptionSummary}` : ""}`,
+    );
+    if (modelsText) {
+      epicParagraphs.push(
+        `${isPl ? "Debata modeli" : "Debate models"}: ${modelsText}${typeof ctx.riskScore === "number" ? ` (${isPl ? "Ryzyko krytyka" : "Critic risk"}: ${ctx.riskScore}%)` : ""}`,
+      );
+    }
+    if (ctx.humanConstraint?.trim()) {
+      epicParagraphs.push(
+        `${isPl ? "Reguła operatora" : "Human rule"}: ${ctx.humanConstraint.trim()}`,
+      );
+    }
+    if (ctx.criticObjections && ctx.criticObjections.length > 0) {
+      epicParagraphs.push(
+        `${isPl ? "Zastrzeżenie Krytyka" : "Critic objection"}: ${ctx.criticObjections[0]}`,
+      );
+    }
+  }
+  epicParagraphs.push(t.jiraCreatedNote);
 
   const atlassian = getAtlassianConfig();
   if (atlassian) {
@@ -592,19 +731,7 @@ export async function createJiraMarketingEpics(input: {
             project: { key: resolved.projectKey },
             summary: epicTitle,
             issuetype: { id: parentType.id },
-            description: buildAdfDocument([
-              formatTemplate(t.jiraEpicDescHub, {
-                center: analysis.center,
-                radius: analysis.radiusKm,
-              }),
-              formatTemplate(t.jiraEpicDescTowns, {
-                towns: analysis.townsInRadius.join(", "),
-              }),
-              formatTemplate(t.jiraEpicDescCompetitors, {
-                count: analysis.competitorsTracked,
-              }),
-              t.jiraCreatedNote,
-            ]),
+            description: buildAdfDocument(epicParagraphs),
           });
 
           if (parentRes.ok) {
@@ -628,14 +755,21 @@ export async function createJiraMarketingEpics(input: {
                   summary: item.summary,
                   issuetype: { id: childType.id },
                   description: buildAdfDocument([
-                    `${item.town} · ${formatTemplate(t.jiraEpicDescHub, {
-                      center: analysis.center,
-                      radius: analysis.radiusKm,
-                    })}`,
+                    `${item.contextLabel} · ${formatTemplate(
+                      t.jiraEpicDescHub,
+                      {
+                        center: analysis.center,
+                        radius: analysis.radiusKm,
+                      },
+                    )}`,
+                    ...(ctx?.humanConstraint?.trim()
+                      ? [
+                          `${isPl ? "Reguła operatora" : "Operator rule"}: ${ctx.humanConstraint.trim()}`,
+                        ]
+                      : []),
                     `${t.jiraEpicBadge}: ${parentCreated.key}`,
                   ]),
                 };
-
                 let childRes = await createIssue(
                   useParentLink
                     ? { ...baseFields, parent: { key: parentCreated.key } }

@@ -7,6 +7,7 @@ import {
   createJiraMarketingEpics,
   exportStrategyToConfluence,
   generateLocalizedCampaign,
+  type CouncilExecutionContext,
   type ServiceBenchmarkInput,
 } from "../index";
 
@@ -50,6 +51,53 @@ function parseBenchmarks(value: unknown): ServiceBenchmarkInput[] | undefined {
   }
   return parsed.length > 0 ? parsed : undefined;
 }
+
+function parseCouncilContext(
+  value: unknown,
+): CouncilExecutionContext | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const obj = value as Record<string, unknown>;
+  const selectedOptionTitle =
+    typeof obj.selectedOptionTitle === "string"
+      ? obj.selectedOptionTitle.trim()
+      : "";
+  if (!selectedOptionTitle) return undefined;
+
+  return {
+    selectedOptionTitle,
+    selectedOptionSummary:
+      typeof obj.selectedOptionSummary === "string"
+        ? obj.selectedOptionSummary.trim()
+        : undefined,
+    strategistModel:
+      typeof obj.strategistModel === "string"
+        ? obj.strategistModel.trim()
+        : undefined,
+    criticModel:
+      typeof obj.criticModel === "string" ? obj.criticModel.trim() : undefined,
+    riskScore: parseOptionalNumber(obj.riskScore),
+    criticObjections: parseStringArray(obj.criticObjections),
+    humanConstraint:
+      typeof obj.humanConstraint === "string"
+        ? obj.humanConstraint.trim()
+        : undefined,
+    actionItems: parseStringArray(obj.actionItems),
+  };
+}
+
+const councilContextSchema = {
+  type: "object",
+  properties: {
+    selectedOptionTitle: { type: "string" },
+    selectedOptionSummary: { type: "string" },
+    strategistModel: { type: "string" },
+    criticModel: { type: "string" },
+    riskScore: { type: "number" },
+    criticObjections: { type: "array", items: { type: "string" } },
+    humanConstraint: { type: "string" },
+    actionItems: { type: "array", items: { type: "string" } },
+  },
+} as const;
 
 export const mcpTools = [
   {
@@ -105,7 +153,7 @@ export const mcpTools = [
   {
     name: "exportStrategyToConfluence",
     description:
-      "Publish (or draft if unconfigured) a structured Confluence strategy page from live radius metrics.",
+      "Publish (or draft if unconfigured) a structured Confluence strategy page from live radius metrics and optional AI Council debate context.",
     inputSchema: {
       type: "object",
       properties: {
@@ -130,6 +178,7 @@ export const mcpTools = [
             },
           },
         },
+        councilContext: councilContextSchema,
         locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
       },
       required: ["center", "radiusKm", "season"],
@@ -138,7 +187,7 @@ export const mcpTools = [
   {
     name: "createJiraMarketingEpics",
     description:
-      "Create a Jira marketing Epic with localized town tasks for the active radius.",
+      "Create a Jira marketing Epic with localized town tasks and optional AI Council approved action items.",
     inputSchema: {
       type: "object",
       properties: {
@@ -150,6 +199,7 @@ export const mcpTools = [
         },
         townsInRadius: { type: "array", items: { type: "string" } },
         competitorsTracked: { type: "number", minimum: 0 },
+        councilContext: councilContextSchema,
         locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
       },
       required: ["center", "radiusKm"],
@@ -222,6 +272,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       townsInRadius: parseStringArray(args.townsInRadius),
       competitorsTracked: parseOptionalNumber(args.competitorsTracked),
       benchmarks: parseBenchmarks(args.benchmarks),
+      councilContext: parseCouncilContext(args.councilContext),
       locale: resolveLocale(args.locale),
     });
   }
@@ -232,6 +283,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       industryId: parseIndustryId(args.industryId),
       townsInRadius: parseStringArray(args.townsInRadius),
       competitorsTracked: parseOptionalNumber(args.competitorsTracked),
+      councilContext: parseCouncilContext(args.councilContext),
       locale: resolveLocale(args.locale),
     });
   }
@@ -262,7 +314,6 @@ export async function handleMcpJsonRpc(body: {
   params?: Record<string, unknown>;
 }) {
   const id = body.id ?? null;
-
   if (body.method === "initialize") {
     return {
       jsonrpc: "2.0",
@@ -274,11 +325,9 @@ export async function handleMcpJsonRpc(body: {
       },
     };
   }
-
   if (body.method === "tools/list") {
     return { jsonrpc: "2.0", id, result: { tools: mcpTools } };
   }
-
   if (body.method === "tools/call") {
     const name = String(body.params?.name ?? "");
     const args = (body.params?.arguments ?? {}) as Record<string, unknown>;
@@ -292,7 +341,6 @@ export async function handleMcpJsonRpc(body: {
       },
     };
   }
-
   return {
     jsonrpc: "2.0",
     id,

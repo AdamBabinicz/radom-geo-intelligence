@@ -97,7 +97,7 @@ export function CompetitorTable({
 }: CompetitorTableProps) {
   const activeIndustry = INDUSTRY_TEMPLATES[industryId];
   const hasLiveCompetitors = Boolean(
-    liveScan?.aiEnhanced && liveScan.competitors.length > 0,
+    liveScan && liveScan.competitors.length > 0,
   );
   const hasLivePainPoints = Boolean(
     liveScan?.aiEnhanced && liveScan.painPoints.length > 0,
