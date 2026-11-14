@@ -1,7 +1,7 @@
 "use client";
 
 import { ExternalLink, FileText, Layers, X } from "lucide-react";
-import type { AppDictionary } from "@/src/locales";
+import { formatTemplate, type AppDictionary } from "@/src/locales";
 import type {
   ConfluenceExportResult,
   JiraEpicResult,
@@ -34,7 +34,6 @@ export function RovoActionPreview({
 }: RovoActionPreviewProps) {
   if (!confluenceResult && !jiraResult) return null;
 
-  const isPl = t.confluenceDraftBadge.toUpperCase().includes("SZKIC");
   const isLiveConfluence = confluenceResult?.status === "published";
   const isLiveJira = jiraResult?.status === "created";
   const isLive = isLiveConfluence || isLiveJira;
@@ -72,14 +71,10 @@ export function RovoActionPreview({
           >
             {confluenceResult
               ? isLiveConfluence
-                ? isPl
-                  ? "OPUBLIKOWANO · CONFLUENCE"
-                  : "PUBLISHED · CONFLUENCE"
+                ? t.confluencePublishedBadge
                 : t.confluenceDraftBadge
               : isLiveJira
-                ? isPl
-                  ? "UTWORZONO · JIRA"
-                  : "CREATED · JIRA"
+                ? t.jiraCreatedBadge
                 : t.jiraEpicBadge}
           </span>
           <span className="truncate">
@@ -111,9 +106,9 @@ export function RovoActionPreview({
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 font-semibold text-emerald-700 underline underline-offset-2 hover:text-emerald-900 dark:text-emerald-300 dark:hover:text-emerald-200"
             >
-              {isPl
-                ? `Otwórz stronę w Confluence (${confluenceResult.spaceKey})`
-                : `Open page in Confluence (${confluenceResult.spaceKey})`}
+              {formatTemplate(t.openConfluenceTemplate, {
+                spaceKey: confluenceResult.spaceKey,
+              })}
               <ExternalLink size={11} />
             </a>
           )}
@@ -129,9 +124,10 @@ export function RovoActionPreview({
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 underline underline-offset-2 hover:text-emerald-900 dark:text-emerald-300 dark:hover:text-emerald-200"
             >
-              {isPl
-                ? `Otwórz ${jiraResult.epicKey} w Jira (${jiraResult.projectKey})`
-                : `Open ${jiraResult.epicKey} in Jira (${jiraResult.projectKey})`}
+              {formatTemplate(t.openJiraTemplate, {
+                epicKey: jiraResult.epicKey,
+                projectKey: jiraResult.projectKey,
+              })}
               <ExternalLink size={11} />
             </a>
           )}

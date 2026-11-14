@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   Bot,
-  ChevronDown,
   CircleHelp,
   Command,
   Globe2,
@@ -59,9 +58,55 @@ interface PricingSyncItem {
 }
 
 interface PricingSyncResponse {
+  aiEnhanced?: boolean;
+  warning?: string;
   extractedCount?: number;
   prices?: PricingSyncItem[];
   error?: string;
+}
+
+function resolveWorkspaceProfile(
+  websiteUrl: string,
+  defaultName: string,
+): { initials: string; displayName: string; isDomainBound: boolean } {
+  const raw = websiteUrl.trim();
+  if (!raw) {
+    return {
+      initials: "NO",
+      displayName: defaultName,
+      isDomainBound: false,
+    };
+  }
+  try {
+    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const host = new URL(withProtocol).hostname
+      .toLowerCase()
+      .replace(/^www\./, "");
+    if (!host || !host.includes(".")) {
+      return {
+        initials: "NO",
+        displayName: defaultName,
+        isDomainBound: false,
+      };
+    }
+    const primaryLabel = host.split(".")[0] ?? host;
+    const parts = primaryLabel.split(/[-_]+/).filter(Boolean);
+    const initials =
+      parts.length >= 2
+        ? `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+        : primaryLabel.slice(0, 2).toUpperCase();
+    return {
+      initials: initials || "NO",
+      displayName: host,
+      isDomainBound: true,
+    };
+  } catch {
+    return {
+      initials: "NO",
+      displayName: defaultName,
+      isDomainBound: false,
+    };
+  }
 }
 
 export function Dashboard() {
@@ -172,6 +217,7 @@ export function Dashboard() {
   };
 
   const t = translations[locale];
+  const workspaceProfile = resolveWorkspaceProfile(websiteUrl, t.accountName);
   const baseIndustryMarket = applyIndustryToMarket(baseMarket, industryId);
   const baselineByKey = new Map(
     baseIndustryMarket.benchmarks.map((row) => [row.serviceKey, row]),
@@ -271,6 +317,9 @@ export function Dashboard() {
 
       setSyncedCatalog(nextCatalog);
       setSyncedCount(nextCatalog.length);
+      if (data.aiEnhanced === false && data.warning) {
+        setSyncError(data.warning);
+      }
     } catch {
       setSyncError(t.syncWebsiteError);
     } finally {
@@ -449,19 +498,26 @@ export function Dashboard() {
           </div>
 
           <div className="mt-4 flex items-center gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
-            <div className="grid size-9 place-items-center rounded-full bg-slate-200 text-xs font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
-              MB
+            <div
+              className={`grid size-9 shrink-0 place-items-center rounded-full text-xs font-bold ${
+                workspaceProfile.isDomainBound
+                  ? "bg-teal-50 text-teal-800 dark:bg-teal-950/70 dark:text-teal-200"
+                  : "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+              }`}
+            >
+              {workspaceProfile.initials}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-semibold">{t.accountName}</p>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400">
+              <p
+                className="truncate text-xs font-semibold"
+                title={workspaceProfile.displayName}
+              >
+                {workspaceProfile.displayName}
+              </p>
+              <p className="truncate text-[10px] text-slate-500 dark:text-slate-400">
                 {t.adminRole}
               </p>
             </div>
-            <ChevronDown
-              size={15}
-              className="text-slate-500 dark:text-slate-400"
-            />
           </div>
         </aside>
 

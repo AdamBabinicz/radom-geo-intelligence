@@ -74,6 +74,23 @@ interface FetchedSiteContext {
   text: string;
 }
 
+interface SerperCompetitorEntry {
+  name: string;
+  website?: string;
+  rating?: number;
+  reviewCount?: number;
+  address?: string;
+  category?: string;
+  mapUri?: string;
+}
+
+interface SerperDiscoveryResult {
+  urls: string[];
+  gbpContext: string;
+  mapsSources: GroundingSource[];
+  places: SerperCompetitorEntry[];
+}
+
 const AGGREGATOR_HOSTS = [
   "facebook.com",
   "instagram.com",
@@ -104,6 +121,8 @@ const AGGREGATOR_HOSTS = [
   "pf.pl",
   "pomocedomowe.pl",
   "sprzatanko.pl",
+  "booksy.com",
+  "fresha.com",
   "yelp.com",
   "tripadvisor.com",
   "wikipedia.org",
@@ -164,11 +183,42 @@ function normalizeHost(hostname: string): string {
   return hostname.toLowerCase().replace(/^www\./, "");
 }
 
+function getNormalizedHostFromUrl(rawUrl?: string): string | null {
+  if (!rawUrl) return null;
+  const parsed = isSafePublicUrl(rawUrl);
+  return parsed ? normalizeHost(parsed.hostname) : null;
+}
+
 function isAggregatorHost(hostname: string): boolean {
   const host = normalizeHost(hostname);
   return AGGREGATOR_HOSTS.some(
     (blocked) => host === blocked || host.endsWith(`.${blocked}`),
   );
+}
+
+function isExcludedCompetitorWebsite(
+  rawUrl: string | undefined,
+  excludeHost?: string,
+): boolean {
+  if (!rawUrl || !excludeHost) return false;
+  const host = getNormalizedHostFromUrl(rawUrl);
+  return host === excludeHost;
+}
+
+function deduplicateSources(
+  sources: GroundingSource[],
+  limit = 15,
+): GroundingSource[] {
+  const seen = new Map<string, GroundingSource>();
+  for (const src of sources) {
+    const uri = src.uri?.trim();
+    if (!uri) continue;
+    if (!seen.has(uri)) {
+      seen.set(uri, { title: src.title?.trim() || uri, uri });
+    }
+    if (seen.size >= limit) break;
+  }
+  return Array.from(seen.values());
 }
 
 function parseServicesParam(raw: unknown): ActiveServiceDescriptor[] {
@@ -233,7 +283,7 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
         .map((u) => isSafePublicUrl(u)?.toString() ?? "")
         .filter((u) => u.length > 0),
     ),
-  ).slice(0, 6);
+  ).slice(0, 10);
 
   const excludeRaw =
     typeof input.excludeUrl === "string" ? input.excludeUrl.trim() : "";
@@ -267,19 +317,16 @@ function extractGroundingSources(
   chunks: Array<{ web?: { uri?: string; title?: string } }> | undefined,
 ): GroundingSource[] {
   if (!Array.isArray(chunks)) return [];
-  const seen = new Map<string, GroundingSource>();
+  const raw: GroundingSource[] = [];
   for (const chunk of chunks) {
     const uri = chunk.web?.uri?.trim();
     if (!uri) continue;
-    if (!seen.has(uri)) {
-      seen.set(uri, {
-        uri,
-        title: chunk.web?.title?.trim() || uri,
-      });
-    }
-    if (seen.size >= 10) break;
+    raw.push({
+      uri,
+      title: chunk.web?.title?.trim() || uri,
+    });
   }
-  return Array.from(seen.values());
+  return deduplicateSources(raw, 15);
 }
 
 function extractVisibleText(html: string): { title: string; text: string } {
@@ -288,11 +335,40 @@ function extractVisibleText(html: string): { title: string; text: string } {
   const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+    .replace(/<\/(p|div|li|tr|td|th|h[1-6]|section|article)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
-    .replace(/\s+/g, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/(&sup2;|&#178;)/gi, "²")
+    .replace(/[ \t\r\f\v]+/g, " ")
+    .replace(/\n\s*\n+/g, "\n")
     .trim();
-  return { title, text: stripped.slice(0, 10000) };
+  return { title, text: stripped.slice(0, 12000) };
+}
+
+function compactSiteText(rawText: string, maxChars = 2800): string {
+  const lines = rawText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 1);
+  const signalRe =
+    /(z[łl]|pln|eur|usd|\$|€|cennik|cena|od\s+\d+|m²|m2|szt|dojazd|gratis|opinie|dywan|wyk[łl]adzin|tapicerk|krzes|naro[żz]nik|sofa|kanap|fotel|wersalk|materac|kostk|p[łl]yt|taras|dosusz|klimatyzac|pomp|wentylac|kocio|wyciek|kanaliz|price|carpet|upholster|sofa|chair|hvac|plumb)/i;
+  const picked = new Set<number>();
+  lines.forEach((line, idx) => {
+    if (signalRe.test(line)) {
+      if (idx > 0) picked.add(idx - 1);
+      picked.add(idx);
+      if (idx + 1 < lines.length) picked.add(idx + 1);
+    }
+  });
+  const selected = Array.from(picked)
+    .sort((a, b) => a - b)
+    .map((idx) => lines[idx]);
+  const joined = (selected.length > 0 ? selected : lines).join("\n");
+  return joined.slice(0, maxChars);
 }
 
 function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
@@ -374,7 +450,7 @@ async function fetchSiteContext(
               .match(
                 /.{0,70}(?:zł|pln|cennik|cena|od\s+\d+|m²|m2|szt|price|dywan|tapicer|fotel|kanap|wersalk|materac|kostk|płyt|taras|dosusz|klima|hydraul).{0,90}/gi,
               )
-              ?.slice(0, 45)
+              ?.slice(0, 40)
               .join("\n");
             if (priceSnippets) {
               combined = `${combined}\n${priceSnippets}`.trim();
@@ -386,11 +462,12 @@ async function fetchSiteContext(
       }
     }
   }
-  if (!combined) return null;
+  const compacted = compactSiteText(combined, 2800);
+  if (!compacted) return null;
   return {
     url: safeUrl.toString(),
     title: title || safeUrl.hostname,
-    text: combined.slice(0, 14000),
+    text: compacted,
   };
 }
 
@@ -398,25 +475,45 @@ function buildSearchQueries(
   city: string,
   industryId: IndustryId,
   locale: "pl" | "en",
-): [string, string] {
+): string[] {
   if (locale === "pl") {
-    const map: Record<IndustryId, [string, string]> = {
+    const map: Record<IndustryId, string[]> = {
       upholstery: [
         `pranie dywanów ${city}`,
         `pranie tapicerki meblowej ${city}`,
+        `pranie kanap narożników ${city} cennik`,
+        `czyszczenie wykładzin materacy ${city}`,
       ],
       hvac: [
         `montaż klimatyzacji ${city}`,
         `serwis klimatyzacji pompy ciepła ${city}`,
+        `przegląd klimatyzacji ${city} cennik`,
       ],
-      plumbing: [`hydraulik ${city}`, `usługi hydrauliczne ${city}`],
+      plumbing: [
+        `hydraulik ${city}`,
+        `usługi hydrauliczne ${city}`,
+        `pogotowie hydrauliczne ${city} cennik`,
+      ],
     };
     return map[industryId];
   }
-  const mapEn: Record<IndustryId, [string, string]> = {
-    upholstery: [`carpet cleaning ${city}`, `upholstery cleaning ${city}`],
-    hvac: [`air conditioning installation ${city}`, `hvac service ${city}`],
-    plumbing: [`plumber ${city}`, `plumbing repair ${city}`],
+  const mapEn: Record<IndustryId, string[]> = {
+    upholstery: [
+      `carpet cleaning ${city}`,
+      `upholstery cleaning ${city}`,
+      `sofa couch cleaning ${city} prices`,
+      `rug mattress cleaning ${city}`,
+    ],
+    hvac: [
+      `air conditioning installation ${city}`,
+      `hvac service ${city}`,
+      `heat pump repair ${city} prices`,
+    ],
+    plumbing: [
+      `plumber ${city}`,
+      `plumbing repair ${city}`,
+      `emergency plumber ${city} rates`,
+    ],
   };
   return mapEn[industryId];
 }
@@ -424,7 +521,7 @@ function buildSearchQueries(
 function filterCandidateUrls(
   rawCandidates: string[],
   excludeHost?: string,
-  limit = 6,
+  limit = 10,
 ): string[] {
   const result: string[] = [];
   const seenHosts = new Set<string>();
@@ -442,16 +539,56 @@ function filterCandidateUrls(
   return result;
 }
 
+interface SerperMapPlace {
+  title?: string;
+  address?: string;
+  rating?: number | string;
+  ratingCount?: number | string;
+  category?: string;
+  website?: string;
+  cid?: string | number;
+}
+
 async function discoverViaSerper(
   queries: string[],
   country: string,
   locale: "pl" | "en",
   excludeHost?: string,
-): Promise<string[]> {
+): Promise<SerperDiscoveryResult> {
   const serperKey = process.env.SERPER_API_KEY?.trim();
-  if (!serperKey) return [];
-  const collected: string[] = [];
-  for (const q of queries) {
+  if (!serperKey) {
+    return { urls: [], gbpContext: "", mapsSources: [], places: [] };
+  }
+
+  const gl = locale === "pl" ? "pl" : "us";
+  const hl = locale === "pl" ? "pl" : "en";
+  const collectedUrls: string[] = [];
+  const gbpLines: string[] = [];
+  const seenKeys = new Set<string>();
+  const seenMapUris = new Set<string>();
+  const mapsSources: GroundingSource[] = [];
+  const places: SerperCompetitorEntry[] = [];
+
+  const mapsTasks = queries.slice(0, 2).map(async (q) => {
+    try {
+      const res = await fetch("https://google.serper.dev/maps", {
+        method: "POST",
+        headers: {
+          "X-API-KEY": serperKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ q, gl, hl }),
+        signal: AbortSignal.timeout(6500),
+      });
+      if (!res.ok) return [] as SerperMapPlace[];
+      const data = (await res.json()) as { places?: SerperMapPlace[] };
+      return data.places ?? [];
+    } catch {
+      return [] as SerperMapPlace[];
+    }
+  });
+
+  const searchTasks = queries.map(async (q) => {
     try {
       const res = await fetch("https://google.serper.dev/search", {
         method: "POST",
@@ -461,29 +598,112 @@ async function discoverViaSerper(
         },
         body: JSON.stringify({
           q,
-          gl: locale === "pl" ? "pl" : "us",
-          hl: locale === "pl" ? "pl" : "en",
-          location: `${country}`,
+          gl,
+          hl,
+          location: country,
           num: 10,
         }),
-        signal: AbortSignal.timeout(6000),
+        signal: AbortSignal.timeout(6500),
       });
-      if (!res.ok) continue;
-      const data = (await res.json()) as {
+      if (!res.ok) return null;
+      return (await res.json()) as {
         organic?: Array<{ link?: string }>;
-        places?: Array<{ website?: string }>;
+        places?: SerperMapPlace[];
       };
-      for (const place of data.places ?? []) {
-        if (place.website) collected.push(place.website);
-      }
-      for (const item of data.organic ?? []) {
-        if (item.link) collected.push(item.link);
-      }
     } catch {
-      continue;
+      return null;
+    }
+  });
+
+  const [mapsResults, searchResults] = await Promise.all([
+    Promise.all(mapsTasks),
+    Promise.all(searchTasks),
+  ]);
+
+  const registerPlace = (place: SerperMapPlace) => {
+    const title = place.title?.trim();
+    if (!title) return;
+    if (isExcludedCompetitorWebsite(place.website, excludeHost)) return;
+
+    const cidStr = place.cid != null ? String(place.cid).trim() : "";
+    const hostKey = getNormalizedHostFromUrl(place.website);
+    const dedupeKeys = [
+      cidStr ? `cid:${cidStr}` : "",
+      hostKey ? `host:${hostKey}` : "",
+      `name:${title.toLowerCase()}`,
+    ].filter(Boolean);
+
+    const alreadyRegistered = dedupeKeys.some((k) => seenKeys.has(k));
+    dedupeKeys.forEach((k) => seenKeys.add(k));
+
+    const mapUri = cidStr
+      ? `https://www.google.com/maps?cid=${encodeURIComponent(cidStr)}`
+      : undefined;
+
+    if (!alreadyRegistered) {
+      const ratingNum = Number(place.rating);
+      const countNum = Number(place.ratingCount);
+      const validRating =
+        Number.isFinite(ratingNum) && ratingNum > 0 && ratingNum <= 5
+          ? Math.round(ratingNum * 10) / 10
+          : undefined;
+      const validCount =
+        Number.isFinite(countNum) && countNum > 0
+          ? Math.round(countNum)
+          : undefined;
+
+      places.push({
+        name: title,
+        website: place.website?.trim() || mapUri,
+        rating: validRating,
+        reviewCount: validCount,
+        address: place.address?.trim() || undefined,
+        category: place.category?.trim() || undefined,
+        mapUri,
+      });
+
+      const parts = [
+        `Name: ${title}`,
+        validRating ? `Rating: ${validRating}` : "",
+        validCount ? `Reviews: ${validCount}` : "",
+        place.address ? `Address: ${place.address}` : "",
+        place.category ? `Category: ${place.category}` : "",
+        place.website ? `Website: ${place.website}` : "",
+      ].filter(Boolean);
+      gbpLines.push(`- ${parts.join(" | ")}`);
+    }
+
+    if (place.website) {
+      collectedUrls.push(place.website);
+    } else if (mapUri && !seenMapUris.has(mapUri)) {
+      seenMapUris.add(mapUri);
+      mapsSources.push({
+        title: `${title} (Google Maps)`,
+        uri: mapUri,
+      });
+    }
+  };
+
+  for (const list of mapsResults) {
+    for (const place of list) registerPlace(place);
+  }
+  for (const sr of searchResults) {
+    if (!sr) continue;
+    for (const place of sr.places ?? []) registerPlace(place);
+    for (const item of sr.organic ?? []) {
+      if (item.link) collectedUrls.push(item.link);
     }
   }
-  return filterCandidateUrls(collected, excludeHost, 6);
+
+  return {
+    urls: filterCandidateUrls(collectedUrls, excludeHost, 10),
+    gbpContext:
+      gbpLines.length > 0
+        ? `=== GOOGLE BUSINESS PROFILES (MAPS) ===\n${gbpLines.slice(0, 15).join("\n")}`
+        : "",
+    mapsSources: deduplicateSources(mapsSources, 10),
+    places: places.slice(0, 12),
+  };
 }
 
 function unwrapDuckDuckGoHref(rawHref: string): string | null {
@@ -547,21 +767,21 @@ async function searchDuckDuckGoSingle(
 }
 
 async function discoverCompetitorUrlsViaDuckDuckGo(
-  queries: [string, string],
+  queries: string[],
   locale: "pl" | "en",
   excludeHost?: string,
 ): Promise<string[]> {
-  const [listA, listB] = await Promise.all([
-    searchDuckDuckGoSingle(queries[0], locale),
-    searchDuckDuckGoSingle(queries[1], locale),
-  ]);
+  const lists = await Promise.all(
+    queries.slice(0, 3).map((q) => searchDuckDuckGoSingle(q, locale)),
+  );
   const interleaved: string[] = [];
-  const maxLen = Math.max(listA.length, listB.length);
+  const maxLen = Math.max(0, ...lists.map((l) => l.length));
   for (let i = 0; i < maxLen; i++) {
-    if (listA[i]) interleaved.push(listA[i]);
-    if (listB[i]) interleaved.push(listB[i]);
+    for (const list of lists) {
+      if (list[i]) interleaved.push(list[i]);
+    }
   }
-  return filterCandidateUrls(interleaved, excludeHost, 6);
+  return filterCandidateUrls(interleaved, excludeHost, 10);
 }
 
 async function discoverCompetitorUrlsViaOsm(
@@ -588,11 +808,11 @@ async function discoverCompetitorUrlsViaOsm(
     const lon = Number(geoData?.[0]?.lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
     const tagFilterMap: Record<IndustryId, string> = {
-      upholstery: '["shop"~"carpet|furniture|laundry|dry_cleaning"]["website"]',
-      hvac: '["craft"~"hvac|heating|electrician"]["website"]',
-      plumbing: '["craft"~"plumber|heating"]["website"]',
+      upholstery: `(node(around:25000,${lat},${lon})["shop"~"carpet|furniture|laundry|dry_cleaning"]["website"];way(around:25000,${lat},${lon})["shop"~"carpet|furniture|laundry|dry_cleaning"]["website"];node(around:25000,${lat},${lon})["craft"~"cleaning|upholsterer"]["website"];)`,
+      hvac: `(node(around:25000,${lat},${lon})["craft"~"hvac|heating|electrician"]["website"];way(around:25000,${lat},${lon})["craft"~"hvac|heating|electrician"]["website"];)`,
+      plumbing: `(node(around:25000,${lat},${lon})["craft"~"plumber|heating"]["website"];way(around:25000,${lat},${lon})["craft"~"plumber|heating"]["website"];)`,
     };
-    const query = `[out:json][timeout:6];(node(around:18000,${lat},${lon})${tagFilterMap[industryId]};way(around:18000,${lat},${lon})${tagFilterMap[industryId]};);out tags 6;`;
+    const query = `[out:json][timeout:6];${tagFilterMap[industryId]};out tags 10;`;
     const osmRes = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       headers: {
@@ -611,10 +831,85 @@ async function discoverCompetitorUrlsViaOsm(
       const rawSite = el.tags?.website || el.tags?.["contact:website"];
       if (rawSite) rawSites.push(rawSite);
     }
-    return filterCandidateUrls(rawSites, excludeHost, 4);
+    return filterCandidateUrls(rawSites, excludeHost, 6);
   } catch {
     return [];
   }
+}
+
+function buildFallbackCompetitors(
+  places: SerperCompetitorEntry[],
+  fetchedSites: FetchedSiteContext[],
+  locale: "pl" | "en",
+  excludeHost?: string,
+): CompetitorFinding[] {
+  const siteByHost = new Map<string, FetchedSiteContext>();
+  for (const site of fetchedSites) {
+    const host = getNormalizedHostFromUrl(site.url);
+    if (host) siteByHost.set(host, site);
+  }
+
+  const out: CompetitorFinding[] = [];
+  const seenNames = new Set<string>();
+  const seenHosts = new Set<string>();
+
+  for (const place of places) {
+    if (isExcludedCompetitorWebsite(place.website, excludeHost)) continue;
+    const host = getNormalizedHostFromUrl(place.website);
+    const nameKey = place.name.toLowerCase();
+    if (seenNames.has(nameKey)) continue;
+    if (host && seenHosts.has(host)) continue;
+
+    seenNames.add(nameKey);
+    if (host) seenHosts.add(host);
+
+    const matchedSite = host ? siteByHost.get(host) : undefined;
+    const priceMatch = matchedSite?.text.match(
+      /([^\n]{0,45}\d{1,4}(?:[.,]\d{1,2})?\s*(?:zł|pln|eur|usd|\$|€)[^\n]{0,45})/i,
+    );
+
+    const summary = priceMatch
+      ? priceMatch[1].replace(/\s+/g, " ").trim()
+      : place.category
+        ? locale === "pl"
+          ? `Wizytówka Google (${place.category}) — brak pełnego cennika w trybie bez AI.`
+          : `Google Business Profile (${place.category}) — full AI price extraction paused.`
+        : locale === "pl"
+          ? "Wizytówka lokalna z Google Maps."
+          : "Local Google Maps listing.";
+
+    out.push({
+      name: place.name,
+      website: place.website,
+      rating: place.rating,
+      reviewCount: place.reviewCount,
+      travelFeeNote: place.address,
+      priceSummary: summary,
+    });
+  }
+
+  for (const site of fetchedSites) {
+    if (out.length >= 12) break;
+    if (isExcludedCompetitorWebsite(site.url, excludeHost)) continue;
+    const host = getNormalizedHostFromUrl(site.url);
+    if (host && seenHosts.has(host)) continue;
+    if (host) seenHosts.add(host);
+
+    const priceMatch = site.text.match(
+      /([^\n]{0,45}\d{1,4}(?:[.,]\d{1,2})?\s*(?:zł|pln|eur|usd|\$|€)[^\n]{0,45})/i,
+    );
+    out.push({
+      name: site.title.slice(0, 75),
+      website: site.url,
+      priceSummary: priceMatch
+        ? priceMatch[1].replace(/\s+/g, " ").trim()
+        : locale === "pl"
+          ? "Strona lokalnej firmy pobrana bezpośrednio."
+          : "Local business page retrieved directly.",
+    });
+  }
+
+  return out.slice(0, 12);
 }
 
 async function structureReportWithGemini(
@@ -638,8 +933,15 @@ async function structureReportWithGemini(
     )
     .join(", ");
 
+  const excludeInstruction = params.excludeHost
+    ? `Do NOT include our own business (${params.excludeHost}) in the competitors list.`
+    : "";
+
   const extractionPrompt = [
     `Extract structured market intelligence strictly from the verified competitor data below.`,
+    `Return 8-12 distinct local competitors when supported by the source data (covering both Google Business Profiles / Maps listings and companies with published website price lists).`,
+    excludeInstruction,
+    `Populate "rating" and "reviewCount" whenever verified Google review numbers appear in the source text.`,
     `Do NOT invent companies, numbers, ratings, or prices that are not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
     `Active tracked services to benchmark (use these EXACT serviceKey values): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
@@ -650,8 +952,10 @@ async function structureReportWithGemini(
     `- "cornerSofa": corner sofa / L-shaped couch cleaning starting or average price.`,
     `- For any other serviceKey listed above (including "live:*" keys matched to a service name like armchair/fotel, couch/kanapa, mattress/materac, pavers/kostka, tiles/płytki, drying/dosuszanie), extract the matching local competitor average ONLY if real price evidence exists in the text.`,
     `Compute avgPricePln, minPricePln, maxPricePln across the found local companies only for serviceKey entries where real price evidence exists.`,
-    `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText}`,
-  ].join("\n");
+    `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, 26000)}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const structuredResponse = await ai.models.generateContent({
     model: GEMINI_TEXT_MODEL,
@@ -726,13 +1030,42 @@ async function structureReportWithGemini(
 function sanitizeStructuredPayload(
   parsed: StructuredScanPayload,
   validServiceKeys: Set<string>,
+  excludeHost?: string,
 ) {
+  const seenNames = new Set<string>();
+  const seenHosts = new Set<string>();
+
   const competitors = (parsed?.competitors ?? [])
-    .filter(
-      (c: CompetitorFinding) =>
-        typeof c?.name === "string" && c.name.trim().length > 0,
-    )
-    .slice(0, 6);
+    .filter((c: CompetitorFinding) => {
+      if (typeof c?.name !== "string" || !c.name.trim()) return false;
+      if (isExcludedCompetitorWebsite(c.website, excludeHost)) return false;
+
+      const nameKey = c.name.trim().toLowerCase();
+      const hostKey = getNormalizedHostFromUrl(c.website);
+      if (seenNames.has(nameKey)) return false;
+      if (hostKey && seenHosts.has(hostKey)) return false;
+
+      seenNames.add(nameKey);
+      if (hostKey) seenHosts.add(hostKey);
+      return true;
+    })
+    .slice(0, 12)
+    .map((c: CompetitorFinding) => ({
+      ...c,
+      rating:
+        typeof c.rating === "number" &&
+        Number.isFinite(c.rating) &&
+        c.rating > 0 &&
+        c.rating <= 5
+          ? Math.round(c.rating * 10) / 10
+          : undefined,
+      reviewCount:
+        typeof c.reviewCount === "number" &&
+        Number.isFinite(c.reviewCount) &&
+        c.reviewCount > 0
+          ? Math.round(c.reviewCount)
+          : undefined,
+    }));
 
   const marketBenchmarks = (parsed?.marketBenchmarks ?? [])
     .filter(
@@ -796,49 +1129,46 @@ async function runMarketScan(params: ScanRequestParams) {
     ...activeServices.map((s) => s.serviceKey),
   ]);
 
-  const ai = getGeminiClient();
-  if (!ai) {
-    return NextResponse.json({
-      source: "template-fallback",
-      aiEnhanced: false,
-      warning: "GEMINI_API_KEY is not configured on the server.",
-      city: params.city,
-      country: params.country,
-      industryId: params.industryId,
-      radiusKm: params.radiusKm,
-      scannedAt,
-      summary: "",
-      competitors: [],
-      marketBenchmarks: [],
-      painPoints: [],
-      sources: [],
-      searchQueries: [],
-    });
-  }
-
   const serviceHints = activeServices
     .map((s) => `${s.label || s.serviceKey} [${s.serviceKey}]`)
     .join(", ");
 
   const industryDescriptionMap: Record<IndustryId, string> = {
     upholstery:
-      "pranie dywanów, wykładzin, czyszczenie tapicerki meblowej i mycie kostki brukowej (carpet, upholstery & exterior cleaning)",
+      "pranie dywanów, wykładzin, czyszczenie tapicerki meblowej, pranie kanap/narożników i mycie kostki brukowej (carpet, sofa, upholstery & exterior cleaning)",
     hvac: "montaż i serwis klimatyzacji oraz pomp ciepła (HVAC & air conditioning service)",
     plumbing:
       "usługi hydrauliczne, awarie wod-kan i serwis kotłów (plumbing & emergency repairs)",
   };
 
+  const queries = buildSearchQueries(
+    params.city,
+    params.industryId,
+    params.locale,
+  );
+
+  const ai = getGeminiClient();
+  let quotaExceeded = false;
+
   const useSearchGrounding =
+    Boolean(ai) &&
     process.env.ENABLE_GEMINI_SEARCH_GROUNDING === "true" &&
     params.competitorUrls.length === 0;
 
-  if (useSearchGrounding) {
+  if (useSearchGrounding && ai) {
     try {
       const searchPrompt = [
-        `Find real local service providers in ${params.city}, ${params.country} (radius ~${params.radiusKm} km) for: ${industryDescriptionMap[params.industryId]}.`,
-        `Research top 4-6 real local competitors (name, website, rating, travel fee, published prices), local prices for ${serviceHints}, and real customer review complaints.`,
-        `Only cite real facts and numbers found via Google Search.`,
-      ].join("\n");
+        `Find 8-12 real local service providers in ${params.city}, ${params.country} (radius ~${params.radiusKm} km) for: ${industryDescriptionMap[params.industryId]}.`,
+        `Search BOTH Google Business Profiles / Google Maps listings (company name, star rating, review count, travel zone, customer complaints) AND company websites with published price lists.`,
+        `Cover distinct local search intents such as: ${queries.join("; ")}.`,
+        params.excludeHost
+          ? `Exclude ${params.excludeHost} (that is our own website).`
+          : "",
+        `Research local prices for ${serviceHints} and real customer review complaints.`,
+        `Only cite real companies, facts, ratings, and numbers found via Google Search.`,
+      ]
+        .filter(Boolean)
+        .join("\n");
 
       const searchResponse = await ai.models.generateContent({
         model: GEMINI_TEXT_MODEL,
@@ -853,7 +1183,7 @@ async function runMarketScan(params: ScanRequestParams) {
       const metadata = searchResponse.candidates?.[0]?.groundingMetadata;
       const sources = extractGroundingSources(metadata?.groundingChunks);
       const searchQueries = Array.isArray(metadata?.webSearchQueries)
-        ? metadata.webSearchQueries.slice(0, 6)
+        ? metadata.webSearchQueries.slice(0, 8)
         : [];
 
       if (researchText) {
@@ -863,7 +1193,11 @@ async function runMarketScan(params: ScanRequestParams) {
           validServiceKeys,
           activeServices,
         );
-        const clean = sanitizeStructuredPayload(parsed, validServiceKeys);
+        const clean = sanitizeStructuredPayload(
+          parsed,
+          validServiceKeys,
+          params.excludeHost,
+        );
         return NextResponse.json({
           source: "ai-web-grounding",
           aiEnhanced: true,
@@ -878,24 +1212,35 @@ async function runMarketScan(params: ScanRequestParams) {
         });
       }
     } catch (err) {
-      if (!isQuotaError(err)) throw err;
+      if (isQuotaError(err)) {
+        quotaExceeded = true;
+        console.warn(
+          "[/api/market/scan] Search grounding hit Gemini 429 quota.",
+        );
+      } else {
+        console.error("[/api/market/scan] Search grounding failed:", err);
+      }
     }
   }
 
-  const queries = buildSearchQueries(
-    params.city,
-    params.industryId,
-    params.locale,
-  );
   let targetUrls = params.competitorUrls;
+  let gbpContext = "";
+  let mapsSources: GroundingSource[] = [];
+  let serperPlaces: SerperCompetitorEntry[] = [];
+
   if (targetUrls.length === 0) {
-    targetUrls = await discoverViaSerper(
+    const serperResult = await discoverViaSerper(
       queries,
       params.country,
       params.locale,
       params.excludeHost,
     );
+    targetUrls = serperResult.urls;
+    gbpContext = serperResult.gbpContext;
+    mapsSources = serperResult.mapsSources;
+    serperPlaces = serperResult.places;
   }
+
   if (targetUrls.length === 0) {
     const [ddgUrls, osmUrls] = await Promise.all([
       discoverCompetitorUrlsViaDuckDuckGo(
@@ -913,7 +1258,7 @@ async function runMarketScan(params: ScanRequestParams) {
     targetUrls = filterCandidateUrls(
       [...ddgUrls, ...osmUrls],
       params.excludeHost,
-      6,
+      10,
     );
   }
 
@@ -921,40 +1266,108 @@ async function runMarketScan(params: ScanRequestParams) {
     await Promise.all(targetUrls.map((u) => fetchSiteContext(u)))
   ).filter((item): item is FetchedSiteContext => item !== null);
 
-  if (fetchedSites.length > 0) {
-    try {
-      const combinedText = fetchedSites
-        .map((s) => `=== SITE: ${s.title} (${s.url}) ===\n${s.text}`)
-        .join("\n\n");
-      const parsed = await structureReportWithGemini(
-        combinedText,
-        params,
-        validServiceKeys,
-        activeServices,
-      );
-      const clean = sanitizeStructuredPayload(parsed, validServiceKeys);
-      return NextResponse.json({
-        source: "live-competitor-sites",
-        aiEnhanced: true,
-        city: params.city,
-        country: params.country,
-        industryId: params.industryId,
-        radiusKm: params.radiusKm,
-        scannedAt,
-        ...clean,
-        sources: fetchedSites.map((s) => ({ title: s.title, uri: s.url })),
-        searchQueries: queries,
-      });
-    } catch (err) {
-      if (!isQuotaError(err)) throw err;
+  const allSources = deduplicateSources(
+    [
+      ...fetchedSites.map((s) => ({ title: s.title, uri: s.url })),
+      ...mapsSources,
+    ],
+    15,
+  );
+
+  if (fetchedSites.length > 0 || gbpContext || serperPlaces.length > 0) {
+    if (ai) {
+      try {
+        const siteSections = fetchedSites.map(
+          (s) => `=== SITE: ${s.title} (${s.url}) ===\n${s.text}`,
+        );
+        const combinedText = [gbpContext, ...siteSections]
+          .filter(Boolean)
+          .join("\n\n");
+        const parsed = await structureReportWithGemini(
+          combinedText,
+          params,
+          validServiceKeys,
+          activeServices,
+        );
+        const clean = sanitizeStructuredPayload(
+          parsed,
+          validServiceKeys,
+          params.excludeHost,
+        );
+        return NextResponse.json({
+          source: gbpContext ? "live-maps-and-sites" : "live-competitor-sites",
+          aiEnhanced: true,
+          city: params.city,
+          country: params.country,
+          industryId: params.industryId,
+          radiusKm: params.radiusKm,
+          scannedAt,
+          ...clean,
+          sources: allSources,
+          searchQueries: queries,
+        });
+      } catch (err) {
+        if (isQuotaError(err)) {
+          quotaExceeded = true;
+          console.warn(
+            "[/api/market/scan] structureReportWithGemini hit Gemini 429 quota; returning direct Maps/Serper data.",
+          );
+        } else {
+          console.error(
+            "[/api/market/scan] structureReportWithGemini failed:",
+            err,
+          );
+        }
+      }
     }
+
+    const fallbackCompetitors = buildFallbackCompetitors(
+      serperPlaces,
+      fetchedSites,
+      params.locale,
+      params.excludeHost,
+    );
+    const warningMsg = !ai
+      ? params.locale === "pl"
+        ? "Brak GEMINI_API_KEY na serwerze — wyświetlono surowe wizytówki Google Maps i znalezione strony bez analizy AI."
+        : "GEMINI_API_KEY is not configured — showing retrieved Google Maps listings & sites without AI synthesis."
+      : quotaExceeded
+        ? params.locale === "pl"
+          ? "Przekroczono chwilowy limit zapytań Gemini API (429) — wyświetlono znalezione wizytówki Google Maps i strony konkurencji (odczekaj ~1 min lub sprawdź plan API dla pełnych średnich cenowych)."
+          : "Gemini API quota exceeded (429) — showing retrieved Google Maps listings & competitor sites (wait ~1 min or check API quota for full AI price averaging)."
+        : params.locale === "pl"
+          ? "Analiza AI chwilowo niedostępna — wyświetlono znalezione wizytówki i strony konkurencji."
+          : "AI synthesis temporarily unavailable — showing retrieved local listings & competitor sites.";
+
+    return NextResponse.json({
+      source: "live-maps-direct",
+      aiEnhanced: false,
+      warning: warningMsg,
+      city: params.city,
+      country: params.country,
+      industryId: params.industryId,
+      radiusKm: params.radiusKm,
+      scannedAt,
+      summary:
+        params.locale === "pl"
+          ? `Znaleziono ${fallbackCompetitors.length} lokalnych firm w ${params.city} (Google Maps + strony WWW). Pełne wyliczenie średnich cen AI wznowi się po odnowieniu limitu Gemini.`
+          : `Retrieved ${fallbackCompetitors.length} local competitors in ${params.city} (Google Maps + websites). Full AI price averaging will resume once Gemini quota resets.`,
+      competitors: fallbackCompetitors,
+      marketBenchmarks: [],
+      painPoints: [],
+      sources: allSources,
+      searchQueries: queries,
+    });
   }
 
   return NextResponse.json({
     source: "template-fallback",
     aiEnhanced: false,
-    warning:
-      "No competitor pages retrieved automatically right now. Add 1-3 competitor URLs to scan them directly for free.",
+    warning: quotaExceeded
+      ? params.locale === "pl"
+        ? "Przekroczono limit Gemini API (429) i nie znaleziono stron konkurencji automatycznie. Wklej 1-3 adresy WWW ręcznie."
+        : "Gemini API quota exceeded (429) and no competitor pages were retrieved automatically. Add 1-3 competitor URLs manually."
+      : "No competitor pages retrieved automatically right now. Add 1-3 competitor URLs to scan them directly for free.",
     city: params.city,
     country: params.country,
     industryId: params.industryId,

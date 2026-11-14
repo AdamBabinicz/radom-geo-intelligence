@@ -21,6 +21,21 @@ interface ExtractedPrice {
   snippet: string;
 }
 
+interface GeminiExtractResult {
+  prices: ExtractedPrice[] | null;
+  warning?: string;
+}
+
+interface CachedSyncPayload {
+  expiresAt: number;
+  url: string;
+  fetchedAt: string;
+  prices: ExtractedPrice[];
+}
+
+const SYNC_CACHE_TTL_MS = 15 * 60 * 1000;
+const syncSuccessCache = new Map<string, CachedSyncPayload>();
+
 const CANONICAL_SERVICE_KEYS = new Set<string>([
   "carpetArea",
   "carpetFlooring",
@@ -49,14 +64,22 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     labelPl: "Pranie dywanów (za m²)",
     labelEn: "Carpet washing (per m²)",
     unitType: "m2",
-    patterns: [/prani[ea]\s+dywan[óo]w/gi, /carpet\s+washing/gi],
+    patterns: [
+      /prani[ea]\s+dywan[óo]w/gi,
+      /czyszczenie\s+dywan/gi,
+      /carpet\s+washing/gi,
+    ],
   },
   {
     serviceKey: "carpetFlooring",
     labelPl: "Pranie wykładzin (za m²)",
     labelEn: "Fitted carpet cleaning (per m²)",
     unitType: "m2",
-    patterns: [/prani[ea]\s+wyk[łl]adzin/gi, /fitted\s+carpet/gi],
+    patterns: [
+      /prani[ea]\s+wyk[łl]adzin/gi,
+      /czyszczenie\s+wyk[łl]adzin/gi,
+      /fitted\s+carpet/gi,
+    ],
   },
   {
     serviceKey: "upholsteryChair",
@@ -64,6 +87,13 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     labelEn: "Upholstery — chair (per pc)",
     unitType: "piece",
     patterns: [/krzes[łl][oa]/gi, /upholstery\s+chair/gi],
+  },
+  {
+    serviceKey: "live:pouf-cleaning",
+    labelPl: "Pranie pufy (za szt.)",
+    labelEn: "Pouf / ottoman cleaning (per pc)",
+    unitType: "piece",
+    patterns: [/puf[ayę]?/gi, /ottoman/gi],
   },
   {
     serviceKey: "live:armchair-cleaning",
@@ -77,7 +107,13 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     labelPl: "Pranie kanapy / wersalki",
     labelEn: "Sofa / couch cleaning",
     unitType: "fixed",
-    patterns: [/kanap[ayę]/gi, /wersalk[aię]/gi, /2-seater/gi, /two-seat/gi],
+    patterns: [
+      /kanap[ayę]/gi,
+      /wersalk[aię]/gi,
+      /tapczan/gi,
+      /2-seater/gi,
+      /two-seat/gi,
+    ],
   },
   {
     serviceKey: "cornerSofa",
@@ -92,6 +128,31 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     labelEn: "Mattress cleaning",
     unitType: "fixed",
     patterns: [/materac/gi, /mattress/gi],
+  },
+  {
+    serviceKey: "live:car-upholstery",
+    labelPl: "Pranie tapicerki samochodowej",
+    labelEn: "Car interior upholstery cleaning",
+    unitType: "fixed",
+    patterns: [
+      /tapicerk[aię]\s+samochodow/gi,
+      /auta|samochod/gi,
+      /car\s+upholstery/gi,
+    ],
+  },
+  {
+    serviceKey: "live:impregnation",
+    labelPl: "Impregnacja tapicerki",
+    labelEn: "Fabric protection / impregnation",
+    unitType: "fixed",
+    patterns: [/impregnacj/gi, /protector|scotchgard/gi],
+  },
+  {
+    serviceKey: "live:ozonation",
+    labelPl: "Ozonowanie pomieszczeń / mebli",
+    labelEn: "Ozone odor neutralization",
+    unitType: "fixed",
+    patterns: [/ozonowani/gi, /ozone/gi],
   },
   {
     serviceKey: "live:paver-cleaning",
@@ -371,7 +432,7 @@ function decodeJsBundleLines(js: string): string[] {
   return lines;
 }
 
-function buildHighSignalContext(lines: string[], maxChars = 24000): string {
+function buildHighSignalContext(lines: string[], maxChars = 16000): string {
   const signalRe =
     /(z[łl]|pln|usd|eur|\$|€|cennik|price|pricing|od\s+\d+|m²|m2|szt\.?|dywan|wyk[łl]adzin|tapicerk|krzes|naro[żz]nik|sofa|kanap|fotel|wersalk|tapczan|materac|kostk|p[łl]yt|taras|dosusz|ozon|impregn|sk[óo]r|carpet|floor|chair|sofa|couch|armchair|mattress|paver|tile|drying|klimatyzac|pomp|wentylac|kocio|wyciek|kanaliz|hvac|plumb|boiler|drain|us[łl]ug|pranie|mycie|czyszczen)/i;
   const pickedIndices = new Set<number>();
@@ -386,10 +447,18 @@ function buildHighSignalContext(lines: string[], maxChars = 24000): string {
       }
     }
   });
-  const sorted = Array.from(pickedIndices)
+  const seen = new Set<string>();
+  const uniqueLines: string[] = [];
+  Array.from(pickedIndices)
     .sort((a, b) => a - b)
-    .map((idx) => lines[idx]);
-  const fallbackLines = sorted.length > 0 ? sorted : lines;
+    .forEach((idx) => {
+      const trimmed = lines[idx]?.trim();
+      if (trimmed && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        uniqueLines.push(trimmed);
+      }
+    });
+  const fallbackLines = uniqueLines.length > 0 ? uniqueLines : lines;
   return fallbackLines.join("\n").slice(0, maxChars);
 }
 
@@ -432,37 +501,49 @@ function scanTextIntoMap(
   text: string,
   method: ExtractedPrice["method"],
   byService: Map<string, ExtractedPrice>,
-  windowSize = 420,
 ) {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 1);
+
+  const tryMatchSegment = (
+    entry: FallbackKeywordRule,
+    segment: string,
+  ): boolean => {
+    for (const pattern of entry.patterns) {
+      const testRe = new RegExp(pattern.source, pattern.flags.replace("g", ""));
+      const match = segment.match(testRe);
+      if (!match || match.index === undefined) continue;
+      const forward = segment.slice(match.index, match.index + 140);
+      const found = matchPriceInWindow(forward) ?? matchPriceInWindow(segment);
+      if (found) {
+        byService.set(entry.serviceKey, {
+          serviceKey: entry.serviceKey,
+          labelPl: entry.labelPl,
+          labelEn: entry.labelEn,
+          unitType: entry.unitType,
+          ...found,
+          method,
+          snippet: segment.slice(0, 110).trim(),
+        });
+        return true;
+      }
+    }
+    return false;
+  };
+
   for (const entry of FALLBACK_SERVICE_RULES) {
     if (byService.has(entry.serviceKey)) continue;
-    for (const pattern of entry.patterns) {
-      if (byService.has(entry.serviceKey)) break;
-      const flags = pattern.flags.includes("g")
-        ? pattern.flags
-        : `${pattern.flags}g`;
-      const globalRe = new RegExp(pattern.source, flags);
-      for (const match of text.matchAll(globalRe)) {
-        const start = match.index ?? 0;
-        const forwardWindow = text.slice(start, start + windowSize);
-        const backwardWindow = text.slice(
-          Math.max(0, start - 45),
-          start + match[0].length,
-        );
-        const forwardFound = matchPriceInWindow(forwardWindow);
-        const found = forwardFound ?? matchPriceInWindow(backwardWindow);
-        if (found) {
-          const snippetSource = forwardFound ? forwardWindow : backwardWindow;
-          byService.set(entry.serviceKey, {
-            serviceKey: entry.serviceKey,
-            labelPl: entry.labelPl,
-            labelEn: entry.labelEn,
-            unitType: entry.unitType,
-            ...found,
-            method,
-            snippet: snippetSource.replace(/\n/g, " · ").slice(0, 110).trim(),
-          });
-          break;
+    let matched = false;
+    for (let i = 0; i < lines.length && !matched; i++) {
+      matched = tryMatchSegment(entry, lines[i]);
+    }
+    if (!matched) {
+      for (let i = 0; i < lines.length - 1 && !matched; i++) {
+        const pair = `${lines[i]} · ${lines[i + 1]}`;
+        if (pair.length <= 180) {
+          matched = tryMatchSegment(entry, pair);
         }
       }
     }
@@ -472,9 +553,21 @@ function scanTextIntoMap(
 async function extractWithGemini(
   websiteUrl: string,
   contextText: string,
-): Promise<ExtractedPrice[] | null> {
+): Promise<GeminiExtractResult> {
   const ai = getGeminiClient();
-  if (!ai || !contextText.trim()) return null;
+  if (!ai) {
+    return {
+      prices: null,
+      warning: "GEMINI_API_KEY is not available in Next.js server process.",
+    };
+  }
+  if (!contextText.trim()) {
+    return {
+      prices: null,
+      warning:
+        "No high-signal pricing text was extracted from the target site.",
+    };
+  }
   try {
     const response = await ai.models.generateContent({
       model: GEMINI_TEXT_MODEL,
@@ -532,7 +625,16 @@ async function extractWithGemini(
         snippet?: string;
       }>;
     }>(response.text, {});
-    if (!Array.isArray(parsed.prices)) return null;
+    if (!Array.isArray(parsed.prices)) {
+      console.warn(
+        "[/api/pricing/sync] Gemini returned non-JSON or missing prices array:",
+        (response.text ?? "").slice(0, 200),
+      );
+      return {
+        prices: null,
+        warning: "Gemini response did not contain a valid prices array.",
+      };
+    }
     const deduped = new Map<string, ExtractedPrice>();
     for (const item of parsed.prices) {
       const labelEn = String(item.labelEn ?? item.labelPl ?? "").trim();
@@ -560,9 +662,22 @@ async function extractWithGemini(
           .trim(),
       });
     }
-    return Array.from(deduped.values());
-  } catch {
-    return null;
+    const list = Array.from(deduped.values());
+    if (list.length === 0) {
+      return {
+        prices: null,
+        warning: "Gemini extracted 0 priced services from target context.",
+      };
+    }
+    return { prices: list };
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : String(err ?? "Unknown error");
+    console.error("[/api/pricing/sync] extractWithGemini error:", message);
+    return {
+      prices: null,
+      warning: `Gemini extraction error: ${message.slice(0, 260)}`,
+    };
   }
 }
 
@@ -642,6 +757,21 @@ async function handleSync(rawUrl: string) {
       { status: 400 },
     );
   }
+
+  const normalizedKey = parsedUrl.toString().toLowerCase();
+  const cached = syncSuccessCache.get(normalizedKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return NextResponse.json({
+      source: "live-website",
+      aiEnhanced: true,
+      cached: true,
+      url: cached.url,
+      fetchedAt: cached.fetchedAt,
+      extractedCount: cached.prices.length,
+      prices: cached.prices,
+    });
+  }
+
   const html = await fetchTextSafe(parsedUrl.toString());
   if (!html) {
     return NextResponse.json(
@@ -667,18 +797,25 @@ async function handleSync(rawUrl: string) {
     }
   }
   const highSignalContext = buildHighSignalContext(contextLines);
-  const aiPrices = await extractWithGemini(
+  const aiResult = await extractWithGemini(
     parsedUrl.toString(),
     highSignalContext,
   );
-  if (aiPrices && aiPrices.length > 0) {
+  if (aiResult.prices && aiResult.prices.length > 0) {
+    const fetchedAt = new Date().toISOString();
+    syncSuccessCache.set(normalizedKey, {
+      expiresAt: Date.now() + SYNC_CACHE_TTL_MS,
+      url: parsedUrl.toString(),
+      fetchedAt,
+      prices: aiResult.prices,
+    });
     return NextResponse.json({
       source: "live-website",
       aiEnhanced: true,
       url: parsedUrl.toString(),
-      fetchedAt: new Date().toISOString(),
-      extractedCount: aiPrices.length,
-      prices: aiPrices,
+      fetchedAt,
+      extractedCount: aiResult.prices.length,
+      prices: aiResult.prices,
     });
   }
   const byService = extractFromJsonLd(html);
@@ -692,6 +829,9 @@ async function handleSync(rawUrl: string) {
   return NextResponse.json({
     source: "live-website",
     aiEnhanced: false,
+    warning:
+      aiResult.warning ??
+      "AI extraction returned no prices; used regex/JSON-LD fallback.",
     url: parsedUrl.toString(),
     fetchedAt: new Date().toISOString(),
     extractedCount: extracted.length,
@@ -700,24 +840,34 @@ async function handleSync(rawUrl: string) {
 }
 
 export async function GET(request: NextRequest) {
-  const url = request.nextUrl.searchParams.get("url")?.trim() ?? "";
-  if (!url) {
-    return NextResponse.json(
-      { error: "Missing ?url= parameter" },
-      { status: 400 },
-    );
+  try {
+    const url = request.nextUrl.searchParams.get("url")?.trim() ?? "";
+    if (!url) {
+      return NextResponse.json(
+        { error: "Missing ?url= parameter" },
+        { status: 400 },
+      );
+    }
+    return await handleSync(url);
+  } catch (err) {
+    console.error("[/api/pricing/sync GET] error:", err);
+    return NextResponse.json({ error: "Pricing sync failed" }, { status: 502 });
   }
-  return handleSync(url);
 }
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json().catch(() => ({}))) as { url?: string };
-  const url = typeof body.url === "string" ? body.url.trim() : "";
-  if (!url) {
-    return NextResponse.json(
-      { error: "Missing url in request body" },
-      { status: 400 },
-    );
+  try {
+    const body = (await request.json().catch(() => ({}))) as { url?: string };
+    const url = typeof body.url === "string" ? body.url.trim() : "";
+    if (!url) {
+      return NextResponse.json(
+        { error: "Missing url in request body" },
+        { status: 400 },
+      );
+    }
+    return await handleSync(url);
+  } catch (err) {
+    console.error("[/api/pricing/sync POST] error:", err);
+    return NextResponse.json({ error: "Pricing sync failed" }, { status: 502 });
   }
-  return handleSync(url);
 }
