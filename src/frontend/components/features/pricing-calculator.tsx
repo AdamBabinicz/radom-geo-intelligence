@@ -10,6 +10,7 @@ import {
   Minus,
   Plus,
 } from "lucide-react";
+import { resolveServiceLabel, resolveUnitType } from "@/src/config/industries";
 import {
   getTownTravelFeePln,
   type MarketProfile,
@@ -77,23 +78,24 @@ export function PricingCalculator({
   }, [selectedTown]);
 
   const localTowns = market.towns.filter((town) => !town.isRegionalHub);
-  const activeBenchmark =
-    market.benchmarks[serviceIndex] ?? market.benchmarks[0];
+  const safeServiceIndex =
+    serviceIndex < market.benchmarks.length ? serviceIndex : 0;
+  const activeBenchmark = market.benchmarks[safeServiceIndex];
   if (!activeBenchmark) return null;
 
-  const isPerUnit = Boolean(activeBenchmark.isPerUnit);
-  const unitLabel =
-    activeBenchmark.serviceKey === "upholsteryChair"
-      ? t.unitPcShort
-      : t.unitM2Short;
+  const unitType = resolveUnitType(activeBenchmark);
+  const isPerUnit = unitType !== "fixed";
+  const unitLabel = unitType === "piece" ? t.unitPcShort : t.unitM2Short;
 
   const handleServiceChange = (nextIndex: number) => {
     setServiceIndex(nextIndex);
     setQuoteStatus(null);
     const nextRow = market.benchmarks[nextIndex];
-    if (nextRow?.serviceKey === "upholsteryChair") {
-      setQuantity(4);
-    } else if (nextRow?.isPerUnit) {
+    if (!nextRow) return;
+    const nextUnit = resolveUnitType(nextRow);
+    if (nextUnit === "piece") {
+      setQuantity(nextRow.serviceKey === "upholsteryChair" ? 4 : 2);
+    } else if (nextUnit === "m2") {
       setQuantity(15);
     }
   };
@@ -114,21 +116,17 @@ export function PricingCalculator({
   const isInZone =
     isCenter || (activeTown ? activeTown.distKm <= radiusKm : true);
   const travelFeePln = getTownTravelFeePln(market, effectiveTownName);
-
   const effectiveUnits = isPerUnit ? quantity : 1;
   const serviceTotalPln = activeBenchmark.ourPricePln * effectiveUnits;
   const grandTotalPln = serviceTotalPln + travelFeePln;
-
   const convertedUnit = convertFromPln(activeBenchmark.ourPricePln, locale);
   const convertedTravel = convertFromPln(travelFeePln, locale);
   const totalConverted = convertFromPln(grandTotalPln, locale);
-
-  const serviceName = t[activeBenchmark.serviceKey];
+  const serviceName = resolveServiceLabel(activeBenchmark, t, locale);
 
   const handleSubmitQuote = async () => {
     setSubmitting(true);
     setQuoteStatus(null);
-
     const summaryText = isPerUnit
       ? `${serviceName} (${quantity} ${unitLabel}) · ${effectiveTownName} · ${formatCurrencyValue(totalConverted, locale)}`
       : `${serviceName} · ${effectiveTownName} · ${formatCurrencyValue(totalConverted, locale)}`;
@@ -159,7 +157,6 @@ export function PricingCalculator({
           },
         }),
       });
-
       if (response.ok) {
         const data = (await response.json()) as McpQuoteResponse;
         const created = data.result?.structuredContent;
@@ -218,13 +215,14 @@ export function PricingCalculator({
         <label className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
           {t.chooseService}
           <select
-            value={serviceIndex}
+            value={safeServiceIndex}
             onChange={(e) => handleServiceChange(Number(e.target.value))}
             className="mt-1.5 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:ring-2 focus:ring-teal-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
           >
             {market.benchmarks.map((row, idx) => (
               <option key={row.serviceKey} value={idx}>
-                {t[row.serviceKey]} ({formatPrice(row.ourPricePln, locale)})
+                {resolveServiceLabel(row, t, locale)} (
+                {formatPrice(row.ourPricePln, locale)})
               </option>
             ))}
           </select>

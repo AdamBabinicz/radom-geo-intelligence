@@ -1,4 +1,8 @@
-import { INDUSTRY_TEMPLATES, type IndustryId } from "../config/industries";
+import {
+  INDUSTRY_TEMPLATES,
+  resolveServiceLabel,
+  type IndustryId,
+} from "../config/industries";
 import {
   getMarketMetrics,
   getTownTravelFeePln,
@@ -55,6 +59,7 @@ const CAMPAIGN_KEYS: Record<
 
 export interface ServiceBenchmarkInput {
   serviceKey: string;
+  serviceLabel?: string;
   ourPricePln: number;
   localPricePln: number;
 }
@@ -101,16 +106,11 @@ interface JiraIssueTypeInfo {
   subtask: boolean;
 }
 
-function getDictLabel(t: AppDictionary, key: string): string {
-  return key in t ? String(t[key as keyof AppDictionary]) : key;
-}
-
 function getAtlassianConfig(): AtlassianConfig | null {
   const rawUrl = process.env.ATLASSIAN_BASE_URL?.trim();
   const email = process.env.ATLASSIAN_EMAIL?.trim();
   const token = process.env.ATLASSIAN_API_TOKEN?.trim();
   if (!rawUrl || !email || !token) return null;
-
   return {
     baseUrl: rawUrl.replace(/\/+$/, ""),
     authHeader: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`,
@@ -225,7 +225,6 @@ export async function analyzeCompetitors(
   const t = translations[locale];
   const industry = INDUSTRY_TEMPLATES[input.industryId ?? "upholstery"];
   const metrics = getMarketMetrics(RADOM_UPHOLSTERY_MARKET, input.radiusKm);
-
   const townsInRadius =
     input.townsInRadius && input.townsInRadius.length > 0
       ? input.townsInRadius
@@ -248,7 +247,7 @@ export async function analyzeCompetitors(
   }));
 
   const insights: CompetitorInsight[] = industry.services.map((svc, idx) => ({
-    service: t[svc.serviceKey],
+    service: resolveServiceLabel(svc, t, locale),
     averagePricePln: svc.localPricePln,
     ourPricePln: svc.ourPricePln,
     sourceStatus: "demo",
@@ -274,7 +273,6 @@ export function calculateServiceFee(input: ServiceFeeInput): ServiceFeeQuote {
   ) {
     throw new Error("Invalid service fee input");
   }
-
   const travelFeePln = getTownTravelFeePln(RADOM_UPHOLSTERY_MARKET, input.town);
   return {
     town: input.town,
@@ -294,7 +292,6 @@ export function generateLocalizedCampaign(input: {
   if (!input.season.trim() || !input.targetTowns.length) {
     throw new Error("Invalid campaign request");
   }
-
   const locale = resolveLocale(input.locale);
   const t = translations[locale];
   const industryId = input.industryId ?? "upholstery";
@@ -328,26 +325,28 @@ export async function exportStrategyToConfluence(input: {
   const t = translations[locale];
   const industryId = input.industryId ?? "upholstery";
   const template = INDUSTRY_TEMPLATES[industryId];
-
-  const activeBenchmarks =
+  const activeBenchmarks: ServiceBenchmarkInput[] =
     input.benchmarks && input.benchmarks.length > 0
       ? input.benchmarks
       : template.services.map((s) => ({
           serviceKey: s.serviceKey,
+          serviceLabel: resolveServiceLabel(s, t, locale),
           ourPricePln: s.ourPricePln,
           localPricePln: s.localPricePln,
         }));
 
-  const avgGapPct = Math.round(
-    activeBenchmarks.reduce(
-      (acc, s) =>
-        acc +
-        (s.localPricePln > 0
-          ? ((s.ourPricePln - s.localPricePln) / s.localPricePln) * 100
-          : 0),
-      0,
-    ) / Math.max(1, activeBenchmarks.length),
+  const comparableBenchmarks = activeBenchmarks.filter(
+    (s) => s.localPricePln > 0,
   );
+  const avgGapPct = comparableBenchmarks.length
+    ? Math.round(
+        comparableBenchmarks.reduce(
+          (acc, s) =>
+            acc + ((s.ourPricePln - s.localPricePln) / s.localPricePln) * 100,
+          0,
+        ) / comparableBenchmarks.length,
+      )
+    : 0;
 
   const analysis = await analyzeCompetitors({
     center: input.center,
@@ -357,6 +356,7 @@ export async function exportStrategyToConfluence(input: {
     competitorsTracked: input.competitorsTracked,
     locale,
   });
+
   const campaign = generateLocalizedCampaign({
     season: input.season,
     targetTowns: analysis.townsInRadius,
@@ -390,7 +390,6 @@ export async function exportStrategyToConfluence(input: {
           signal: AbortSignal.timeout(8000),
         },
       );
-
       if (byKeyRes.ok) {
         const data = (await byKeyRes.json()) as {
           results?: Array<{ id: string; key: string }>;
@@ -426,17 +425,23 @@ export async function exportStrategyToConfluence(input: {
       if (spaceId) {
         const rowsHtml = activeBenchmarks
           .map((row) => {
-            const label = getDictLabel(t, row.serviceKey);
-            const delta =
-              row.localPricePln > 0
-                ? Math.round(
-                    ((row.ourPricePln - row.localPricePln) /
-                      row.localPricePln) *
-                      100,
-                  )
-                : 0;
-            const deltaStr = `${delta > 0 ? "+" : ""}${delta}%`;
-            return `<tr><td>${escapeHtml(label)}</td><td>${row.ourPricePln} PLN</td><td>${row.localPricePln} PLN</td><td>${escapeHtml(deltaStr)}</td></tr>`;
+            const label =
+              row.serviceLabel?.trim() ||
+              resolveServiceLabel({ serviceKey: row.serviceKey }, t, locale);
+            const hasLocalAvg = row.localPricePln > 0;
+            const delta = hasLocalAvg
+              ? Math.round(
+                  ((row.ourPricePln - row.localPricePln) / row.localPricePln) *
+                    100,
+                )
+              : 0;
+            const marketAvgCell = hasLocalAvg
+              ? `${row.localPricePln} PLN`
+              : "—";
+            const deltaStr = hasLocalAvg
+              ? `${delta > 0 ? "+" : ""}${delta}%`
+              : "—";
+            return `<tr><td>${escapeHtml(label)}</td><td>${row.ourPricePln} PLN</td><td>${escapeHtml(marketAvgCell)}</td><td>${escapeHtml(deltaStr)}</td></tr>`;
           })
           .join("");
 
@@ -481,7 +486,6 @@ export async function exportStrategyToConfluence(input: {
 
         let finalTitle = campaign.confluencePageTitle;
         let createRes = await publishPage(finalTitle);
-
         if (createRes.status === 400) {
           const suffix = new Date()
             .toISOString()
@@ -499,7 +503,6 @@ export async function exportStrategyToConfluence(input: {
           const pageUrl = created._links?.webui
             ? `${atlassian.baseUrl}/wiki${created._links.webui}`
             : `${atlassian.baseUrl}/wiki/spaces/${resolvedSpaceKey}`;
-
           return {
             pageTitle: created.title ?? finalTitle,
             spaceKey: resolvedSpaceKey,
@@ -620,7 +623,6 @@ export async function createJiraMarketingEpics(input: {
                 const useParentLink =
                   (epicType && childType.id === taskType?.id) ||
                   childType.subtask;
-
                 const baseFields: Record<string, unknown> = {
                   project: { key: resolved.projectKey },
                   summary: item.summary,
@@ -639,14 +641,12 @@ export async function createJiraMarketingEpics(input: {
                     ? { ...baseFields, parent: { key: parentCreated.key } }
                     : baseFields,
                 );
-
                 if (!childRes.ok && useParentLink && taskType) {
                   childRes = await createIssue({
                     ...baseFields,
                     issuetype: { id: taskType.id },
                   });
                 }
-
                 if (childRes.ok) {
                   const childData = (await childRes.json()) as { key: string };
                   createdChildren.push({
@@ -696,12 +696,12 @@ export async function createCustomerQuote(
   const locale = resolveLocale(input.locale);
   const t = translations[locale];
   const serviceName =
-    input.serviceLabel?.trim() || getDictLabel(t, input.serviceKey);
+    input.serviceLabel?.trim() ||
+    resolveServiceLabel({ serviceKey: input.serviceKey }, t, locale);
   const qtySuffix =
     input.unitLabel && typeof input.quantity === "number"
       ? ` (${input.quantity} ${input.unitLabel})`
       : "";
-
   const summary = `${t.jiraQuotePrefix} ${serviceName}${qtySuffix} · ${input.town} · ${input.totalPln} PLN`;
 
   const atlassian = getAtlassianConfig();

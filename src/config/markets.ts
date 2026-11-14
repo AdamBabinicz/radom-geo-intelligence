@@ -17,7 +17,6 @@ export interface TownGeo {
 }
 
 export type CompetitorBenchmarkRow = IndustryServiceItem;
-
 export type MarketDataSource = "case-study" | "live-geo";
 
 export interface MarketProfile {
@@ -188,23 +187,24 @@ export function getMarketMetrics(market: MarketProfile, radiusKm: number) {
   const hubsInRange = market.towns.filter(
     (town) => town.isRegionalHub && town.distKm <= radiusKm,
   );
-
   const serviceableTownsCount = 1 + localInRange.length;
-
   const townsCompetitors = [...localInRange, ...hubsInRange].reduce(
     (sum, town) => sum + (town.competitorsCount ?? 0),
     0,
   );
   const competitorsTracked = market.baseCompetitorsCount + townsCompetitors;
 
-  const avgGapPct = market.benchmarks.length
+  const comparableBenchmarks = market.benchmarks.filter(
+    (row) => row.localPricePln > 0,
+  );
+  const avgGapPct = comparableBenchmarks.length
     ? Math.round(
-        market.benchmarks.reduce(
+        comparableBenchmarks.reduce(
           (acc, row) =>
             acc +
             ((row.ourPricePln - row.localPricePln) / row.localPricePln) * 100,
           0,
-        ) / market.benchmarks.length,
+        ) / comparableBenchmarks.length,
       )
     : 0;
 

@@ -50,6 +50,13 @@ interface StructuredScanPayload {
   painPoints?: PainPointFinding[];
 }
 
+interface ActiveServiceDescriptor {
+  serviceKey: string;
+  label?: string;
+  unitType?: string;
+  ourPricePln?: number;
+}
+
 interface ScanRequestParams {
   city: string;
   country: string;
@@ -58,6 +65,7 @@ interface ScanRequestParams {
   locale: "pl" | "en";
   competitorUrls: string[];
   excludeHost?: string;
+  services: ActiveServiceDescriptor[];
 }
 
 interface FetchedSiteContext {
@@ -122,7 +130,6 @@ function isSafePublicUrl(rawUrl: string): URL | null {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return null;
     }
-
     const host = parsed.hostname.toLowerCase();
     if (
       host === "localhost" ||
@@ -134,7 +141,6 @@ function isSafePublicUrl(rawUrl: string): URL | null {
     ) {
       return null;
     }
-
     if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)) {
       return null;
     }
@@ -148,7 +154,6 @@ function isSafePublicUrl(rawUrl: string): URL | null {
         return null;
       }
     }
-
     return parsed;
   } catch {
     return null;
@@ -166,21 +171,50 @@ function isAggregatorHost(hostname: string): boolean {
   );
 }
 
+function parseServicesParam(raw: unknown): ActiveServiceDescriptor[] {
+  if (!Array.isArray(raw)) return [];
+  const parsed: ActiveServiceDescriptor[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const serviceKey =
+      typeof obj.serviceKey === "string" ? obj.serviceKey.trim() : "";
+    if (!serviceKey || seen.has(serviceKey)) continue;
+    seen.add(serviceKey);
+    parsed.push({
+      serviceKey,
+      label:
+        typeof obj.label === "string"
+          ? obj.label.trim().slice(0, 90)
+          : undefined,
+      unitType:
+        typeof obj.unitType === "string"
+          ? obj.unitType.trim().slice(0, 16)
+          : undefined,
+      ourPricePln:
+        typeof obj.ourPricePln === "number" &&
+        Number.isFinite(obj.ourPricePln) &&
+        obj.ourPricePln > 0
+          ? Math.round(obj.ourPricePln)
+          : undefined,
+    });
+    if (parsed.length >= 25) break;
+  }
+  return parsed;
+}
+
 function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
   const rawCity = typeof input.city === "string" ? input.city.trim() : "";
   const city = rawCity.slice(0, 100) || "Radom";
-
   const rawCountry =
     typeof input.country === "string" ? input.country.trim() : "";
   const country = rawCountry.slice(0, 80) || "Poland";
-
   const industryId = resolveIndustryId(input.industry ?? input.industryId);
-
   const parsedRadius = Number(input.radiusKm);
   const radiusKm = Number.isFinite(parsedRadius)
     ? Math.min(100, Math.max(5, Math.round(parsedRadius)))
     : 30;
-
   const locale = input.locale === "en" ? "en" : "pl";
 
   const rawUrls: string[] = [];
@@ -193,7 +227,6 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
       rawUrls.push(part);
     }
   }
-
   const competitorUrls = Array.from(
     new Set(
       rawUrls
@@ -217,6 +250,7 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
     locale,
     competitorUrls,
     excludeHost,
+    services: parseServicesParam(input.services),
   };
 }
 
@@ -234,7 +268,6 @@ function extractGroundingSources(
 ): GroundingSource[] {
   if (!Array.isArray(chunks)) return [];
   const seen = new Map<string, GroundingSource>();
-
   for (const chunk of chunks) {
     const uri = chunk.web?.uri?.trim();
     if (!uri) continue;
@@ -246,14 +279,12 @@ function extractGroundingSources(
     }
     if (seen.size >= 10) break;
   }
-
   return Array.from(seen.values());
 }
 
 function extractVisibleText(html: string): { title: string; text: string } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = (titleMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
-
   const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -261,7 +292,6 @@ function extractVisibleText(html: string): { title: string; text: string } {
     .replace(/&nbsp;/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-
   return { title, text: stripped.slice(0, 10000) };
 }
 
@@ -269,12 +299,10 @@ function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
   const anchorMatches = Array.from(
     html.matchAll(/<a[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi),
   );
-
   for (const match of anchorMatches) {
     const href = (match[1] ?? "").trim();
     const label = (match[2] ?? "").replace(/<[^>]+>/g, " ").trim();
     const haystack = `${href} ${label}`.toLowerCase();
-
     if (
       /(cennik|cena|pricing|price-list|prices|stawki)/.test(haystack) &&
       !/\.(jpg|jpeg|png|webp|pdf|svg)$/i.test(href)
@@ -292,7 +320,6 @@ function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
       }
     }
   }
-
   return null;
 }
 
@@ -318,13 +345,10 @@ async function fetchSiteContext(
 ): Promise<FetchedSiteContext | null> {
   const safeUrl = isSafePublicUrl(targetUrl);
   if (!safeUrl) return null;
-
   const html = await fetchHtmlPage(safeUrl.toString());
   if (!html) return null;
-
   const { title, text } = extractVisibleText(html);
   let combined = text;
-
   const subpageUrl = findPricingSubpageUrl(html, safeUrl);
   if (subpageUrl) {
     const subHtml = await fetchHtmlPage(subpageUrl);
@@ -335,7 +359,6 @@ async function fetchSiteContext(
       }
     }
   }
-
   if (combined.length < 400) {
     const scriptMatch = html.match(/<script[^>]+src="([^"]+\.js[^"]*)"/i);
     if (scriptMatch?.[1]) {
@@ -349,9 +372,9 @@ async function fetchSiteContext(
             const jsRaw = (await jsRes.text()).slice(0, 250_000);
             const priceSnippets = jsRaw
               .match(
-                /.{0,70}(?:zł|pln|cennik|cena|od\s+\d+|price|dywan|tapicer|klima|hydraul).{0,90}/gi,
+                /.{0,70}(?:zł|pln|cennik|cena|od\s+\d+|m²|m2|szt|price|dywan|tapicer|fotel|kanap|wersalk|materac|kostk|płyt|taras|dosusz|klima|hydraul).{0,90}/gi,
               )
-              ?.slice(0, 35)
+              ?.slice(0, 45)
               .join("\n");
             if (priceSnippets) {
               combined = `${combined}\n${priceSnippets}`.trim();
@@ -363,12 +386,11 @@ async function fetchSiteContext(
       }
     }
   }
-
   if (!combined) return null;
   return {
     url: safeUrl.toString(),
     title: title || safeUrl.hostname,
-    text: combined.slice(0, 12000),
+    text: combined.slice(0, 14000),
   };
 }
 
@@ -391,7 +413,6 @@ function buildSearchQueries(
     };
     return map[industryId];
   }
-
   const mapEn: Record<IndustryId, [string, string]> = {
     upholstery: [`carpet cleaning ${city}`, `upholstery cleaning ${city}`],
     hvac: [`air conditioning installation ${city}`, `hvac service ${city}`],
@@ -407,7 +428,6 @@ function filterCandidateUrls(
 ): string[] {
   const result: string[] = [];
   const seenHosts = new Set<string>();
-
   for (const raw of rawCandidates) {
     const safe = isSafePublicUrl(raw);
     if (!safe) continue;
@@ -415,12 +435,10 @@ function filterCandidateUrls(
     if (isAggregatorHost(host)) continue;
     if (excludeHost && host === excludeHost) continue;
     if (seenHosts.has(host)) continue;
-
     seenHosts.add(host);
     result.push(safe.toString());
     if (result.length >= limit) break;
   }
-
   return result;
 }
 
@@ -432,7 +450,6 @@ async function discoverViaSerper(
 ): Promise<string[]> {
   const serperKey = process.env.SERPER_API_KEY?.trim();
   if (!serperKey) return [];
-
   const collected: string[] = [];
   for (const q of queries) {
     try {
@@ -466,7 +483,6 @@ async function discoverViaSerper(
       continue;
     }
   }
-
   return filterCandidateUrls(collected, excludeHost, 6);
 }
 
@@ -507,7 +523,6 @@ async function searchDuckDuckGoSingle(
       signal: AbortSignal.timeout(6500),
     });
     if (!res.ok) return [];
-
     const html = await res.text();
     const hrefMatches = Array.from(
       html.matchAll(
@@ -520,7 +535,6 @@ async function searchDuckDuckGoSingle(
         : Array.from(
             html.matchAll(/href=['"]([^'"]*(?:uddg=|https?:\/\/)[^'"]+)['"]/gi),
           );
-
     const urls: string[] = [];
     for (const match of fallbackMatches) {
       const candidate = unwrapDuckDuckGoHref(match[1] ?? "");
@@ -541,15 +555,12 @@ async function discoverCompetitorUrlsViaDuckDuckGo(
     searchDuckDuckGoSingle(queries[0], locale),
     searchDuckDuckGoSingle(queries[1], locale),
   ]);
-
-  // Interleave results so primary carpet-cleaning leaders stay at the top alongside upholstery
   const interleaved: string[] = [];
   const maxLen = Math.max(listA.length, listB.length);
   for (let i = 0; i < maxLen; i++) {
     if (listA[i]) interleaved.push(listA[i]);
     if (listB[i]) interleaved.push(listB[i]);
   }
-
   return filterCandidateUrls(interleaved, excludeHost, 6);
 }
 
@@ -564,7 +575,6 @@ async function discoverCompetitorUrlsViaOsm(
     geoUrl.searchParams.set("q", `${city}, ${country}`);
     geoUrl.searchParams.set("format", "json");
     geoUrl.searchParams.set("limit", "1");
-
     const geoRes = await fetch(geoUrl.toString(), {
       headers: { "User-Agent": "NorthstarOps-MarketScan/1.0" },
       signal: AbortSignal.timeout(5000),
@@ -577,15 +587,12 @@ async function discoverCompetitorUrlsViaOsm(
     const lat = Number(geoData?.[0]?.lat);
     const lon = Number(geoData?.[0]?.lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
-
     const tagFilterMap: Record<IndustryId, string> = {
       upholstery: '["shop"~"carpet|furniture|laundry|dry_cleaning"]["website"]',
       hvac: '["craft"~"hvac|heating|electrician"]["website"]',
       plumbing: '["craft"~"plumber|heating"]["website"]',
     };
-
     const query = `[out:json][timeout:6];(node(around:18000,${lat},${lon})${tagFilterMap[industryId]};way(around:18000,${lat},${lon})${tagFilterMap[industryId]};);out tags 6;`;
-
     const osmRes = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
       headers: {
@@ -596,17 +603,14 @@ async function discoverCompetitorUrlsViaOsm(
       signal: AbortSignal.timeout(6500),
     });
     if (!osmRes.ok) return [];
-
     const osmJson = (await osmRes.json()) as {
       elements?: Array<{ tags?: Record<string, string> }>;
     };
-
     const rawSites: string[] = [];
     for (const el of osmJson.elements ?? []) {
       const rawSite = el.tags?.website || el.tags?.["contact:website"];
       if (rawSite) rawSites.push(rawSite);
     }
-
     return filterCandidateUrls(rawSites, excludeHost, 4);
   } catch {
     return [];
@@ -617,21 +621,34 @@ async function structureReportWithGemini(
   researchText: string,
   params: ScanRequestParams,
   validServiceKeys: Set<string>,
+  activeServices: ActiveServiceDescriptor[],
 ): Promise<StructuredScanPayload> {
   const ai = getGeminiClient();
   if (!ai) return {};
-
   const languageLabel = params.locale === "pl" ? "Polish" : "English";
+  const trackedServicesList = activeServices
+    .map((s) =>
+      [
+        `"${s.serviceKey}"`,
+        s.label ? `(${s.label})` : "",
+        s.unitType ? `[${s.unitType}]` : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    )
+    .join(", ");
+
   const extractionPrompt = [
-    `Extract structured market intelligence strictly from the verified competitor websites below.`,
+    `Extract structured market intelligence strictly from the verified competitor data below.`,
     `Do NOT invent companies, numbers, ratings, or prices that are not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
-    `Valid serviceKey values for this industry: ${Array.from(validServiceKeys).join(", ")}.`,
+    `Active tracked services to benchmark (use these EXACT serviceKey values): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
     `Important pricing classification rules:`,
     `- "carpetArea": full carpet washing price per m² (if a company lists both lowball teaser promo like 4.99 PLN and standard/laundry carpet washing 20-38 PLN/m², represent the standard carpet washing price range fairly instead of using outliers as the whole market average).`,
     `- "carpetFlooring": fitted wall-to-wall / office carpet cleaning per m².`,
     `- "upholsteryChair": standard chair upholstery cleaning price.`,
     `- "cornerSofa": corner sofa / L-shaped couch cleaning starting or average price.`,
+    `- For any other serviceKey listed above (including "live:*" keys matched to a service name like armchair/fotel, couch/kanapa, mattress/materac, pavers/kostka, tiles/płytki, drying/dosuszanie), extract the matching local competitor average ONLY if real price evidence exists in the text.`,
     `Compute avgPricePln, minPricePln, maxPricePln across the found local companies only for serviceKey entries where real price evidence exists.`,
     `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText}`,
   ].join("\n");
@@ -765,12 +782,21 @@ function sanitizeStructuredPayload(
 async function runMarketScan(params: ScanRequestParams) {
   const scannedAt = new Date().toISOString();
   const template = INDUSTRY_TEMPLATES[params.industryId];
-  const validServiceKeys = new Set<string>(
-    template.services.map((s: IndustryServiceItem) => s.serviceKey),
-  );
+  const activeServices: ActiveServiceDescriptor[] =
+    params.services.length > 0
+      ? params.services
+      : template.services.map((s: IndustryServiceItem) => ({
+          serviceKey: s.serviceKey,
+          unitType: s.unitType,
+          ourPricePln: s.ourPricePln,
+        }));
+
+  const validServiceKeys = new Set<string>([
+    ...template.services.map((s: IndustryServiceItem) => s.serviceKey),
+    ...activeServices.map((s) => s.serviceKey),
+  ]);
 
   const ai = getGeminiClient();
-
   if (!ai) {
     return NextResponse.json({
       source: "template-fallback",
@@ -790,16 +816,13 @@ async function runMarketScan(params: ScanRequestParams) {
     });
   }
 
-  const serviceHints = template.services
-    .map(
-      (s: IndustryServiceItem) =>
-        `${s.serviceKey} (reference baseline ~${s.localPricePln} PLN)`,
-    )
+  const serviceHints = activeServices
+    .map((s) => `${s.label || s.serviceKey} [${s.serviceKey}]`)
     .join(", ");
 
   const industryDescriptionMap: Record<IndustryId, string> = {
     upholstery:
-      "pranie dywanów, pranie wykładzin i czyszczenie tapicerki meblowej (carpet & upholstery cleaning)",
+      "pranie dywanów, wykładzin, czyszczenie tapicerki meblowej i mycie kostki brukowej (carpet, upholstery & exterior cleaning)",
     hvac: "montaż i serwis klimatyzacji oraz pomp ciepła (HVAC & air conditioning service)",
     plumbing:
       "usługi hydrauliczne, awarie wod-kan i serwis kotłów (plumbing & emergency repairs)",
@@ -838,9 +861,9 @@ async function runMarketScan(params: ScanRequestParams) {
           researchText,
           params,
           validServiceKeys,
+          activeServices,
         );
         const clean = sanitizeStructuredPayload(parsed, validServiceKeys);
-
         return NextResponse.json({
           source: "ai-web-grounding",
           aiEnhanced: true,
@@ -865,7 +888,6 @@ async function runMarketScan(params: ScanRequestParams) {
     params.locale,
   );
   let targetUrls = params.competitorUrls;
-
   if (targetUrls.length === 0) {
     targetUrls = await discoverViaSerper(
       queries,
@@ -874,7 +896,6 @@ async function runMarketScan(params: ScanRequestParams) {
       params.excludeHost,
     );
   }
-
   if (targetUrls.length === 0) {
     const [ddgUrls, osmUrls] = await Promise.all([
       discoverCompetitorUrlsViaDuckDuckGo(
@@ -905,14 +926,13 @@ async function runMarketScan(params: ScanRequestParams) {
       const combinedText = fetchedSites
         .map((s) => `=== SITE: ${s.title} (${s.url}) ===\n${s.text}`)
         .join("\n\n");
-
       const parsed = await structureReportWithGemini(
         combinedText,
         params,
         validServiceKeys,
+        activeServices,
       );
       const clean = sanitizeStructuredPayload(parsed, validServiceKeys);
-
       return NextResponse.json({
         source: "live-competitor-sites",
         aiEnhanced: true,

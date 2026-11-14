@@ -7,7 +7,11 @@ import {
   Sparkles,
   Store,
 } from "lucide-react";
-import { INDUSTRY_TEMPLATES, type IndustryId } from "@/src/config/industries";
+import {
+  INDUSTRY_TEMPLATES,
+  resolveServiceLabel,
+  type IndustryId,
+} from "@/src/config/industries";
 import type { MarketProfile } from "@/src/config/markets";
 import { formatPrice } from "@/src/lib/currency";
 import type { AppDictionary, Locale } from "@/src/locales";
@@ -139,45 +143,57 @@ export function CompetitorTable({
           </thead>
           <tbody>
             {market.benchmarks.map((row) => {
-              const gapPct =
-                row.localPricePln > 0
-                  ? Math.round(
-                      ((row.ourPricePln - row.localPricePln) /
-                        row.localPricePln) *
-                        100,
-                    )
-                  : 0;
+              const hasLocalAvg = row.localPricePln > 0;
+              const gapPct = hasLocalAvg
+                ? Math.round(
+                    ((row.ourPricePln - row.localPricePln) /
+                      row.localPricePln) *
+                      100,
+                  )
+                : 0;
               const isCheaperOrEqual = gapPct <= 0;
-
+              const label = resolveServiceLabel(row, t, locale);
               return (
                 <tr
                   key={row.serviceKey}
                   className="border-b border-slate-100 last:border-0 dark:border-slate-800"
                 >
                   <td className="px-5 py-3.5 text-xs font-medium text-slate-800 dark:text-slate-100">
-                    {t[row.serviceKey]}
+                    {label}
                   </td>
                   <td className="px-3 py-3.5 text-xs text-slate-500 dark:text-slate-400">
-                    {formatPrice(row.localPricePln, locale)}
+                    {hasLocalAvg ? (
+                      formatPrice(row.localPricePln, locale)
+                    ) : (
+                      <span className="text-slate-400 dark:text-slate-500">
+                        —
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-3.5 text-xs font-semibold text-slate-900 dark:text-white">
                     {formatPrice(row.ourPricePln, locale)}
                   </td>
                   <td className="px-5 py-3.5 text-right">
-                    <span
-                      className={`inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-[10px] font-semibold ${
-                        isCheaperOrEqual
-                          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                          : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
-                      }`}
-                    >
-                      {isCheaperOrEqual ? (
-                        <ArrowDownRight size={11} />
-                      ) : (
-                        <ArrowUpRight size={11} />
-                      )}
-                      {gapPct < 0 ? `−${Math.abs(gapPct)}%` : `+${gapPct}%`}
-                    </span>
+                    {hasLocalAvg ? (
+                      <span
+                        className={`inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-[10px] font-semibold ${
+                          isCheaperOrEqual
+                            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                            : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                        }`}
+                      >
+                        {isCheaperOrEqual ? (
+                          <ArrowDownRight size={11} />
+                        ) : (
+                          <ArrowUpRight size={11} />
+                        )}
+                        {gapPct < 0 ? `−${Math.abs(gapPct)}%` : `+${gapPct}%`}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                        {t.noLocalBenchmark}
+                      </span>
+                    )}
                   </td>
                 </tr>
               );
@@ -229,13 +245,11 @@ export function CompetitorTable({
             <Sparkles size={13} className="text-teal-700 dark:text-teal-400" />
             {t.marketScanSummaryTitle}
           </div>
-
           {liveScan!.summary && (
             <p className="mb-3 break-words text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
               {cleanDisplayText(liveScan!.summary)}
             </p>
           )}
-
           <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
             {t.discoveredCompetitorsLabel}
           </p>
@@ -279,7 +293,6 @@ export function CompetitorTable({
               );
             })}
           </div>
-
           {liveScan!.sources.length > 0 && (
             <div className="mt-3 border-t border-slate-200/70 pt-2 dark:border-slate-800">
               <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">

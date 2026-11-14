@@ -11,7 +11,7 @@ import {
   Play,
   Sparkles,
 } from "lucide-react";
-import type { IndustryId } from "@/src/config/industries";
+import { resolveServiceLabel, type IndustryId } from "@/src/config/industries";
 import { getMarketMetrics, type MarketProfile } from "@/src/config/markets";
 import type { AppDictionary, Locale } from "@/src/locales";
 import type {
@@ -98,6 +98,7 @@ export function RovoConsole({
           competitorsTracked: metrics.competitorsTracked,
           benchmarks: market.benchmarks.map((b) => ({
             serviceKey: b.serviceKey,
+            serviceLabel: resolveServiceLabel(b, t, locale),
             ourPricePln: b.ourPricePln,
             localPricePln: b.localPricePln,
           })),
@@ -172,7 +173,6 @@ export function RovoConsole({
             {running ? t.running : t.completedAt}
           </span>
         </div>
-
         <div className="flex flex-col gap-2.5">
           <LogLine
             icon={<Check size={12} />}
@@ -201,7 +201,6 @@ export function RovoConsole({
             status={running ? "pending" : "done"}
           />
         </div>
-
         <div className="mt-3 border-t border-slate-200/80 pt-2.5 text-[10px] font-medium text-emerald-700 dark:border-white/10 dark:text-emerald-300">
           <span className="text-slate-400 dark:text-slate-500">{"> "}</span>
           {running ? t.agentWorking : t.runSuccessful}

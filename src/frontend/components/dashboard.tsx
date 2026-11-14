@@ -19,7 +19,14 @@ import {
   Users,
   Waves,
 } from "lucide-react";
-import { INDUSTRY_TEMPLATES, type IndustryId } from "@/src/config/industries";
+import {
+  INDUSTRY_TEMPLATES,
+  resolveServiceLabel,
+  resolveUnitType,
+  type IndustryId,
+  type IndustryServiceItem,
+  type ServiceUnitType,
+} from "@/src/config/industries";
 import {
   applyIndustryToMarket,
   getMarketMetrics,
@@ -46,6 +53,9 @@ const DEFAULT_WEBSITE_URL = "https://pranie-dywanow.j.pl/";
 interface PricingSyncItem {
   serviceKey: string;
   pricePln: number;
+  labelPl?: string;
+  labelEn?: string;
+  unitType?: ServiceUnitType;
 }
 
 interface PricingSyncResponse {
@@ -67,7 +77,9 @@ export function Dashboard() {
   const [cookieModalSignal, setCookieModalSignal] = useState(0);
 
   const [websiteUrl, setWebsiteUrl] = useState<string>(DEFAULT_WEBSITE_URL);
-  const [syncedPrices, setSyncedPrices] = useState<Record<string, number>>({});
+  const [syncedCatalog, setSyncedCatalog] = useState<
+    IndustryServiceItem[] | null
+  >(null);
   const [syncedCount, setSyncedCount] = useState<number>(0);
   const [isSyncingPrices, setIsSyncingPrices] = useState<boolean>(false);
 
@@ -97,7 +109,6 @@ export function Dashboard() {
     } else if (savedLocale === "pl" || savedLocale === "en") {
       setLocale(savedLocale);
     }
-
     const savedTheme = window.localStorage.getItem(THEME_KEY);
     if (savedTheme === "dark") setDark(true);
   }, []);
@@ -126,7 +137,7 @@ export function Dashboard() {
   };
 
   const resetLiveIntelligence = () => {
-    setSyncedPrices({});
+    setSyncedCatalog(null);
     setSyncedCount(0);
     setLiveScan(null);
     setScannedBenchmarks({});
@@ -162,11 +173,18 @@ export function Dashboard() {
 
   const t = translations[locale];
   const baseIndustryMarket = applyIndustryToMarket(baseMarket, industryId);
+  const baselineByKey = new Map(
+    baseIndustryMarket.benchmarks.map((row) => [row.serviceKey, row]),
+  );
+  const activeBenchmarksSource =
+    syncedCatalog && syncedCatalog.length > 0
+      ? syncedCatalog
+      : baseIndustryMarket.benchmarks;
+
   const market: MarketProfile = {
     ...baseIndustryMarket,
-    benchmarks: baseIndustryMarket.benchmarks.map((row) => ({
+    benchmarks: activeBenchmarksSource.map((row) => ({
       ...row,
-      ourPricePln: syncedPrices[row.serviceKey] ?? row.ourPricePln,
       localPricePln: scannedBenchmarks[row.serviceKey] ?? row.localPricePln,
     })),
   };
@@ -187,16 +205,13 @@ export function Dashboard() {
   const handleSyncPrices = async () => {
     const trimmed = websiteUrl.trim();
     if (!trimmed) return;
-
     setIsSyncingPrices(true);
     setSyncError(null);
-
     try {
       const response = await fetch(
         `/api/pricing/sync?url=${encodeURIComponent(trimmed)}`,
       );
       const data = (await response.json()) as PricingSyncResponse;
-
       if (
         !response.ok ||
         !Array.isArray(data.prices) ||
@@ -206,28 +221,56 @@ export function Dashboard() {
         return;
       }
 
-      const nextPrices: Record<string, number> = {};
+      const nextCatalog: IndustryServiceItem[] = [];
+      const seenKeys = new Set<string>();
       for (const item of data.prices) {
         if (
-          typeof item.serviceKey === "string" &&
-          typeof item.pricePln === "number" &&
-          Number.isFinite(item.pricePln) &&
-          item.pricePln > 0
+          typeof item.serviceKey !== "string" ||
+          !item.serviceKey.trim() ||
+          typeof item.pricePln !== "number" ||
+          !Number.isFinite(item.pricePln) ||
+          item.pricePln <= 0
         ) {
-          nextPrices[item.serviceKey] = Math.round(item.pricePln);
+          continue;
         }
+        const key = item.serviceKey.trim();
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+
+        const preset = baselineByKey.get(key);
+        const unitType: ServiceUnitType =
+          item.unitType === "m2" ||
+          item.unitType === "piece" ||
+          item.unitType === "fixed"
+            ? item.unitType
+            : preset
+              ? resolveUnitType(preset)
+              : "fixed";
+
+        nextCatalog.push({
+          serviceKey: key,
+          ourPricePln: Math.round(item.pricePln),
+          localPricePln: preset?.localPricePln ?? 0,
+          isPerUnit: unitType !== "fixed",
+          unitType,
+          labels:
+            item.labelPl || item.labelEn
+              ? {
+                  pl: item.labelPl?.trim() || undefined,
+                  en: item.labelEn?.trim() || undefined,
+                }
+              : preset?.labels,
+          isLiveDiscovered: true,
+        });
       }
 
-      const matchedInIndustry = baseIndustryMarket.benchmarks.filter(
-        (b) => nextPrices[b.serviceKey] !== undefined,
-      ).length;
+      if (nextCatalog.length === 0) {
+        setSyncError(t.syncWebsiteError);
+        return;
+      }
 
-      setSyncedPrices(nextPrices);
-      setSyncedCount(
-        matchedInIndustry > 0
-          ? matchedInIndustry
-          : Object.keys(nextPrices).length,
-      );
+      setSyncedCatalog(nextCatalog);
+      setSyncedCount(nextCatalog.length);
     } catch {
       setSyncError(t.syncWebsiteError);
     } finally {
@@ -238,7 +281,6 @@ export function Dashboard() {
   const handleScanMarket = async () => {
     setIsScanningMarket(true);
     setSyncError(null);
-
     try {
       const response = await fetch("/api/market/scan", {
         method: "POST",
@@ -249,19 +291,22 @@ export function Dashboard() {
           radiusKm,
           locale,
           excludeUrl: websiteUrl.trim() || undefined,
+          services: market.benchmarks.map((row) => ({
+            serviceKey: row.serviceKey,
+            label: resolveServiceLabel(row, t, locale),
+            unitType: resolveUnitType(row),
+            ourPricePln: row.ourPricePln,
+          })),
         }),
       });
       const data = (await response.json()) as LiveMarketScanResult & {
         error?: string;
       };
-
       if (!response.ok) {
         setSyncError(data.error ?? t.scanMarketError);
         return;
       }
-
       setLiveScan(data);
-
       const nextBenchmarks: Record<string, number> = {};
       for (const item of data.marketBenchmarks ?? []) {
         if (
@@ -274,7 +319,6 @@ export function Dashboard() {
         }
       }
       setScannedBenchmarks(nextBenchmarks);
-
       if (!data.aiEnhanced && data.warning) {
         setSyncError(data.warning);
       }
@@ -335,9 +379,11 @@ export function Dashboard() {
               </span>
             </span>
           </a>
+
           <p className="mb-3 mt-10 px-2 text-[10px] font-bold uppercase tracking-[.16em] text-slate-500 dark:text-slate-400">
             {t.workspace}
           </p>
+
           <nav
             className="flex flex-col gap-1 text-[13px] font-medium"
             aria-label={t.primaryNav}
@@ -381,6 +427,7 @@ export function Dashboard() {
               {t.pricePreview}
             </a>
           </nav>
+
           <div className="mt-auto rounded-xl border border-slate-200 p-3.5 dark:border-slate-700">
             <div className="flex items-center gap-2 text-xs font-semibold">
               <CircleHelp
@@ -400,6 +447,7 @@ export function Dashboard() {
               {t.viewGuide} →
             </button>
           </div>
+
           <div className="mt-4 flex items-center gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
             <div className="grid size-9 place-items-center rounded-full bg-slate-200 text-xs font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
               MB
@@ -615,7 +663,6 @@ export function Dashboard() {
             </footer>
           </div>
         </main>
-
         <CookieConsent t={t} reopenSignal={cookieModalSignal} />
         <ScrollToTop label={t.scrollToTop} />
       </div>

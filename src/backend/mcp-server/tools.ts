@@ -41,6 +41,8 @@ function parseBenchmarks(value: unknown): ServiceBenchmarkInput[] | undefined {
     ) {
       parsed.push({
         serviceKey: obj.serviceKey,
+        serviceLabel:
+          typeof obj.serviceLabel === "string" ? obj.serviceLabel : undefined,
         ourPricePln: obj.ourPricePln,
         localPricePln: obj.localPricePln,
       });
@@ -122,6 +124,7 @@ export const mcpTools = [
             type: "object",
             properties: {
               serviceKey: { type: "string" },
+              serviceLabel: { type: "string" },
               ourPricePln: { type: "number" },
               localPricePln: { type: "number" },
             },
