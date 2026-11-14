@@ -336,7 +336,7 @@ function buildGroundedFallbackCouncil(
       proposedPricePln: target,
       rationale: isPl
         ? s.localPricePln > 0
-          ? `Średnia w ${input.city} to ${s.localPricePln} zł — bezpieczne domknięcie luki cenowej.`
+          ? `Średnia w mieście ${input.city} to ${s.localPricePln} zł — bezpieczne domknięcie luki cenowej.`
           : `Korekta marżowa +8% w promieniu ${input.radiusKm} km.`
         : s.localPricePln > 0
           ? `${input.city} avg is ${s.localPricePln} PLN — closing part of the market gap.`
@@ -388,7 +388,7 @@ function buildGroundedFallbackCouncil(
     },
     round1Strategist: {
       thesis: isPl
-        ? `W ${input.city} (${input.radiusKm} km) średnia różnica cen wynosi ${input.avgGapPct}%. Podniesienie ${topTargets.length} najtańszych usług zmniejszy lukę bez utraty przewagi nad konkurentami.`
+        ? `W strefie ${input.city} (${input.radiusKm} km) średnia różnica cen wynosi ${input.avgGapPct}%. Podniesienie ${topTargets.length} najtańszych usług zmniejszy lukę bez utraty przewagi nad konkurentami.`
         : `Across ${input.city} (${input.radiusKm} km), our price gap averages ${input.avgGapPct}%. Lifting ${topTargets.length} underpriced services boosts margin while staying below local rivals.`,
       campaignAngle: isPl
         ? `Kampania "Pełny cennik z góry — zero dopłat" dla miejscowości: ${secondaryTowns}.`
@@ -431,7 +431,7 @@ function buildGroundedFallbackCouncil(
           priceAdjustments: safeAdjustments,
           actionItems: isPl
             ? [
-                `Zaktualizuj publiczny cennik WWW dla ${input.city} o jasne stawki końcowe i darmowy dojazd w strefie ${input.radiusKm} km`,
+                `Zaktualizuj publiczny cennik WWW dla miasta ${input.city} o jasne stawki końcowe i darmowy dojazd w strefie ${input.radiusKm} km`,
                 `Uruchom kampanię "Cennik z góry" w ${secondaryTowns}`,
                 `Dodaj kalkulator wyceny z dojazdem na górę strony głównej`,
               ]
@@ -452,12 +452,12 @@ function buildGroundedFallbackCouncil(
           priceAdjustments: marginAdjustments,
           actionItems: isPl
             ? [
-                `Wdróż wyższe stawki bazowe dla ${topTargets.map((t) => t.label).join(", ")}`,
+                `Wdróż wyższe stawki bazowe dla: ${topTargets.map((t) => t.label).join(", ")}`,
                 `Przygotuj pakiety cross-sell (impregnacja / dosuszanie) dla zleceń powyżej 200 zł`,
                 `Skieruj reklamy na dzielnice o najwyższych ocenach konkurencji w Google Maps`,
               ]
             : [
-                `Roll out higher base rates for ${topTargets.map((t) => t.label).join(", ")}`,
+                `Roll out higher base rates for: ${topTargets.map((t) => t.label).join(", ")}`,
                 `Bundle add-ons (fabric protection / drying) for orders above 200 PLN`,
                 `Target high-intent suburbs around ${secondaryTowns}`,
               ],
@@ -878,6 +878,51 @@ export async function runAiCouncil(
     };
   };
 
+  const round1MarginAdjustments: CouncilPriceAdjustment[] =
+    round1.priceMoves.map((m) => ({
+      serviceKey: m.serviceKey,
+      label: m.label,
+      currentPricePln: m.currentPricePln,
+      finalPricePln: m.proposedPricePln,
+    }));
+
+  const round1SafeAdjustments: CouncilPriceAdjustment[] = round1.priceMoves.map(
+    (m) => ({
+      serviceKey: m.serviceKey,
+      label: m.label,
+      currentPricePln: m.currentPricePln,
+      finalPricePln:
+        m.proposedPricePln > m.currentPricePln
+          ? Math.round(
+              m.currentPricePln +
+                (m.proposedPricePln - m.currentPricePln) * 0.55,
+            )
+          : m.proposedPricePln,
+    }),
+  );
+
+  const fallbackSafeOption: CouncilDecisionOption =
+    round1SafeAdjustments.length > 0
+      ? {
+          ...fallbackBaseline.round3Synthesis.options[0],
+          priceAdjustments: round1SafeAdjustments,
+        }
+      : fallbackBaseline.round3Synthesis.options[0];
+
+  const fallbackMarginOption: CouncilDecisionOption =
+    round1MarginAdjustments.length > 0
+      ? {
+          ...fallbackBaseline.round3Synthesis.options[1],
+          priceAdjustments: round1MarginAdjustments,
+          actionItems: [
+            input.locale === "pl"
+              ? `Wdróż wyższe stawki bazowe dla: ${round1.priceMoves.map((m) => m.label).join(", ")}`
+              : `Roll out higher base rates for: ${round1.priceMoves.map((m) => m.label).join(", ")}`,
+            ...fallbackBaseline.round3Synthesis.options[1].actionItems.slice(1),
+          ],
+        }
+      : fallbackBaseline.round3Synthesis.options[1];
+
   const rawSafe =
     synthesisData?.options?.find((o) => o.id === "safe") ??
     synthesisData?.options?.[0];
@@ -886,16 +931,8 @@ export async function runAiCouncil(
     synthesisData?.options?.[1];
 
   const finalOptions: [CouncilDecisionOption, CouncilDecisionOption] = [
-    normalizeOption(
-      rawSafe,
-      fallbackBaseline.round3Synthesis.options[0],
-      "safe",
-    ),
-    normalizeOption(
-      rawMargin,
-      fallbackBaseline.round3Synthesis.options[1],
-      "margin",
-    ),
+    normalizeOption(rawSafe, fallbackSafeOption, "safe"),
+    normalizeOption(rawMargin, fallbackMarginOption, "margin"),
   ];
 
   const fallbackNotice =
