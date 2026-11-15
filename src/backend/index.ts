@@ -382,6 +382,8 @@ export async function exportStrategyToConfluence(input: {
   competitorsTracked?: number;
   benchmarks?: ServiceBenchmarkInput[];
   councilContext?: CouncilExecutionContext;
+  topPainPoint?: string;
+  detectedIndustryLabel?: string;
   locale?: Locale;
 }): Promise<ConfluenceExportResult> {
   const locale = resolveLocale(input.locale);
@@ -398,6 +400,10 @@ export async function exportStrategyToConfluence(input: {
           ourPricePln: s.ourPricePln,
           localPricePln: s.localPricePln,
         }));
+
+  const hasLiveCustomBenchmarks =
+    activeBenchmarks.length > 0 &&
+    activeBenchmarks.every((b) => b.serviceKey.startsWith("live:"));
 
   const comparableBenchmarks = activeBenchmarks.filter(
     (s) => s.localPricePln > 0,
@@ -434,12 +440,35 @@ export async function exportStrategyToConfluence(input: {
     ? isPl
       ? `Strategia Rady AI (${ctx.selectedOptionTitle}) — ${topTownsShort}`
       : `AI Council Strategy (${ctx.selectedOptionTitle}) — ${topTownsShort}`
-    : campaign.confluencePageTitle;
+    : hasLiveCustomBenchmarks
+      ? isPl
+        ? `Strategia lokalna (${input.detectedIndustryLabel || analysis.center}) — ${topTownsShort}`
+        : `Local Strategy (${input.detectedIndustryLabel || analysis.center}) — ${topTownsShort}`
+      : campaign.confluencePageTitle;
+
   const pageHeadline = ctx
     ? `${t.brand} — ${isPl ? "Rada Strategiczna AI" : "AI Strategy Council"}: ${ctx.selectedOptionTitle}`
-    : `${t.brand} — ${campaign.headline}`;
+    : hasLiveCustomBenchmarks
+      ? `${t.brand} — ${input.detectedIndustryLabel || analysis.center} (${analysis.radiusKm} ${t.kmUnit})`
+      : `${t.brand} — ${campaign.headline}`;
 
-  const topPain = t[template.painPoints[0].topicKey];
+  const topPain =
+    input.topPainPoint?.trim() ||
+    ctx?.criticObjections?.[0]?.trim() ||
+    (hasLiveCustomBenchmarks
+      ? isPl
+        ? "przejrzystość stawek i szybkość wyceny online"
+        : "transparent online pricing and faster quoting"
+      : t[template.painPoints[0].topicKey]);
+
+  const valueProposition =
+    ctx?.selectedOptionSummary?.trim() ||
+    (hasLiveCustomBenchmarks
+      ? isPl
+        ? "Przejrzysty cennik online dopasowany do lokalnego rynku oraz jasne warunki dojazdu w strefie."
+        : "Transparent online pricing aligned with local benchmarks and clear zone travel terms."
+      : campaign.offer);
+
   const gapText = `${avgGapPct > 0 ? "+" : ""}${avgGapPct}%`;
   const summary = formatTemplate(t.confluenceSummaryTemplate, {
     radius: analysis.radiusKm,
@@ -530,7 +559,7 @@ export async function exportStrategyToConfluence(input: {
           <strong>${escapeHtml(t.confluenceTrackedCompetitorsLabel)}:</strong> ${analysis.competitorsTracked}</p>
           <h2>${escapeHtml(t.confluenceExecSummaryHeading)}</h2>
           <p>${escapeHtml(summary)}</p>
-          <p><strong>${escapeHtml(t.confluenceOfferLabel)}:</strong> ${escapeHtml(campaign.offer)}</p>
+          <p><strong>${escapeHtml(t.confluenceOfferLabel)}:</strong> ${escapeHtml(valueProposition)}</p>
           <h2>${escapeHtml(t.confluencePricingHeading)}</h2>
           <table>
             <thead>

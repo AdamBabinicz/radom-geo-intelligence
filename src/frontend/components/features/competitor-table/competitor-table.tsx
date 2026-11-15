@@ -50,6 +50,7 @@ export interface LiveBenchmarkItem {
 export interface LiveMarketScanResult {
   source: string;
   aiEnhanced: boolean;
+  detectedIndustryLabel?: string;
   summary?: string;
   competitors: LiveCompetitorItem[];
   marketBenchmarks: LiveBenchmarkItem[];
@@ -96,12 +97,30 @@ export function CompetitorTable({
   liveScan = null,
 }: CompetitorTableProps) {
   const activeIndustry = INDUSTRY_TEMPLATES[industryId];
+  const presetKeys = new Set(activeIndustry.services.map((s) => s.serviceKey));
+  const hasPresetOverlap = market.benchmarks.some((row) =>
+    presetKeys.has(row.serviceKey),
+  );
+  const hasLiveServices = market.benchmarks.some((row) =>
+    row.serviceKey.startsWith("live:"),
+  );
+  const isCustomLiveNiche =
+    Boolean(liveScan?.detectedIndustryLabel) ||
+    (hasLiveServices && !hasPresetOverlap);
+
+  const industryBadgeLabel = liveScan?.detectedIndustryLabel
+    ? cleanDisplayText(liveScan.detectedIndustryLabel)
+    : !isCustomLiveNiche
+      ? t[activeIndustry.labelKey]
+      : null;
+
   const hasLiveCompetitors = Boolean(
     liveScan && liveScan.competitors.length > 0,
   );
   const hasLivePainPoints = Boolean(
     liveScan?.aiEnhanced && liveScan.painPoints.length > 0,
   );
+  const showPainPointsBlock = hasLivePainPoints || !isCustomLiveNiche;
 
   const uniqueSources = liveScan
     ? Array.from(
@@ -132,9 +151,11 @@ export function CompetitorTable({
       <div className="p-5 pb-4">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-sm font-semibold">{t.competitorTitle}</h2>
-          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-            {t[activeIndustry.labelKey]}
-          </span>
+          {industryBadgeLabel && (
+            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              {industryBadgeLabel}
+            </span>
+          )}
           {syncedCount > 0 && (
             <span className="rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300">
               {t.websiteSyncedBadge} · {syncedCount}
@@ -224,45 +245,47 @@ export function CompetitorTable({
         </table>
       </div>
 
-      <div className="mx-5 mb-4 mt-3 rounded-lg bg-amber-50/80 p-3 dark:bg-amber-950/30">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-[10px] font-semibold text-slate-700 dark:text-slate-200">
-            {t.reviewInsights}
-          </span>
-          <span className="text-[9px] text-slate-500 dark:text-slate-400">
-            {hasLivePainPoints ? t.competitorsScannedBadge : t.last30days}
-          </span>
+      {showPainPointsBlock && (
+        <div className="mx-5 mb-4 mt-3 rounded-lg bg-amber-50/80 p-3 dark:bg-amber-950/30">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[10px] font-semibold text-slate-700 dark:text-slate-200">
+              {t.reviewInsights}
+            </span>
+            <span className="text-[9px] text-slate-500 dark:text-slate-400">
+              {hasLivePainPoints ? t.competitorsScannedBadge : t.last30days}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {hasLivePainPoints
+              ? liveScan!.painPoints.map((pain, idx) => (
+                  <span
+                    key={`${pain.key}-${idx}`}
+                    title={cleanDisplayText(pain.evidence)}
+                    className="rounded-md bg-white px-2 py-1 text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                  >
+                    {cleanDisplayText(pain.label)}{" "}
+                    <b className="text-amber-700 dark:text-amber-300">
+                      {pain.severityScore}%
+                    </b>
+                  </span>
+                ))
+              : activeIndustry.painPoints.map((pain) => (
+                  <span
+                    key={pain.topicKey}
+                    className="rounded-md bg-white px-2 py-1 text-[9px] text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                  >
+                    {t[pain.topicKey]}{" "}
+                    <b className="text-amber-700 dark:text-amber-300">
+                      {pain.percent}%
+                    </b>
+                  </span>
+                ))}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {hasLivePainPoints
-            ? liveScan!.painPoints.map((pain, idx) => (
-                <span
-                  key={`${pain.key}-${idx}`}
-                  title={cleanDisplayText(pain.evidence)}
-                  className="rounded-md bg-white px-2 py-1 text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                >
-                  {cleanDisplayText(pain.label)}{" "}
-                  <b className="text-amber-700 dark:text-amber-300">
-                    {pain.severityScore}%
-                  </b>
-                </span>
-              ))
-            : activeIndustry.painPoints.map((pain) => (
-                <span
-                  key={pain.topicKey}
-                  className="rounded-md bg-white px-2 py-1 text-[9px] text-slate-600 dark:bg-slate-800 dark:text-slate-300"
-                >
-                  {t[pain.topicKey]}{" "}
-                  <b className="text-amber-700 dark:text-amber-300">
-                    {pain.percent}%
-                  </b>
-                </span>
-              ))}
-        </div>
-      </div>
+      )}
 
       {hasLiveCompetitors && (
-        <div className="mx-5 mb-5 rounded-lg border border-slate-200/80 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-900/40">
+        <div className="mx-5 mb-5 mt-3 rounded-lg border border-slate-200/80 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-900/40">
           <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-slate-800 dark:text-slate-100">
             <Sparkles size={13} className="text-teal-700 dark:text-teal-400" />
             {t.marketScanSummaryTitle}
