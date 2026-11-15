@@ -9,6 +9,31 @@ import type { ServiceUnitType } from "@/src/config/industries";
 
 export const runtime = "nodejs";
 
+const MAX_AI_CONTEXT_CHARS = 9_500;
+const SYNC_CACHE_TTL_MS = 15 * 60 * 1000;
+const GROQ_CHAT_COMPLETIONS_URL =
+  "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_FALLBACK_MODELS = [
+  "openai/gpt-oss-120b",
+  "qwen/qwen3.8-27b",
+  "openai/gpt-oss-20b",
+] as const;
+
+export type DetectedIndustryMatch =
+  | "upholstery"
+  | "hvac"
+  | "plumbing"
+  | "custom";
+
+export interface SiteProfile {
+  businessName?: string;
+  nichePl: string;
+  nicheEn: string;
+  matchedIndustryId: DetectedIndustryMatch;
+  searchQueriesPl: string[];
+  searchQueriesEn: string[];
+}
+
 interface ExtractedPrice {
   serviceKey: string;
   labelPl: string;
@@ -17,12 +42,20 @@ interface ExtractedPrice {
   pricePln: number;
   detectedAmount: number;
   detectedCurrency: "PLN" | "USD" | "EUR";
-  method: "gemini-ai" | "json-ld" | "html-text" | "subpage" | "spa-bundle";
+  method:
+    | "gemini-ai"
+    | "groq-ai"
+    | "json-ld"
+    | "html-text"
+    | "subpage"
+    | "spa-bundle";
   snippet: string;
 }
 
-interface GeminiExtractResult {
+interface AiExtractResult {
   prices: ExtractedPrice[] | null;
+  siteProfile?: SiteProfile;
+  aiProvider?: "gemini" | "groq";
   warning?: string;
 }
 
@@ -30,10 +63,17 @@ interface CachedSyncPayload {
   expiresAt: number;
   url: string;
   fetchedAt: string;
+  aiProvider?: "gemini" | "groq";
+  siteProfile?: SiteProfile;
   prices: ExtractedPrice[];
 }
 
-const SYNC_CACHE_TTL_MS = 15 * 60 * 1000;
+interface HtmlMetadata {
+  title: string;
+  description: string;
+  headings: string[];
+}
+
 const syncSuccessCache = new Map<string, CachedSyncPayload>();
 
 const CANONICAL_SERVICE_KEYS = new Set<string>([
@@ -134,11 +174,7 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     labelPl: "Pranie tapicerki samochodowej",
     labelEn: "Car interior upholstery cleaning",
     unitType: "fixed",
-    patterns: [
-      /tapicerk[aię]\s+samochodow/gi,
-      /auta|samochod/gi,
-      /car\s+upholstery/gi,
-    ],
+    patterns: [/tapicerk[aię]\s+samochodow/gi, /car\s+upholstery/gi],
   },
   {
     serviceKey: "live:impregnation",
@@ -242,6 +278,50 @@ function isBlockedHost(hostname: string): boolean {
   return false;
 }
 
+function decodeHtmlEntities(raw: string): string {
+  return raw
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&ndash;/gi, "–")
+    .replace(/&mdash;/gi, "—")
+    .replace(/(&sup2;|&#178;)/gi, "²")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractHtmlMetadata(html: string): HtmlMetadata {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = decodeHtmlEntities(titleMatch?.[1] ?? "").slice(0, 140);
+
+  const descMatch =
+    html.match(
+      /<meta[^>]+name=["']description["'][^>]*content=["']([\s\S]*?)["']/i,
+    ) ??
+    html.match(
+      /<meta[^>]+content=["']([\s\S]*?)["'][^>]*name=["']description["']/i,
+    );
+  const description = decodeHtmlEntities(descMatch?.[1] ?? "").slice(0, 260);
+
+  const headings: string[] = [];
+  const headingRe = /<h[1-2][^>]*>([\s\S]*?)<\/h[1-2]>/gi;
+  for (const match of html.matchAll(headingRe)) {
+    const cleaned = decodeHtmlEntities(match[1] ?? "");
+    if (
+      cleaned.length >= 3 &&
+      cleaned.length <= 120 &&
+      !headings.includes(cleaned)
+    ) {
+      headings.push(cleaned);
+    }
+    if (headings.length >= 3) break;
+  }
+
+  return { title, description, headings };
+}
+
 function normalizeCurrency(raw: unknown): "PLN" | "USD" | "EUR" {
   const val = String(raw ?? "")
     .trim()
@@ -262,7 +342,14 @@ function normalizeUnitType(raw: unknown): ServiceUnitType {
     .trim()
     .toLowerCase();
   if (val === "m2" || val === "sqm" || val === "m²") return "m2";
-  if (val === "piece" || val === "pc" || val === "pcs" || val === "unit") {
+  if (
+    val === "piece" ||
+    val === "pc" ||
+    val === "pcs" ||
+    val === "unit" ||
+    val === "szt" ||
+    val === "szt."
+  ) {
     return "piece";
   }
   return "fixed";
@@ -410,56 +497,308 @@ function htmlToCleanText(html: string): string {
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
     .replace(/(&sup2;|&#178;)/gi, "²")
     .replace(/[ \t\r\f\v]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
 }
 
-function decodeJsBundleLines(js: string): string[] {
-  const decoded = js.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
-    String.fromCharCode(parseInt(hex, 16)),
-  );
-  const lines: string[] = [];
-  const tokenRe =
-    /(?:([a-zA-Z0-9_]{2,40}):\s*)?(?:"((?:[^"\\]|\\.){2,240})"|'((?:[^'\\]|\\.){2,240})')/g;
-  for (const match of decoded.matchAll(tokenRe)) {
-    const key = match[1] ? `${match[1]}: ` : "";
-    const val = (match[2] ?? match[3] ?? "").trim();
-    if (!val || val.startsWith("M") || val.includes("{var(")) continue;
-    lines.push(`${key}${val}`);
-  }
-  return lines;
+function decodeJsEscapes(raw: string): string {
+  return raw
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+      String.fromCharCode(parseInt(hex, 16)),
+    )
+    .replace(/\\n/g, " ")
+    .replace(/\\"/g, '"')
+    .replace(/\\'/g, "'");
 }
 
-function buildHighSignalContext(lines: string[], maxChars = 16000): string {
-  const signalRe =
-    /(z[łl]|pln|usd|eur|\$|€|cennik|price|pricing|od\s+\d+|m²|m2|szt\.?|dywan|wyk[łl]adzin|tapicerk|krzes|naro[żz]nik|sofa|kanap|fotel|wersalk|tapczan|materac|kostk|p[łl]yt|taras|dosusz|ozon|impregn|sk[óo]r|carpet|floor|chair|sofa|couch|armchair|mattress|paver|tile|drying|klimatyzac|pomp|wentylac|kocio|wyciek|kanaliz|hvac|plumb|boiler|drain|us[łl]ug|pranie|mycie|czyszczen)/i;
+function isJsArtifactLine(line: string): boolean {
+  return (
+    /\$1|\$2|=>|&&|\{\}|\bfunction\s*\(|\bclassName\b|\bdisplayName\b|\bcreateElement\b|^\s*[,;\]})]/i.test(
+      line,
+    ) ||
+    /^(?:https?:|\/assets\/|\/static\/|#|rgba?\(|M\d|L\d|(?:flex|grid|text|bg|px|py|mx|my|rounded|border|shadow)-)/i.test(
+      line,
+    )
+  );
+}
+
+function formatReadableKeySlug(rawKey: string): string {
+  return rawKey
+    .replace(
+      /^(?:attractionsData|specification\.label|service|services|offer|offers|pricing|priceList)\./i,
+      "",
+    )
+    .replace(/(?:PriceTag|Price|Cost|Rate|Fee|Item|RentalItem)$/i, "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[-_.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeJsBundleLines(jsRaw: string): string[] {
+  const js = decodeJsEscapes(jsRaw);
+  const strMap = new Map<string, string>();
+  // Match BOTH quoted ("specification.label.x": "val") AND unquoted (carpetPriceTag: "val") keys
+  const keyPairRe =
+    /(?:["']([a-zA-Z0-9_.-]{2,90})["']|([a-zA-Z0-9_.-]{2,48}))\s*:\s*(?:"((?:[^"\\]|\\.){1,180})"|'((?:[^'\\]|\\.){1,180})')/g;
+
+  for (const match of js.matchAll(keyPairRe)) {
+    const key = match[1] ?? match[2];
+    const value = (match[3] ?? match[4] ?? "").replace(/\s+/g, " ").trim();
+    if (!key || !value || isJsArtifactLine(value)) continue;
+    if (!strMap.has(key)) {
+      strMap.set(key, value);
+    }
+  }
+
+  const resolveKeyText = (key: string | undefined): string => {
+    if (!key) return "";
+    if (strMap.has(key)) return strMap.get(key) ?? "";
+    const tail = key.split(".").pop();
+    if (tail && strMap.has(tail)) return strMap.get(tail) ?? "";
+    return formatReadableKeySlug(key);
+  };
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const pushLine = (line: string) => {
+    const clean = line.replace(/\s+/g, " ").trim();
+    if (!clean || clean.length < 4 || seen.has(clean)) return;
+    seen.add(clean);
+    out.push(clean);
+  };
+
+  // 1. Generic unquoted JS price objects: { ... base|price|cost|amount|rate|fee: <num> ... }
+  const objPriceRe =
+    /\b(?:base|price|cost|amount|rate|fee|minPrice|startingPrice)\s*:\s*(\d{1,6}(?:[.,]\d{1,2})?)\b/g;
+  const catalogEntries: Array<{
+    primary: string;
+    label: string;
+    period: string;
+    line: string;
+  }> = [];
+
+  for (const match of js.matchAll(objPriceRe)) {
+    const num = Number(match[1].replace(",", "."));
+    if (!Number.isFinite(num) || num <= 0 || num > 100_000) continue;
+    const idx = match.index ?? 0;
+
+    // Keep scan strictly inside the same {...} object
+    const openBrace = js.lastIndexOf("{", idx);
+    const closeBrace = js.indexOf("}", idx);
+    const ownStart =
+      openBrace !== -1
+        ? Math.max(openBrace, idx - 260)
+        : Math.max(0, idx - 200);
+    const ownEnd =
+      closeBrace > idx ? Math.min(closeBrace + 1, idx + 240) : idx + 200;
+    const ownObj = js.slice(ownStart, ownEnd);
+
+    const currencyRaw = ownObj.match(
+      /\bcurrency\s*:\s*["']([a-zA-Z$€]{1,5})["']/i,
+    )?.[1];
+    const period =
+      ownObj.match(/\bperiod\s*:\s*["']([^"']{1,40})["']/i)?.[1]?.trim() ?? "";
+    if (/^gratis|free$/i.test(period)) continue;
+
+    const ownName = ownObj.match(
+      /\b(?:name|title)\s*:\s*["']([^"']{2,90})["']/i,
+    )?.[1];
+    const ownLabelKey = ownObj.match(
+      /\b(?:labelKey|titleKey|nameKey)\s*:\s*["']([^"']{2,90})["']/i,
+    )?.[1];
+    const ownCapKey = ownObj.match(
+      /\b(?:capacityKey|variantKey|optionKey)\s*:\s*["']([^"']{2,90})["']/i,
+    )?.[1];
+    const ownDescKey = ownObj.match(
+      /\bdescriptionKey\s*:\s*["']([^"']{2,90})["']/i,
+    )?.[1];
+
+    if (!currencyRaw && !period && !ownName && !ownLabelKey) continue;
+
+    // Enclosing product/category name strictly to the LEFT
+    const widerLeft = js.slice(Math.max(0, idx - 1800), idx);
+    const parentNameMatches = Array.from(
+      widerLeft.matchAll(/\bname\s*:\s*["']([^"']{2,80})["']/g),
+    );
+    const parentName =
+      parentNameMatches.length > 0
+        ? parentNameMatches[parentNameMatches.length - 1][1]
+        : "";
+    const parentTitleMatches = Array.from(
+      widerLeft.matchAll(/\btitle\s*:\s*["']([^"']{2,80})["']/g),
+    );
+    const parentTitle =
+      parentTitleMatches.length > 0
+        ? parentTitleMatches[parentTitleMatches.length - 1][1]
+        : "";
+
+    const primaryLabel = ownName || parentName || parentTitle;
+    const resolvedLabel = ownLabelKey ? resolveKeyText(ownLabelKey) : "";
+    const resolvedDesc = ownDescKey ? resolveKeyText(ownDescKey) : "";
+    const resolvedCap = ownCapKey ? resolveKeyText(ownCapKey) : "";
+
+    const labelParts = [
+      primaryLabel,
+      resolvedLabel,
+      resolvedDesc,
+      resolvedCap,
+    ].filter((part, i, arr) => Boolean(part) && arr.indexOf(part) === i);
+
+    if (labelParts.length === 0) continue;
+
+    const fullLabel = labelParts.join(" — ");
+    const currency = normalizeCurrency(currencyRaw || "PLN");
+    const periodSuffix = period ? ` / ${period}` : "";
+    catalogEntries.push({
+      primary: primaryLabel,
+      label: fullLabel,
+      period,
+      line: `CATALOG_ITEM: ${fullLabel} : ${num} ${currency}${periodSuffix}`,
+    });
+  }
+
+  // Filter redundant section-level "od" summary rows if specific items for the same category exist
+  const primariesWithDetails = new Set(
+    catalogEntries
+      .filter((e) => e.primary && !/^od|from$/i.test(e.period))
+      .map((e) => e.primary),
+  );
+  for (const entry of catalogEntries) {
+    if (
+      /^od|from$/i.test(entry.period) &&
+      entry.label === entry.primary &&
+      primariesWithDetails.has(entry.primary)
+    ) {
+      continue;
+    }
+    pushLine(entry.line);
+  }
+
+  // 2. Generic key -> price string pairs (i18n bundles)
+  const priceTextRe =
+    /(?:\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)\b|(?:€|\$|pln|eur)\s*\d)/i;
+  for (const [key, value] of strMap.entries()) {
+    if (value.length > 180 || !priceTextRe.test(value)) continue;
+    if (
+      /^(?:€|\$|usd|eur)?\s*\d+(?:[.,]\d+)?\s*(?:z[łl]|pln)?$/i.test(value) &&
+      key.length < 3
+    ) {
+      continue;
+    }
+    const baseKey = key.replace(/(?:PriceTag|Price|Cost|Rate|Fee)$/i, "");
+    const resolvedBase =
+      baseKey !== key && strMap.has(baseKey) ? `${strMap.get(baseKey)} — ` : "";
+    const readableKey = formatReadableKeySlug(key);
+    const prefix = readableKey ? `${readableKey}: ` : "";
+    pushLine(`KEY_PAIR: ${prefix}${resolvedBase}${value}`);
+  }
+
+  // 3. Standalone quoted strings containing explicit currency/price
+  const literalRe = /(?:"((?:[^"\\]|\\.){4,220})"|'((?:[^'\\]|\\.){4,220})')/g;
+  for (const match of js.matchAll(literalRe)) {
+    const val = (match[1] ?? match[2] ?? "").replace(/\s+/g, " ").trim();
+    if (!val || isJsArtifactLine(val) || !priceTextRe.test(val)) continue;
+    pushLine(val);
+  }
+
+  return out;
+}
+
+function buildHighSignalContext(
+  metadata: HtmlMetadata,
+  lines: string[],
+  maxChars = MAX_AI_CONTEXT_CHARS,
+): string {
+  const headerLines: string[] = [];
+  if (metadata.title) headerLines.push(`SITE_TITLE: ${metadata.title}`);
+  if (metadata.description) {
+    headerLines.push(`SITE_DESC: ${metadata.description}`);
+  }
+  if (metadata.headings.length > 0) {
+    headerLines.push(`SITE_HEADINGS: ${metadata.headings.join(" | ")}`);
+  }
+
+  const priceSignalRe =
+    /(?:^CATALOG_ITEM:\s|^KEY_PAIR:\s|\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)\b|(?:€|\$|pln|eur)\s*\d|cennik|cena|od\s+\d|from\s+\d|\/\s*(?:m²|m2|szt|pc|h|godz|dzie[ńn]|day|hour|event|imprez|os))/i;
+
   const pickedIndices = new Set<number>();
   lines.forEach((line, idx) => {
-    if (signalRe.test(line)) {
-      for (
-        let k = Math.max(0, idx - 1);
-        k <= Math.min(lines.length - 1, idx + 1);
-        k++
+    if (isJsArtifactLine(line)) return;
+    if (priceSignalRe.test(line)) {
+      if (
+        !line.startsWith("CATALOG_ITEM:") &&
+        !line.startsWith("KEY_PAIR:") &&
+        idx > 0 &&
+        !isJsArtifactLine(lines[idx - 1])
       ) {
-        pickedIndices.add(k);
+        pickedIndices.add(idx - 1);
       }
+      pickedIndices.add(idx);
     }
   });
+
   const seen = new Set<string>();
-  const uniqueLines: string[] = [];
+  const catalogLines: string[] = [];
+  const keyLines: string[] = [];
+  const generalLines: string[] = [];
+
   Array.from(pickedIndices)
     .sort((a, b) => a - b)
     .forEach((idx) => {
-      const trimmed = lines[idx]?.trim();
-      if (trimmed && !seen.has(trimmed)) {
-        seen.add(trimmed);
-        uniqueLines.push(trimmed);
+      const trimmed = lines[idx]?.replace(/\s+/g, " ").trim();
+      if (!trimmed || trimmed.length < 3 || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      if (trimmed.startsWith("CATALOG_ITEM:")) {
+        catalogLines.push(trimmed.replace(/^CATALOG_ITEM:\s*/, "- "));
+      } else if (trimmed.startsWith("KEY_PAIR:")) {
+        keyLines.push(trimmed);
+      } else {
+        generalLines.push(trimmed);
       }
     });
-  const fallbackLines = uniqueLines.length > 0 ? uniqueLines : lines;
-  return fallbackLines.join("\n").slice(0, maxChars);
+
+  if (
+    catalogLines.length === 0 &&
+    keyLines.length === 0 &&
+    generalLines.length === 0
+  ) {
+    for (const line of lines.slice(0, 60)) {
+      const trimmed = line.replace(/\s+/g, " ").trim();
+      if (trimmed && !isJsArtifactLine(trimmed) && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        generalLines.push(trimmed);
+      }
+    }
+  }
+
+  const ordered: string[] = [...headerLines];
+  if (catalogLines.length > 0) {
+    ordered.push("CATALOG_PRICE_ITEMS:");
+    ordered.push(...catalogLines);
+  }
+  if (keyLines.length > 0) {
+    ordered.push("KEYED_PRICES:");
+    ordered.push(...keyLines);
+  }
+  if (generalLines.length > 0) {
+    ordered.push("PAGE_PRICE_LINES:");
+    ordered.push(...generalLines);
+  }
+
+  const chunks: string[] = [];
+  let totalLen = 0;
+  for (const line of ordered) {
+    const nextLen = totalLen + line.length + 1;
+    if (nextLen > maxChars) break;
+    chunks.push(line);
+    totalLen = nextLen;
+  }
+  return chunks.join("\n");
 }
 
 function matchPriceInWindow(windowText: string): {
@@ -468,8 +807,9 @@ function matchPriceInWindow(windowText: string): {
   detectedCurrency: "PLN" | "USD" | "EUR";
 } | null {
   const priceSuffixRe =
-    /(?:od|from)?\s*(\d{1,4}(?:[.,]\d{1,2})?)\s*(z[łl]|pln|usd|eur|\$|€)/i;
-  const pricePrefixRe = /(\$|€|usd|eur)\s*(\d{1,4}(?:[.,]\d{1,2})?)/i;
+    /(?:od|from)?\s*(\d{1,5}(?:[.,]\d{1,2})?)(?:\s*[-–]\s*\d{1,5}(?:[.,]\d{1,2})?)?\s*(z[łl]|pln|usd|eur|\$|€)/i;
+  const pricePrefixRe = /(\$|€|usd|eur)\s*(\d{1,5}(?:[.,]\d{1,2})?)/i;
+
   const suffixMatch = windowText.match(priceSuffixRe);
   if (suffixMatch) {
     const amount = Number(suffixMatch[1].replace(",", "."));
@@ -482,6 +822,7 @@ function matchPriceInWindow(windowText: string): {
       };
     }
   }
+
   const prefixMatch = windowText.match(pricePrefixRe);
   if (prefixMatch) {
     const amount = Number(prefixMatch[2].replace(",", "."));
@@ -494,18 +835,69 @@ function matchPriceInWindow(windowText: string): {
       };
     }
   }
+
   return null;
 }
 
-function scanTextIntoMap(
-  text: string,
-  method: ExtractedPrice["method"],
-  byService: Map<string, ExtractedPrice>,
-) {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 1);
+function inferUnitTypeFromText(text: string): ServiceUnitType {
+  if (/m2|m²|mkw|sq\s*m/i.test(text)) return "m2";
+  if (
+    /(?:szt|pc|pcs|os\.|person|hour|godz|dzie[ńn]|day|imprez|event)/i.test(text)
+  ) {
+    return "piece";
+  }
+  return "fixed";
+}
+
+function extractDeterministicFallback(
+  contextLines: string[],
+  html: string,
+  hasSubpages: boolean,
+  hasSpaBundle: boolean,
+): ExtractedPrice[] {
+  const byService = extractFromJsonLd(html);
+
+  // 1. Parse pre-extracted CATALOG_ITEM lines deterministically (industry-agnostic)
+  for (const line of contextLines) {
+    if (!line.startsWith("CATALOG_ITEM:")) continue;
+    const match = line.match(
+      /^CATALOG_ITEM:\s*(.+?)\s*:\s*(\d{1,6}(?:[.,]\d{1,2})?)\s*(PLN|USD|EUR)(?:\s*\/\s*(.+))?$/i,
+    );
+    if (!match) continue;
+    const rawLabel = match[1].trim();
+    const amount = Number(match[2].replace(",", "."));
+    const currency = normalizeCurrency(match[3]);
+    const period = (match[4] ?? "").trim();
+    if (!rawLabel || !Number.isFinite(amount) || amount <= 0) continue;
+
+    const unitSuffix = period ? ` (${period})` : "";
+    const fullLabel = `${rawLabel}${unitSuffix}`.slice(0, 80);
+    const slug = toAsciiSlug(fullLabel);
+    const key = slug ? `live:${slug}` : "";
+    if (!key || byService.has(key)) continue;
+
+    byService.set(key, {
+      serviceKey: key,
+      labelPl: fullLabel,
+      labelEn: fullLabel,
+      unitType: inferUnitTypeFromText(period || rawLabel),
+      pricePln: toPln(amount, currency),
+      detectedAmount: amount,
+      detectedCurrency: currency,
+      method: hasSpaBundle ? "spa-bundle" : "html-text",
+      snippet: rawLabel.slice(0, 110),
+    });
+  }
+
+  // 2. Match canonical service rules on remaining clean lines
+  const cleanLines = contextLines
+    .map((line) => line.replace(/^KEY_PAIR:\s*/i, "").trim())
+    .filter(
+      (line) =>
+        line.length > 1 &&
+        !line.startsWith("CATALOG_ITEM:") &&
+        !line.startsWith("SITE_"),
+    );
 
   const tryMatchSegment = (
     entry: FallbackKeywordRule,
@@ -516,7 +908,7 @@ function scanTextIntoMap(
       const match = segment.match(testRe);
       if (!match || match.index === undefined) continue;
       const forward = segment.slice(match.index, match.index + 140);
-      const found = matchPriceInWindow(forward) ?? matchPriceInWindow(segment);
+      const found = matchPriceInWindow(forward);
       if (found) {
         byService.set(entry.serviceKey, {
           serviceKey: entry.serviceKey,
@@ -524,7 +916,11 @@ function scanTextIntoMap(
           labelEn: entry.labelEn,
           unitType: entry.unitType,
           ...found,
-          method,
+          method: hasSubpages
+            ? "subpage"
+            : hasSpaBundle
+              ? "spa-bundle"
+              : "html-text",
           snippet: segment.slice(0, 110).trim(),
         });
         return true;
@@ -536,55 +932,213 @@ function scanTextIntoMap(
   for (const entry of FALLBACK_SERVICE_RULES) {
     if (byService.has(entry.serviceKey)) continue;
     let matched = false;
-    for (let i = 0; i < lines.length && !matched; i++) {
-      matched = tryMatchSegment(entry, lines[i]);
+    for (let i = 0; i < cleanLines.length && !matched; i++) {
+      matched = tryMatchSegment(entry, cleanLines[i]);
     }
     if (!matched) {
-      for (let i = 0; i < lines.length - 1 && !matched; i++) {
-        const pair = `${lines[i]} · ${lines[i + 1]}`;
+      for (let i = 0; i < cleanLines.length - 1 && !matched; i++) {
+        const pair = `${cleanLines[i]} · ${cleanLines[i + 1]}`;
         if (pair.length <= 180) {
           matched = tryMatchSegment(entry, pair);
         }
       }
     }
   }
+
+  return Array.from(byService.values()).slice(0, 25);
 }
+
+interface RawAiPriceRow {
+  serviceKey?: unknown;
+  labelPl?: unknown;
+  labelEn?: unknown;
+  unitType?: unknown;
+  detectedAmount?: unknown;
+  detectedCurrency?: unknown;
+  snippet?: unknown;
+}
+
+interface RawAiSiteProfile {
+  businessName?: unknown;
+  nichePl?: unknown;
+  nicheEn?: unknown;
+  matchedIndustryId?: unknown;
+  searchQueriesPl?: unknown;
+  searchQueriesEn?: unknown;
+}
+
+interface RawAiResponsePayload {
+  siteProfile?: RawAiSiteProfile;
+  prices?: RawAiPriceRow[];
+}
+
+function normalizeSiteProfile(
+  raw: RawAiSiteProfile | undefined,
+  metadata: HtmlMetadata,
+  prices: ExtractedPrice[],
+): SiteProfile {
+  const rawMatch = String(raw?.matchedIndustryId ?? "")
+    .trim()
+    .toLowerCase();
+  const matchedIndustryId: DetectedIndustryMatch =
+    rawMatch === "upholstery" || rawMatch === "hvac" || rawMatch === "plumbing"
+      ? rawMatch
+      : "custom";
+
+  const normalizeQueries = (list: unknown): string[] =>
+    Array.isArray(list)
+      ? list
+          .map((q) => String(q ?? "").trim())
+          .filter((q) => q.length >= 3 && q.length <= 90)
+          .slice(0, 4)
+      : [];
+
+  const fallbackNiche =
+    metadata.title ||
+    metadata.headings[0] ||
+    prices[0]?.labelPl ||
+    "Lokalna firma usługowa";
+
+  const nichePl = String(raw?.nichePl ?? "").trim() || fallbackNiche;
+  const nicheEn = String(raw?.nicheEn ?? "").trim() || fallbackNiche;
+  const businessName =
+    String(raw?.businessName ?? "").trim() ||
+    metadata.title.split(/[–—|-]/)[0]?.trim() ||
+    undefined;
+
+  const queriesPl = normalizeQueries(raw?.searchQueriesPl);
+  const queriesEn = normalizeQueries(raw?.searchQueriesEn);
+
+  if (queriesPl.length === 0) {
+    const derived = prices
+      .slice(0, 3)
+      .map((p) => p.labelPl.replace(/\s*\([^)]*\)/g, "").trim())
+      .filter(Boolean);
+    if (derived.length > 0) queriesPl.push(...derived);
+  }
+  if (queriesEn.length === 0) {
+    const derived = prices
+      .slice(0, 3)
+      .map((p) => p.labelEn.replace(/\s*\([^)]*\)/g, "").trim())
+      .filter(Boolean);
+    if (derived.length > 0) queriesEn.push(...derived);
+  }
+
+  return {
+    businessName,
+    nichePl: nichePl.slice(0, 90),
+    nicheEn: nicheEn.slice(0, 90),
+    matchedIndustryId,
+    searchQueriesPl: queriesPl,
+    searchQueriesEn: queriesEn,
+  };
+}
+
+function normalizeAiPayload(
+  parsed: RawAiResponsePayload,
+  metadata: HtmlMetadata,
+  method: "gemini-ai" | "groq-ai",
+): { prices: ExtractedPrice[]; siteProfile: SiteProfile } | null {
+  if (!Array.isArray(parsed.prices)) return null;
+
+  const deduped = new Map<string, ExtractedPrice>();
+  for (const item of parsed.prices) {
+    const labelEn = String(item.labelEn ?? item.labelPl ?? "").trim();
+    const labelPl = String(item.labelPl ?? item.labelEn ?? "").trim();
+    if (!labelPl && !labelEn) continue;
+    const key = normalizeExtractedServiceKey(
+      item.serviceKey,
+      labelEn || labelPl,
+    );
+    if (!key || deduped.has(key)) continue;
+    const amount = Number(item.detectedAmount);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const currency = normalizeCurrency(item.detectedCurrency);
+    deduped.set(key, {
+      serviceKey: key,
+      labelPl: labelPl.slice(0, 80),
+      labelEn: labelEn.slice(0, 80),
+      unitType: normalizeUnitType(item.unitType),
+      pricePln: toPln(amount, currency),
+      detectedAmount: amount,
+      detectedCurrency: currency,
+      method,
+      snippet: String(item.snippet ?? "")
+        .slice(0, 110)
+        .trim(),
+    });
+  }
+
+  const list = Array.from(deduped.values()).slice(0, 25);
+  if (list.length === 0) return null;
+
+  return {
+    prices: list,
+    siteProfile: normalizeSiteProfile(parsed.siteProfile, metadata, list),
+  };
+}
+
+const AI_SYSTEM_INSTRUCTION =
+  "You analyze compact website pricing extracts from ANY service or rental company (event/party rentals, cleaning, HVAC, plumbing, automotive, catering, medical, etc.) and return strict JSON.\n" +
+  "1) Build 'siteProfile': detect 'businessName', concise 'nichePl' (Polish, 2-6 words), concise 'nicheEn' (English, 2-6 words), 'matchedIndustryId' ('upholstery' | 'hvac' | 'plumbing' | 'custom' — choose 'custom' unless the business is genuinely carpet/upholstery cleaning, HVAC, or plumbing), and 3-4 short local search query stems WITHOUT city names in 'searchQueriesPl' and 'searchQueriesEn'.\n" +
+  "2) Extract EVERY distinct customer service, attraction, or rental option into 'prices' (up to 25 items). CRITICAL: You MUST include ALL items listed under CATALOG_PRICE_ITEMS (each tent size, table/chair rental, inflatable, machine, package, etc.) PLUS any additional priced services from PAGE_PRICE_LINES or KEYED_PRICES. Never return only add-ons while skipping main catalog items.\n" +
+  "Reuse canonical keys ONLY if exact match: [carpetArea, carpetFlooring, upholsteryChair, twoSeatCouch, cornerSofa, acService, heatPumpCheck, ductCleaning, leakRepair, boilerService, drainUnclog]. For everything else generate unique descriptive 'live:<slug>' keys (keep distinct sizes/packages separate, e.g. 6x6m vs 6x10m).\n" +
+  "For ranges like '20 - 50 zł' or '3,5 - 5 PLN', use the starting price as 'detectedAmount'. Strictly exclude travel/distance fees (dojazd, PLN/km), security deposits (zadatek, kaucja), and 0 PLN freebies.";
 
 async function extractWithGemini(
   websiteUrl: string,
   contextText: string,
-): Promise<GeminiExtractResult> {
+  metadata: HtmlMetadata,
+): Promise<AiExtractResult> {
   const ai = getGeminiClient();
   if (!ai) {
     return {
       prices: null,
-      warning: "GEMINI_API_KEY is not available in Next.js server process.",
+      warning: "GEMINI_API_KEY is not configured.",
     };
   }
   if (!contextText.trim()) {
     return {
       prices: null,
-      warning:
-        "No high-signal pricing text was extracted from the target site.",
+      warning: "No high-signal pricing text was extracted from target site.",
     };
   }
+
   try {
     const response = await ai.models.generateContent({
       model: GEMINI_TEXT_MODEL,
-      contents: `Target website: ${websiteUrl}\n\nExtracted pricing & service text:\n${contextText}`,
+      contents: `Target website: ${websiteUrl}\n\nCompact site context:\n${contextText}`,
       config: {
         thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        systemInstruction:
-          "You dynamically discover and extract EVERY explicitly priced customer service published on a company website or its SPA JS bundle (up to 20 distinct services). " +
-          "Canonical keys to reuse ONLY when the service clearly matches: " +
-          "[carpetArea (carpet/dywan per m²), carpetFlooring (fitted carpet/wykładzina per m²), upholsteryChair (chair/krzesło per piece), twoSeatCouch (couch/sofa/kanapa/wersalka), cornerSofa (corner sofa/narożnik), acService, heatPumpCheck, ductCleaning, leakRepair, boilerService, drainUnclog]. " +
-          "For ANY other service offered on the site (e.g., armchair/fotel, mattress/materac, paver washing/kostka brukowa, tile/terrace washing/płytki, drying fan/dosuszanie, leather care, ozone treatment, etc.), generate a clean descriptive slug prefixed with 'live:' (e.g., 'live:armchair-cleaning', 'live:paver-cleaning', 'live:mattress-double', 'live:tile-cleaning', 'live:drying-service'). " +
-          "For EVERY item provide concise natural 'labelPl' and 'labelEn' (include unit hint like '(za m²)' / '(per m²)' or '(za szt.)' / '(per pc)' when unit-priced), 'unitType' ('m2', 'piece', or 'fixed'), and 'detectedAmount' (for price ranges like '200-250 zł', use the starting price 200). " +
-          "Never invent prices, never include minimum order thresholds or travel fees as services, and never merge distinct items (e.g., keep chair, armchair, couch, corner sofa, single vs double mattress separate when separately priced).",
+        systemInstruction: AI_SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
+            siteProfile: {
+              type: Type.OBJECT,
+              properties: {
+                businessName: { type: Type.STRING },
+                nichePl: { type: Type.STRING },
+                nicheEn: { type: Type.STRING },
+                matchedIndustryId: { type: Type.STRING },
+                searchQueriesPl: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+                searchQueriesEn: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+              },
+              required: [
+                "nichePl",
+                "nicheEn",
+                "matchedIndustryId",
+                "searchQueriesPl",
+                "searchQueriesEn",
+              ],
+            },
             prices: {
               type: Type.ARRAY,
               items: {
@@ -610,86 +1164,123 @@ async function extractWithGemini(
               },
             },
           },
-          required: ["prices"],
+          required: ["siteProfile", "prices"],
         },
       },
     });
-    const parsed = parseJsonSafe<{
-      prices?: Array<{
-        serviceKey?: string;
-        labelPl?: string;
-        labelEn?: string;
-        unitType?: string;
-        detectedAmount?: number;
-        detectedCurrency?: string;
-        snippet?: string;
-      }>;
-    }>(response.text, {});
-    if (!Array.isArray(parsed.prices)) {
+
+    const parsed = parseJsonSafe<RawAiResponsePayload>(response.text, {});
+    const normalized = normalizeAiPayload(parsed, metadata, "gemini-ai");
+    if (!normalized) {
       console.warn(
-        "[/api/pricing/sync] Gemini returned non-JSON or missing prices array:",
-        (response.text ?? "").slice(0, 200),
+        "[/api/pricing/sync] Gemini returned empty or malformed pricing JSON.",
       );
       return {
         prices: null,
-        warning: "Gemini response did not contain a valid prices array.",
+        warning: "Gemini did not return valid pricing rows.",
       };
     }
-    const deduped = new Map<string, ExtractedPrice>();
-    for (const item of parsed.prices) {
-      const labelEn = String(item.labelEn ?? item.labelPl ?? "").trim();
-      const labelPl = String(item.labelPl ?? item.labelEn ?? "").trim();
-      if (!labelPl && !labelEn) continue;
-      const key = normalizeExtractedServiceKey(
-        item.serviceKey,
-        labelEn || labelPl,
-      );
-      if (!key || deduped.has(key)) continue;
-      const amount = Number(item.detectedAmount);
-      if (!Number.isFinite(amount) || amount <= 0) continue;
-      const currency = normalizeCurrency(item.detectedCurrency);
-      deduped.set(key, {
-        serviceKey: key,
-        labelPl: labelPl.slice(0, 80),
-        labelEn: labelEn.slice(0, 80),
-        unitType: normalizeUnitType(item.unitType),
-        pricePln: toPln(amount, currency),
-        detectedAmount: amount,
-        detectedCurrency: currency,
-        method: "gemini-ai",
-        snippet: String(item.snippet ?? "")
-          .slice(0, 110)
-          .trim(),
-      });
-    }
-    const list = Array.from(deduped.values());
-    if (list.length === 0) {
-      return {
-        prices: null,
-        warning: "Gemini extracted 0 priced services from target context.",
-      };
-    }
-    return { prices: list };
+
+    return {
+      prices: normalized.prices,
+      siteProfile: normalized.siteProfile,
+      aiProvider: "gemini",
+    };
   } catch (err) {
-    const message =
+    const rawMsg =
       err instanceof Error ? err.message : String(err ?? "Unknown error");
-    console.error("[/api/pricing/sync] extractWithGemini error:", message);
+    console.warn(
+      "[/api/pricing/sync] Gemini request failed:",
+      rawMsg.slice(0, 220),
+    );
     return {
       prices: null,
-      warning: `Gemini extraction error: ${message.slice(0, 260)}`,
+      warning: "Gemini temporary unavailability.",
     };
   }
+}
+
+async function extractWithGroq(
+  websiteUrl: string,
+  contextText: string,
+  metadata: HtmlMetadata,
+): Promise<AiExtractResult> {
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  if (!groqKey || !contextText.trim()) {
+    return { prices: null };
+  }
+
+  for (const model of GROQ_FALLBACK_MODELS) {
+    try {
+      const response = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${groqKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.1,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content:
+                AI_SYSTEM_INSTRUCTION +
+                ' Return JSON matching exact shape: {"siteProfile":{"businessName":"...","nichePl":"...","nicheEn":"...","matchedIndustryId":"upholstery|hvac|plumbing|custom","searchQueriesPl":["..."],"searchQueriesEn":["..."]},"prices":[{"serviceKey":"...","labelPl":"...","labelEn":"...","unitType":"m2|piece|fixed","detectedAmount":100,"detectedCurrency":"PLN|USD|EUR","snippet":"..."}]}.',
+            },
+            {
+              role: "user",
+              content: `Target website: ${websiteUrl}\n\nCompact site context:\n${contextText}`,
+            },
+          ],
+        }),
+        signal: AbortSignal.timeout(12_000),
+      });
+
+      if (!response.ok) {
+        console.warn(
+          `[/api/pricing/sync] Groq ${model} HTTP ${response.status}`,
+        );
+        continue;
+      }
+
+      const json = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = json.choices?.[0]?.message?.content;
+      const parsed = parseJsonSafe<RawAiResponsePayload>(content, {});
+      const normalized = normalizeAiPayload(parsed, metadata, "groq-ai");
+      if (normalized) {
+        return {
+          prices: normalized.prices,
+          siteProfile: normalized.siteProfile,
+          aiProvider: "groq",
+        };
+      }
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : String(err ?? "Unknown error");
+      console.warn(
+        `[/api/pricing/sync] Groq ${model} failed:`,
+        msg.slice(0, 160),
+      );
+    }
+  }
+
+  return { prices: null };
 }
 
 function findPricingSubpages(html: string, baseUrl: URL): string[] {
   const candidates = new Set<string>();
   const linkRe = /<a[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  const hintRe = /(cennik|pricing|oferta|ceny|us[łl]ug|services|rates)/i;
+  const hintRe =
+    /(cennik|pricing|oferta|ceny|us[łl]ug|services|rates|wynajem|atrakcj)/i;
   for (const match of html.matchAll(linkRe)) {
     const href = match[1].trim();
     const label = match[2].replace(/<[^>]+>/g, " ").trim();
     if (!hintRe.test(href) && !hintRe.test(label)) continue;
-    if (/\.(pdf|jpg|jpeg|png|webp|svg)$/i.test(href)) continue;
+    if (/\.(pdf|jpg|jpeg|png|webp|svg|avif)$/i.test(href)) continue;
     try {
       const resolved = new URL(href, baseUrl);
       if (resolved.origin !== baseUrl.origin) continue;
@@ -722,7 +1313,7 @@ async function fetchTextSafe(targetUrl: string): Promise<string | null> {
   try {
     const response = await fetch(targetUrl, {
       headers: {
-        "User-Agent": "NorthstarOps-PriceSync/2.0 (+https://northstar-ops.app)",
+        "User-Agent": "NorthstarOps-PriceSync/3.1 (+https://northstar-ops.app)",
         Accept: "text/html,application/xhtml+xml,application/javascript,*/*",
       },
       signal: AbortSignal.timeout(8000),
@@ -733,6 +1324,13 @@ async function fetchTextSafe(targetUrl: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function buildFallbackSiteProfile(
+  metadata: HtmlMetadata,
+  prices: ExtractedPrice[],
+): SiteProfile {
+  return normalizeSiteProfile(undefined, metadata, prices);
 }
 
 async function handleSync(rawUrl: string) {
@@ -764,10 +1362,12 @@ async function handleSync(rawUrl: string) {
     return NextResponse.json({
       source: "live-website",
       aiEnhanced: true,
+      aiProvider: cached.aiProvider,
       cached: true,
       url: cached.url,
       fetchedAt: cached.fetchedAt,
       extractedCount: cached.prices.length,
+      siteProfile: cached.siteProfile,
       prices: cached.prices,
     });
   }
@@ -779,62 +1379,100 @@ async function handleSync(rawUrl: string) {
       { status: 502 },
     );
   }
+
+  const metadata = extractHtmlMetadata(html);
   const contextLines: string[] = [];
   const mainCleanText = htmlToCleanText(html);
   if (mainCleanText) contextLines.push(...mainCleanText.split("\n"));
+
   const subpages = findPricingSubpages(html, parsedUrl);
   for (const subUrl of subpages) {
     const subHtml = await fetchTextSafe(subUrl);
     if (!subHtml) continue;
     contextLines.push(...htmlToCleanText(subHtml).split("\n"));
   }
-  if (mainCleanText.length < 800 || contextLines.length < 15) {
+
+  const combinedSoFar = contextLines.join("\n");
+  const hasVisiblePriceSignals = /\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)\b/i.test(
+    combinedSoFar,
+  );
+
+  let hasSpaBundle = false;
+  if (
+    !hasVisiblePriceSignals ||
+    mainCleanText.length < 1200 ||
+    contextLines.length < 20
+  ) {
     const scripts = findSameOriginScripts(html, parsedUrl);
     for (const scriptUrl of scripts) {
       const jsText = await fetchTextSafe(scriptUrl);
       if (!jsText) continue;
-      contextLines.push(...decodeJsBundleLines(jsText));
+      const bundleLines = decodeJsBundleLines(jsText);
+      if (bundleLines.length > 0) {
+        hasSpaBundle = true;
+        contextLines.push(...bundleLines);
+      }
     }
   }
-  const highSignalContext = buildHighSignalContext(contextLines);
-  const aiResult = await extractWithGemini(
+
+  const highSignalContext = buildHighSignalContext(metadata, contextLines);
+
+  let aiResult = await extractWithGemini(
     parsedUrl.toString(),
     highSignalContext,
+    metadata,
   );
+
+  if (!aiResult.prices || aiResult.prices.length === 0) {
+    const groqResult = await extractWithGroq(
+      parsedUrl.toString(),
+      highSignalContext,
+      metadata,
+    );
+    if (groqResult.prices && groqResult.prices.length > 0) {
+      aiResult = groqResult;
+    }
+  }
+
   if (aiResult.prices && aiResult.prices.length > 0) {
     const fetchedAt = new Date().toISOString();
     syncSuccessCache.set(normalizedKey, {
       expiresAt: Date.now() + SYNC_CACHE_TTL_MS,
       url: parsedUrl.toString(),
       fetchedAt,
+      aiProvider: aiResult.aiProvider,
+      siteProfile: aiResult.siteProfile,
       prices: aiResult.prices,
     });
     return NextResponse.json({
       source: "live-website",
       aiEnhanced: true,
+      aiProvider: aiResult.aiProvider,
       url: parsedUrl.toString(),
       fetchedAt,
       extractedCount: aiResult.prices.length,
+      siteProfile: aiResult.siteProfile,
       prices: aiResult.prices,
     });
   }
-  const byService = extractFromJsonLd(html);
-  const fullContext = contextLines.join("\n");
-  scanTextIntoMap(
-    fullContext,
-    subpages.length > 0 ? "subpage" : "html-text",
-    byService,
+
+  const extracted = extractDeterministicFallback(
+    contextLines,
+    html,
+    subpages.length > 0,
+    hasSpaBundle,
   );
-  const extracted = Array.from(byService.values());
+  const fallbackProfile = buildFallbackSiteProfile(metadata, extracted);
+
   return NextResponse.json({
     source: "live-website",
     aiEnhanced: false,
     warning:
-      aiResult.warning ??
-      "AI extraction returned no prices; used regex/JSON-LD fallback.",
+      "AI extraction temporarily unavailable; used structured parser & JSON-LD fallback.",
     url: parsedUrl.toString(),
     fetchedAt: new Date().toISOString(),
     extractedCount: extracted.length,
+    siteProfile: fallbackProfile,
     prices: extracted,
   });
 }

@@ -13,6 +13,14 @@ import {
 
 export const runtime = "nodejs";
 
+const GROQ_CHAT_COMPLETIONS_URL =
+  "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_FALLBACK_MODELS = [
+  "openai/gpt-oss-120b",
+  "qwen/qwen3.8-27b",
+  "openai/gpt-oss-20b",
+] as const;
+
 interface GroundingSource {
   title: string;
   uri: string;
@@ -57,6 +65,15 @@ interface ActiveServiceDescriptor {
   ourPricePln?: number;
 }
 
+interface SiteProfileParam {
+  businessName?: string;
+  nichePl?: string;
+  nicheEn?: string;
+  matchedIndustryId?: string;
+  searchQueriesPl?: string[];
+  searchQueriesEn?: string[];
+}
+
 interface ScanRequestParams {
   city: string;
   country: string;
@@ -66,6 +83,7 @@ interface ScanRequestParams {
   competitorUrls: string[];
   excludeHost?: string;
   services: ActiveServiceDescriptor[];
+  siteProfile?: SiteProfileParam;
 }
 
 interface FetchedSiteContext {
@@ -254,6 +272,51 @@ function parseServicesParam(raw: unknown): ActiveServiceDescriptor[] {
   return parsed;
 }
 
+function parseSiteProfileParam(raw: unknown): SiteProfileParam | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Record<string, unknown>;
+  const normalizeList = (val: unknown): string[] =>
+    Array.isArray(val)
+      ? val
+          .map((item) => String(item ?? "").trim())
+          .filter((item) => item.length >= 3 && item.length <= 90)
+          .slice(0, 4)
+      : [];
+
+  const nichePl =
+    typeof obj.nichePl === "string" ? obj.nichePl.trim().slice(0, 100) : "";
+  const nicheEn =
+    typeof obj.nicheEn === "string" ? obj.nicheEn.trim().slice(0, 100) : "";
+  const businessName =
+    typeof obj.businessName === "string"
+      ? obj.businessName.trim().slice(0, 80)
+      : undefined;
+  const matchedIndustryId =
+    typeof obj.matchedIndustryId === "string"
+      ? obj.matchedIndustryId.trim().toLowerCase()
+      : undefined;
+  const searchQueriesPl = normalizeList(obj.searchQueriesPl);
+  const searchQueriesEn = normalizeList(obj.searchQueriesEn);
+
+  if (
+    !nichePl &&
+    !nicheEn &&
+    searchQueriesPl.length === 0 &&
+    searchQueriesEn.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    businessName,
+    nichePl: nichePl || nicheEn,
+    nicheEn: nicheEn || nichePl,
+    matchedIndustryId,
+    searchQueriesPl,
+    searchQueriesEn,
+  };
+}
+
 function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
   const rawCity = typeof input.city === "string" ? input.city.trim() : "";
   const city = rawCity.slice(0, 100) || "Radom";
@@ -301,6 +364,7 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
     competitorUrls,
     excludeHost,
     services: parseServicesParam(input.services),
+    siteProfile: parseSiteProfileParam(input.siteProfile),
   };
 }
 
@@ -308,7 +372,9 @@ function isQuotaError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err ?? "");
   return (
     msg.includes("429") ||
+    msg.includes("503") ||
     msg.includes("RESOURCE_EXHAUSTED") ||
+    msg.includes("UNAVAILABLE") ||
     msg.toLowerCase().includes("quota")
   );
 }
@@ -346,16 +412,17 @@ function extractVisibleText(html: string): { title: string; text: string } {
     .replace(/[ \t\r\f\v]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
-  return { title, text: stripped.slice(0, 12000) };
+  return { title, text: stripped.slice(0, 10_000) };
 }
 
-function compactSiteText(rawText: string, maxChars = 2800): string {
+function compactSiteText(rawText: string, maxChars = 2400): string {
   const lines = rawText
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 1);
+  // Universal, industry-agnostic price & offer signal matcher
   const signalRe =
-    /(z[łl]|pln|eur|usd|\$|€|cennik|cena|od\s+\d+|m²|m2|szt|dojazd|gratis|opinie|dywan|wyk[łl]adzin|tapicerk|krzes|naro[żz]nik|sofa|kanap|fotel|wersalk|materac|kostk|p[łl]yt|taras|dosusz|klimatyzac|pomp|wentylac|kocio|wyciek|kanaliz|price|carpet|upholster|sofa|chair|hvac|plumb)/i;
+    /(z[łl]|pln|eur|usd|\$|€|,-|cennik|cena|od\s+\d+|from\s+\d+|m²|m2|szt|godz|hour|dzie[ńn]|day|imprez|event|wynajem|us[łl]ug|dojazd|gratis|opinie|price|pricing|rate)/i;
   const picked = new Set<number>();
   lines.forEach((line, idx) => {
     if (signalRe.test(line)) {
@@ -380,8 +447,10 @@ function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
     const label = (match[2] ?? "").replace(/<[^>]+>/g, " ").trim();
     const haystack = `${href} ${label}`.toLowerCase();
     if (
-      /(cennik|cena|pricing|price-list|prices|stawki)/.test(haystack) &&
-      !/\.(jpg|jpeg|png|webp|pdf|svg)$/i.test(href)
+      /(cennik|cena|oferta|wynajem|atrakcj|pricing|price-list|prices|rates)/.test(
+        haystack,
+      ) &&
+      !/\.(jpg|jpeg|png|webp|avif|pdf|svg)$/i.test(href)
     ) {
       try {
         const resolved = new URL(href, baseUrl);
@@ -435,7 +504,10 @@ async function fetchSiteContext(
       }
     }
   }
-  if (combined.length < 400) {
+  if (
+    combined.length < 400 ||
+    !/\d\s*(?:zł|pln|eur|usd|\$|€)/i.test(combined)
+  ) {
     const scriptMatch = html.match(/<script[^>]+src="([^"]+\.js[^"]*)"/i);
     if (scriptMatch?.[1]) {
       try {
@@ -445,12 +517,12 @@ async function fetchSiteContext(
             signal: AbortSignal.timeout(5500),
           });
           if (jsRes.ok) {
-            const jsRaw = (await jsRes.text()).slice(0, 250_000);
+            const jsRaw = (await jsRes.text()).slice(0, 350_000);
             const priceSnippets = jsRaw
               .match(
-                /.{0,70}(?:zł|pln|cennik|cena|od\s+\d+|m²|m2|szt|price|dywan|tapicer|fotel|kanap|wersalk|materac|kostk|płyt|taras|dosusz|klima|hydraul).{0,90}/gi,
+                /.{0,65}(?:\d\s*(?:zł|pln|eur|usd|\$|€)|(?:base|price|cost):\s*\d+|cennik|cena|od\s+\d+).{0,85}/gi,
               )
-              ?.slice(0, 40)
+              ?.slice(0, 35)
               .join("\n");
             if (priceSnippets) {
               combined = `${combined}\n${priceSnippets}`.trim();
@@ -462,7 +534,7 @@ async function fetchSiteContext(
       }
     }
   }
-  const compacted = compactSiteText(combined, 2800);
+  const compacted = compactSiteText(combined, 2400);
   if (!compacted) return null;
   return {
     url: safeUrl.toString(),
@@ -471,11 +543,83 @@ async function fetchSiteContext(
   };
 }
 
+function cleanServicePhrase(rawLabel: string): string {
+  return rawLabel
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\b(?:od|from)\s+\d+(?:[.,]\d+)?\s*(?:zł|pln|eur|usd)?/gi, " ")
+    .replace(/[-–—/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildDynamicQueriesFromServices(
+  city: string,
+  services: ActiveServiceDescriptor[],
+  siteProfile: SiteProfileParam | undefined,
+  locale: "pl" | "en",
+): string[] {
+  const stems: string[] = [];
+  const profileStems =
+    locale === "pl"
+      ? (siteProfile?.searchQueriesPl ?? [])
+      : (siteProfile?.searchQueriesEn ?? []);
+
+  for (const stem of profileStems) {
+    const cleaned = stem.trim();
+    if (cleaned && !stems.includes(cleaned)) stems.push(cleaned);
+  }
+
+  if (stems.length < 3) {
+    const niche = locale === "pl" ? siteProfile?.nichePl : siteProfile?.nicheEn;
+    if (niche) {
+      const cleanedNiche = cleanServicePhrase(niche);
+      if (cleanedNiche && !stems.includes(cleanedNiche)) {
+        stems.push(cleanedNiche);
+      }
+    }
+  }
+
+  if (stems.length < 3) {
+    for (const svc of services) {
+      if (!svc.label) continue;
+      const phrase = cleanServicePhrase(svc.label);
+      if (phrase.length >= 4 && !stems.includes(phrase)) {
+        stems.push(phrase);
+      }
+      if (stems.length >= 4) break;
+    }
+  }
+
+  const cityLower = city.toLowerCase();
+  const localized = stems.slice(0, 4).map((stem, idx) => {
+    const hasCity = stem.toLowerCase().includes(cityLower);
+    const base = hasCity ? stem : `${stem} ${city}`;
+    return idx === 0
+      ? `${base} ${locale === "pl" ? "cennik" : "prices"}`
+      : base;
+  });
+
+  return localized;
+}
+
 function buildSearchQueries(
   city: string,
   industryId: IndustryId,
   locale: "pl" | "en",
+  isCustomSiteNiche: boolean,
+  services: ActiveServiceDescriptor[],
+  siteProfile?: SiteProfileParam,
 ): string[] {
+  if (isCustomSiteNiche) {
+    const dynamic = buildDynamicQueriesFromServices(
+      city,
+      services,
+      siteProfile,
+      locale,
+    );
+    if (dynamic.length > 0) return dynamic;
+  }
+
   if (locale === "pl") {
     const map: Record<IndustryId, string[]> = {
       upholstery: [
@@ -912,14 +1056,13 @@ function buildFallbackCompetitors(
   return out.slice(0, 12);
 }
 
-async function structureReportWithGemini(
+function buildSynthesisPrompt(
   researchText: string,
   params: ScanRequestParams,
   validServiceKeys: Set<string>,
   activeServices: ActiveServiceDescriptor[],
-): Promise<StructuredScanPayload> {
-  const ai = getGeminiClient();
-  if (!ai) return {};
+  nicheContextLabel: string,
+): string {
   const languageLabel = params.locale === "pl" ? "Polish" : "English";
   const trackedServicesList = activeServices
     .map((s) =>
@@ -937,25 +1080,40 @@ async function structureReportWithGemini(
     ? `Do NOT include our own business (${params.excludeHost}) in the competitors list.`
     : "";
 
-  const extractionPrompt = [
+  return [
     `Extract structured market intelligence strictly from the verified competitor data below.`,
-    `Return 8-12 distinct local competitors when supported by the source data (covering both Google Business Profiles / Maps listings and companies with published website price lists).`,
+    `Target business niche: ${nicheContextLabel}.`,
+    `Return 8-12 distinct local competitors in that exact niche when supported by the source data (covering both Google Business Profiles / Maps listings and company websites).`,
     excludeInstruction,
     `Populate "rating" and "reviewCount" whenever verified Google review numbers appear in the source text.`,
-    `Do NOT invent companies, numbers, ratings, or prices that are not supported by the text.`,
+    `Do NOT invent companies, numbers, ratings, or prices not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
     `Active tracked services to benchmark (use these EXACT serviceKey values): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
-    `Important pricing classification rules:`,
-    `- "carpetArea": full carpet washing price per m² (if a company lists both lowball teaser promo like 4.99 PLN and standard/laundry carpet washing 20-38 PLN/m², represent the standard carpet washing price range fairly instead of using outliers as the whole market average).`,
-    `- "carpetFlooring": fitted wall-to-wall / office carpet cleaning per m².`,
-    `- "upholsteryChair": standard chair upholstery cleaning price.`,
-    `- "cornerSofa": corner sofa / L-shaped couch cleaning starting or average price.`,
-    `- For any other serviceKey listed above (including "live:*" keys matched to a service name like armchair/fotel, couch/kanapa, mattress/materac, pavers/kostka, tiles/płytki, drying/dosuszanie), extract the matching local competitor average ONLY if real price evidence exists in the text.`,
-    `Compute avgPricePln, minPricePln, maxPricePln across the found local companies only for serviceKey entries where real price evidence exists.`,
-    `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, 26000)}`,
+    `Match local competitor prices against those exact serviceKey entries whenever real price evidence exists in the text (e.g., match rentals, event equipment, installations, cleaning items, repairs by their actual service meaning).`,
+    `Compute avgPricePln, minPricePln, maxPricePln across found local companies only for serviceKey entries with real price evidence.`,
+    `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, 22_000)}`,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+async function structureReportWithGemini(
+  researchText: string,
+  params: ScanRequestParams,
+  validServiceKeys: Set<string>,
+  activeServices: ActiveServiceDescriptor[],
+  nicheContextLabel: string,
+): Promise<StructuredScanPayload> {
+  const ai = getGeminiClient();
+  if (!ai) return {};
+
+  const extractionPrompt = buildSynthesisPrompt(
+    researchText,
+    params,
+    validServiceKeys,
+    activeServices,
+    nicheContextLabel,
+  );
 
   const structuredResponse = await ai.models.generateContent({
     model: GEMINI_TEXT_MODEL,
@@ -1025,6 +1183,79 @@ async function structureReportWithGemini(
   });
 
   return parseJsonSafe<StructuredScanPayload>(structuredResponse.text, {});
+}
+
+async function structureReportWithGroq(
+  researchText: string,
+  params: ScanRequestParams,
+  validServiceKeys: Set<string>,
+  activeServices: ActiveServiceDescriptor[],
+  nicheContextLabel: string,
+): Promise<StructuredScanPayload | null> {
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  if (!groqKey) return null;
+
+  const extractionPrompt = buildSynthesisPrompt(
+    researchText,
+    params,
+    validServiceKeys,
+    activeServices,
+    nicheContextLabel,
+  );
+
+  for (const model of GROQ_FALLBACK_MODELS) {
+    try {
+      const response = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${groqKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.1,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content:
+                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Only cite companies and numbers supported by input.',
+            },
+            {
+              role: "user",
+              content: extractionPrompt,
+            },
+          ],
+        }),
+        signal: AbortSignal.timeout(14_000),
+      });
+
+      if (!response.ok) {
+        console.warn(
+          `[/api/market/scan] Groq ${model} HTTP ${response.status}`,
+        );
+        continue;
+      }
+
+      const json = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = json.choices?.[0]?.message?.content;
+      const parsed = parseJsonSafe<StructuredScanPayload>(content, {});
+      if (Array.isArray(parsed.competitors) && parsed.competitors.length > 0) {
+        return parsed;
+      }
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : String(err ?? "Unknown error");
+      console.warn(
+        `[/api/market/scan] Groq ${model} failed:`,
+        msg.slice(0, 160),
+      );
+    }
+  }
+
+  return null;
 }
 
 function sanitizeStructuredPayload(
@@ -1115,6 +1346,10 @@ function sanitizeStructuredPayload(
 async function runMarketScan(params: ScanRequestParams) {
   const scannedAt = new Date().toISOString();
   const template = INDUSTRY_TEMPLATES[params.industryId];
+  const presetKeys = new Set(
+    template.services.map((s: IndustryServiceItem) => s.serviceKey),
+  );
+
   const activeServices: ActiveServiceDescriptor[] =
     params.services.length > 0
       ? params.services
@@ -1123,6 +1358,20 @@ async function runMarketScan(params: ScanRequestParams) {
           unitType: s.unitType,
           ourPricePln: s.ourPricePln,
         }));
+
+  const hasPresetOverlap = activeServices.some((s) =>
+    presetKeys.has(s.serviceKey),
+  );
+  const hasLiveServices = activeServices.some((s) =>
+    s.serviceKey.startsWith("live:"),
+  );
+
+  // Detect custom website niche when siteProfile says custom OR live-synced catalog has zero overlap with the dropdown preset
+  const isCustomSiteNiche =
+    params.siteProfile?.matchedIndustryId === "custom" ||
+    (Boolean(params.siteProfile?.searchQueriesPl?.length) &&
+      params.siteProfile?.matchedIndustryId !== params.industryId) ||
+    (hasLiveServices && !hasPresetOverlap);
 
   const validServiceKeys = new Set<string>([
     ...template.services.map((s: IndustryServiceItem) => s.serviceKey),
@@ -1141,10 +1390,28 @@ async function runMarketScan(params: ScanRequestParams) {
       "usługi hydrauliczne, awarie wod-kan i serwis kotłów (plumbing & emergency repairs)",
   };
 
+  const detectedIndustryLabel = isCustomSiteNiche
+    ? (params.locale === "pl"
+        ? params.siteProfile?.nichePl
+        : params.siteProfile?.nicheEn) ||
+      params.services
+        .slice(0, 2)
+        .map((s) => cleanServicePhrase(s.label || ""))
+        .filter(Boolean)
+        .join(", ") ||
+      undefined
+    : undefined;
+
+  const nicheContextLabel =
+    detectedIndustryLabel || industryDescriptionMap[params.industryId];
+
   const queries = buildSearchQueries(
     params.city,
     params.industryId,
     params.locale,
+    isCustomSiteNiche,
+    activeServices,
+    params.siteProfile,
   );
 
   const ai = getGeminiClient();
@@ -1158,7 +1425,7 @@ async function runMarketScan(params: ScanRequestParams) {
   if (useSearchGrounding && ai) {
     try {
       const searchPrompt = [
-        `Find 8-12 real local service providers in ${params.city}, ${params.country} (radius ~${params.radiusKm} km) for: ${industryDescriptionMap[params.industryId]}.`,
+        `Find 8-12 real local service providers in ${params.city}, ${params.country} (radius ~${params.radiusKm} km) for: ${nicheContextLabel}.`,
         `Search BOTH Google Business Profiles / Google Maps listings (company name, star rating, review count, travel zone, customer complaints) AND company websites with published price lists.`,
         `Cover distinct local search intents such as: ${queries.join("; ")}.`,
         params.excludeHost
@@ -1192,6 +1459,7 @@ async function runMarketScan(params: ScanRequestParams) {
           params,
           validServiceKeys,
           activeServices,
+          nicheContextLabel,
         );
         const clean = sanitizeStructuredPayload(
           parsed,
@@ -1204,6 +1472,7 @@ async function runMarketScan(params: ScanRequestParams) {
           city: params.city,
           country: params.country,
           industryId: params.industryId,
+          detectedIndustryLabel,
           radiusKm: params.radiusKm,
           scannedAt,
           ...clean,
@@ -1214,11 +1483,9 @@ async function runMarketScan(params: ScanRequestParams) {
     } catch (err) {
       if (isQuotaError(err)) {
         quotaExceeded = true;
-        console.warn(
-          "[/api/market/scan] Search grounding hit Gemini 429 quota.",
-        );
+        console.warn("[/api/market/scan] Search grounding hit Gemini limit.");
       } else {
-        console.error("[/api/market/scan] Search grounding failed:", err);
+        console.warn("[/api/market/scan] Search grounding failed.");
       }
     }
   }
@@ -1242,19 +1509,20 @@ async function runMarketScan(params: ScanRequestParams) {
   }
 
   if (targetUrls.length === 0) {
-    const [ddgUrls, osmUrls] = await Promise.all([
-      discoverCompetitorUrlsViaDuckDuckGo(
-        queries,
-        params.locale,
-        params.excludeHost,
-      ),
-      discoverCompetitorUrlsViaOsm(
-        params.city,
-        params.country,
-        params.industryId,
-        params.excludeHost,
-      ),
-    ]);
+    const ddgPromise = discoverCompetitorUrlsViaDuckDuckGo(
+      queries,
+      params.locale,
+      params.excludeHost,
+    );
+    const osmPromise = isCustomSiteNiche
+      ? Promise.resolve([] as string[])
+      : discoverCompetitorUrlsViaOsm(
+          params.city,
+          params.country,
+          params.industryId,
+          params.excludeHost,
+        );
+    const [ddgUrls, osmUrls] = await Promise.all([ddgPromise, osmPromise]);
     targetUrls = filterCandidateUrls(
       [...ddgUrls, ...osmUrls],
       params.excludeHost,
@@ -1275,50 +1543,76 @@ async function runMarketScan(params: ScanRequestParams) {
   );
 
   if (fetchedSites.length > 0 || gbpContext || serperPlaces.length > 0) {
+    const siteSections = fetchedSites.map(
+      (s) => `=== SITE: ${s.title} (${s.url}) ===\n${s.text}`,
+    );
+    const combinedText = [gbpContext, ...siteSections]
+      .filter(Boolean)
+      .join("\n\n");
+
+    let parsed: StructuredScanPayload | null = null;
+
     if (ai) {
       try {
-        const siteSections = fetchedSites.map(
-          (s) => `=== SITE: ${s.title} (${s.url}) ===\n${s.text}`,
-        );
-        const combinedText = [gbpContext, ...siteSections]
-          .filter(Boolean)
-          .join("\n\n");
-        const parsed = await structureReportWithGemini(
+        parsed = await structureReportWithGemini(
           combinedText,
           params,
           validServiceKeys,
           activeServices,
+          nicheContextLabel,
         );
-        const clean = sanitizeStructuredPayload(
-          parsed,
-          validServiceKeys,
-          params.excludeHost,
-        );
-        return NextResponse.json({
-          source: gbpContext ? "live-maps-and-sites" : "live-competitor-sites",
-          aiEnhanced: true,
-          city: params.city,
-          country: params.country,
-          industryId: params.industryId,
-          radiusKm: params.radiusKm,
-          scannedAt,
-          ...clean,
-          sources: allSources,
-          searchQueries: queries,
-        });
       } catch (err) {
         if (isQuotaError(err)) {
           quotaExceeded = true;
           console.warn(
-            "[/api/market/scan] structureReportWithGemini hit Gemini 429 quota; returning direct Maps/Serper data.",
+            "[/api/market/scan] structureReportWithGemini hit limit; trying Groq fallback.",
           );
         } else {
-          console.error(
-            "[/api/market/scan] structureReportWithGemini failed:",
-            err,
-          );
+          console.warn("[/api/market/scan] structureReportWithGemini failed.");
         }
       }
+    }
+
+    if (
+      !parsed ||
+      !Array.isArray(parsed.competitors) ||
+      parsed.competitors.length === 0
+    ) {
+      const groqParsed = await structureReportWithGroq(
+        combinedText,
+        params,
+        validServiceKeys,
+        activeServices,
+        nicheContextLabel,
+      );
+      if (groqParsed) {
+        parsed = groqParsed;
+      }
+    }
+
+    if (
+      parsed &&
+      Array.isArray(parsed.competitors) &&
+      parsed.competitors.length > 0
+    ) {
+      const clean = sanitizeStructuredPayload(
+        parsed,
+        validServiceKeys,
+        params.excludeHost,
+      );
+      return NextResponse.json({
+        source: gbpContext ? "live-maps-and-sites" : "live-competitor-sites",
+        aiEnhanced: true,
+        city: params.city,
+        country: params.country,
+        industryId: params.industryId,
+        detectedIndustryLabel,
+        radiusKm: params.radiusKm,
+        scannedAt,
+        ...clean,
+        sources: allSources,
+        searchQueries: queries,
+      });
     }
 
     const fallbackCompetitors = buildFallbackCompetitors(
@@ -1333,8 +1627,8 @@ async function runMarketScan(params: ScanRequestParams) {
         : "GEMINI_API_KEY is not configured — showing retrieved Google Maps listings & sites without AI synthesis."
       : quotaExceeded
         ? params.locale === "pl"
-          ? "Przekroczono chwilowy limit zapytań Gemini API (429) — wyświetlono znalezione wizytówki Google Maps i strony konkurencji (odczekaj ~1 min lub sprawdź plan API dla pełnych średnich cenowych)."
-          : "Gemini API quota exceeded (429) — showing retrieved Google Maps listings & competitor sites (wait ~1 min or check API quota for full AI price averaging)."
+          ? "Chwilowy limit zapytań AI — wyświetlono znalezione wizytówki Google Maps i strony konkurencji."
+          : "Temporary AI quota limit — showing retrieved Google Maps listings & competitor sites."
         : params.locale === "pl"
           ? "Analiza AI chwilowo niedostępna — wyświetlono znalezione wizytówki i strony konkurencji."
           : "AI synthesis temporarily unavailable — showing retrieved local listings & competitor sites.";
@@ -1346,12 +1640,13 @@ async function runMarketScan(params: ScanRequestParams) {
       city: params.city,
       country: params.country,
       industryId: params.industryId,
+      detectedIndustryLabel,
       radiusKm: params.radiusKm,
       scannedAt,
       summary:
         params.locale === "pl"
-          ? `Znaleziono ${fallbackCompetitors.length} lokalnych firm w ${params.city} (Google Maps + strony WWW). Pełne wyliczenie średnich cen AI wznowi się po odnowieniu limitu Gemini.`
-          : `Retrieved ${fallbackCompetitors.length} local competitors in ${params.city} (Google Maps + websites). Full AI price averaging will resume once Gemini quota resets.`,
+          ? `Znaleziono ${fallbackCompetitors.length} lokalnych firm w ${params.city} (Google Maps + strony WWW).`
+          : `Retrieved ${fallbackCompetitors.length} local competitors in ${params.city} (Google Maps + websites).`,
       competitors: fallbackCompetitors,
       marketBenchmarks: [],
       painPoints: [],
@@ -1365,12 +1660,13 @@ async function runMarketScan(params: ScanRequestParams) {
     aiEnhanced: false,
     warning: quotaExceeded
       ? params.locale === "pl"
-        ? "Przekroczono limit Gemini API (429) i nie znaleziono stron konkurencji automatycznie. Wklej 1-3 adresy WWW ręcznie."
-        : "Gemini API quota exceeded (429) and no competitor pages were retrieved automatically. Add 1-3 competitor URLs manually."
-      : "No competitor pages retrieved automatically right now. Add 1-3 competitor URLs to scan them directly for free.",
+        ? "Chwilowy limit AI i brak automatycznych wyników. Wklej 1-3 adresy WWW konkurencji ręcznie."
+        : "Temporary AI limit and no competitor pages retrieved automatically. Add 1-3 competitor URLs manually."
+      : "No competitor pages retrieved automatically right now. Add 1-3 competitor URLs to scan them directly.",
     city: params.city,
     country: params.country,
     industryId: params.industryId,
+    detectedIndustryLabel,
     radiusKm: params.radiusKm,
     scannedAt,
     summary: "",
@@ -1397,13 +1693,7 @@ export async function GET(req: NextRequest) {
     return await runMarketScan(params);
   } catch (err) {
     console.error("[/api/market/scan GET] error:", err);
-    return NextResponse.json(
-      {
-        error: "Market scan failed",
-        detail: err instanceof Error ? err.message : "Unknown error",
-      },
-      { status: 502 },
-    );
+    return NextResponse.json({ error: "Market scan failed" }, { status: 502 });
   }
 }
 
@@ -1417,12 +1707,6 @@ export async function POST(req: NextRequest) {
     return await runMarketScan(params);
   } catch (err) {
     console.error("[/api/market/scan POST] error:", err);
-    return NextResponse.json(
-      {
-        error: "Market scan failed",
-        detail: err instanceof Error ? err.message : "Unknown error",
-      },
-      { status: 502 },
-    );
+    return NextResponse.json({ error: "Market scan failed" }, { status: 502 });
   }
 }

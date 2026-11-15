@@ -59,13 +59,27 @@ interface PricingSyncItem {
   unitType?: ServiceUnitType;
 }
 
+interface SiteProfile {
+  businessName?: string;
+  nichePl: string;
+  nicheEn: string;
+  matchedIndustryId?: "upholstery" | "hvac" | "plumbing" | "custom";
+  searchQueriesPl?: string[];
+  searchQueriesEn?: string[];
+}
+
 interface PricingSyncResponse {
   aiEnhanced?: boolean;
   warning?: string;
   extractedCount?: number;
+  siteProfile?: SiteProfile;
   prices?: PricingSyncItem[];
   error?: string;
 }
+
+type LiveScanWithNiche = LiveMarketScanResult & {
+  detectedIndustryLabel?: string;
+};
 
 function resolveWorkspaceProfile(
   websiteUrl: string,
@@ -128,9 +142,10 @@ export function Dashboard() {
     IndustryServiceItem[] | null
   >(null);
   const [syncedCount, setSyncedCount] = useState<number>(0);
+  const [siteProfile, setSiteProfile] = useState<SiteProfile | null>(null);
   const [isSyncingPrices, setIsSyncingPrices] = useState<boolean>(false);
 
-  const [liveScan, setLiveScan] = useState<LiveMarketScanResult | null>(null);
+  const [liveScan, setLiveScan] = useState<LiveScanWithNiche | null>(null);
   const [scannedBenchmarks, setScannedBenchmarks] = useState<
     Record<string, number>
   >({});
@@ -186,6 +201,7 @@ export function Dashboard() {
   const resetLiveIntelligence = () => {
     setSyncedCatalog(null);
     setSyncedCount(0);
+    setSiteProfile(null);
     setLiveScan(null);
     setScannedBenchmarks({});
     setSyncError(null);
@@ -244,7 +260,29 @@ export function Dashboard() {
       .filter((town) => town.distKm <= radiusKm)
       .map((town) => town.name),
   ];
-  const activeIndustryLabel = t[INDUSTRY_TEMPLATES[industryId].labelKey];
+
+  const isCustomNicheActive =
+    Boolean(liveScan?.detectedIndustryLabel) ||
+    Boolean(
+      siteProfile &&
+      (siteProfile.matchedIndustryId === "custom" ||
+        (siteProfile.matchedIndustryId &&
+          siteProfile.matchedIndustryId !== industryId)),
+    );
+
+  const customNicheLabel =
+    liveScan?.detectedIndustryLabel ||
+    (siteProfile
+      ? locale === "pl"
+        ? siteProfile.nichePl
+        : siteProfile.nicheEn
+      : "");
+
+  const activeIndustryLabel =
+    isCustomNicheActive && customNicheLabel
+      ? customNicheLabel
+      : t[INDUSTRY_TEMPLATES[industryId].labelKey];
+
   const isCaseStudy = (market.source ?? "case-study") === "case-study";
   const currentYear = new Date().getFullYear();
   const copyrightRange = currentYear >= 2027 ? `2026 - ${currentYear}` : "2026";
@@ -255,6 +293,9 @@ export function Dashboard() {
     if (!trimmed) return;
     setIsSyncingPrices(true);
     setSyncError(null);
+    setLiveScan(null);
+    setScannedBenchmarks({});
+
     try {
       const response = await fetch(
         `/api/pricing/sync?url=${encodeURIComponent(trimmed)}`,
@@ -267,6 +308,15 @@ export function Dashboard() {
       ) {
         setSyncError(data.error ?? t.syncWebsiteError);
         return;
+      }
+
+      const detectedPreset = data.siteProfile?.matchedIndustryId;
+      if (
+        detectedPreset === "upholstery" ||
+        detectedPreset === "hvac" ||
+        detectedPreset === "plumbing"
+      ) {
+        setIndustryId(detectedPreset);
       }
 
       const nextCatalog: IndustryServiceItem[] = [];
@@ -317,6 +367,7 @@ export function Dashboard() {
         return;
       }
 
+      setSiteProfile(data.siteProfile ?? null);
       setSyncedCatalog(nextCatalog);
       setSyncedCount(nextCatalog.length);
       if (data.aiEnhanced === false && data.warning) {
@@ -342,6 +393,7 @@ export function Dashboard() {
           radiusKm,
           locale,
           excludeUrl: websiteUrl.trim() || undefined,
+          siteProfile: siteProfile ?? undefined,
           services: market.benchmarks.map((row) => ({
             serviceKey: row.serviceKey,
             label: resolveServiceLabel(row, t, locale),
@@ -350,7 +402,7 @@ export function Dashboard() {
           })),
         }),
       });
-      const data = (await response.json()) as LiveMarketScanResult & {
+      const data = (await response.json()) as LiveScanWithNiche & {
         error?: string;
       };
       if (!response.ok) {
@@ -609,6 +661,13 @@ export function Dashboard() {
               onIndustryChange={handleIndustryChange}
               websiteUrl={websiteUrl}
               onWebsiteUrlChange={(next) => {
+                if (next.trim() !== websiteUrl.trim()) {
+                  setSiteProfile(null);
+                  setSyncedCatalog(null);
+                  setSyncedCount(0);
+                  setLiveScan(null);
+                  setScannedBenchmarks({});
+                }
                 setWebsiteUrl(next);
                 if (syncError) setSyncError(null);
               }}
