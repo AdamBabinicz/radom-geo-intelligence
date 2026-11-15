@@ -116,8 +116,8 @@ export const INDUSTRY_TEMPLATES: Record<IndustryId, IndustryTemplate> = {
       },
       {
         serviceKey: "carpetFlooring",
-        localPricePln: 11,
-        ourPricePln: 8,
+        localPricePln: 20,
+        ourPricePln: 15,
         isPerUnit: true,
         unitType: "m2",
       },
@@ -131,7 +131,7 @@ export const INDUSTRY_TEMPLATES: Record<IndustryId, IndustryTemplate> = {
       {
         serviceKey: "cornerSofa",
         localPricePln: 280,
-        ourPricePln: 249,
+        ourPricePln: 250,
         unitType: "fixed",
       },
     ],

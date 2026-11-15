@@ -42,7 +42,10 @@ import {
 } from "./features/competitor-table/competitor-table";
 import { CookieConsent } from "./features/legal/cookie-consent";
 import { ScrollToTop } from "./features/legal/scroll-to-top";
-import { MarketSwitcher } from "./features/market-controls/market-switcher";
+import {
+  MarketSwitcher,
+  type IndustryControlMode,
+} from "./features/market-controls/market-switcher";
 import { PricingCalculator } from "./features/pricing-calculator";
 import { CoverageMap } from "./features/radius-map/coverage-map";
 import { RovoConsole } from "./features/rovo-console/rovo-console";
@@ -134,6 +137,7 @@ export function Dashboard() {
     RADOM_UPHOLSTERY_MARKET,
   );
   const [industryId, setIndustryId] = useState<IndustryId>("upholstery");
+  const [customNiche, setCustomNiche] = useState<string | null>(null);
   const [selectedTown, setSelectedTown] = useState<TownGeo | null>(null);
   const [cookieModalSignal, setCookieModalSignal] = useState(0);
 
@@ -213,7 +217,8 @@ export function Dashboard() {
     resetLiveIntelligence();
     if (
       nextMarket.id === RADOM_UPHOLSTERY_MARKET.id &&
-      industryId === "upholstery"
+      industryId === "upholstery" &&
+      !customNiche?.trim()
     ) {
       setWebsiteUrl(DEFAULT_WEBSITE_URL);
     } else if (websiteUrl === DEFAULT_WEBSITE_URL) {
@@ -223,6 +228,7 @@ export function Dashboard() {
 
   const handleIndustryChange = (nextIndustry: IndustryId) => {
     setIndustryId(nextIndustry);
+    setCustomNiche(null);
     resetLiveIntelligence();
     if (
       baseMarket.id === RADOM_UPHOLSTERY_MARKET.id &&
@@ -234,16 +240,68 @@ export function Dashboard() {
     }
   };
 
+  const handleCustomNicheChange = (nextNiche: string | null) => {
+    setCustomNiche(nextNiche);
+    if (syncError) setSyncError(null);
+    if (nextNiche !== null) {
+      setLiveScan(null);
+      setScannedBenchmarks({});
+      if (
+        websiteUrl === DEFAULT_WEBSITE_URL &&
+        nextNiche.trim().length > 0 &&
+        nextNiche.trim().toLowerCase() !==
+          translations[locale].industryUpholstery.toLowerCase()
+      ) {
+        setWebsiteUrl("");
+      }
+    }
+  };
+
   const t = translations[locale];
+  const trimmedCustomNiche = (customNiche ?? "").trim();
+  const hasManualCustomNiche = trimmedCustomNiche.length > 0;
+
+  const isWebsiteAutoNiche =
+    Boolean(liveScan?.detectedIndustryLabel) ||
+    Boolean(
+      siteProfile &&
+      (siteProfile.matchedIndustryId === "custom" ||
+        (siteProfile.matchedIndustryId &&
+          siteProfile.matchedIndustryId !== industryId)),
+    );
+
+  const industryMode: IndustryControlMode = hasManualCustomNiche
+    ? "custom"
+    : isWebsiteAutoNiche
+      ? "auto"
+      : "preset";
+
+  const detectedSiteNicheLabel =
+    liveScan?.detectedIndustryLabel ||
+    (siteProfile
+      ? locale === "pl"
+        ? siteProfile.nichePl
+        : siteProfile.nicheEn
+      : "");
+
+  const activeIndustryLabel = hasManualCustomNiche
+    ? trimmedCustomNiche
+    : isWebsiteAutoNiche && detectedSiteNicheLabel
+      ? detectedSiteNicheLabel
+      : t[INDUSTRY_TEMPLATES[industryId].labelKey];
+
   const workspaceProfile = resolveWorkspaceProfile(websiteUrl, t.accountName);
   const baseIndustryMarket = applyIndustryToMarket(baseMarket, industryId);
   const baselineByKey = new Map(
     baseIndustryMarket.benchmarks.map((row) => [row.serviceKey, row]),
   );
+
   const activeBenchmarksSource =
     syncedCatalog && syncedCatalog.length > 0
       ? syncedCatalog
-      : baseIndustryMarket.benchmarks;
+      : hasManualCustomNiche
+        ? []
+        : baseIndustryMarket.benchmarks;
 
   const market: MarketProfile = {
     ...baseIndustryMarket,
@@ -260,28 +318,6 @@ export function Dashboard() {
       .filter((town) => town.distKm <= radiusKm)
       .map((town) => town.name),
   ];
-
-  const isCustomNicheActive =
-    Boolean(liveScan?.detectedIndustryLabel) ||
-    Boolean(
-      siteProfile &&
-      (siteProfile.matchedIndustryId === "custom" ||
-        (siteProfile.matchedIndustryId &&
-          siteProfile.matchedIndustryId !== industryId)),
-    );
-
-  const customNicheLabel =
-    liveScan?.detectedIndustryLabel ||
-    (siteProfile
-      ? locale === "pl"
-        ? siteProfile.nichePl
-        : siteProfile.nicheEn
-      : "");
-
-  const activeIndustryLabel =
-    isCustomNicheActive && customNicheLabel
-      ? customNicheLabel
-      : t[INDUSTRY_TEMPLATES[industryId].labelKey];
 
   const isCaseStudy = (market.source ?? "case-study") === "case-study";
   const currentYear = new Date().getFullYear();
@@ -367,6 +403,7 @@ export function Dashboard() {
         return;
       }
 
+      setCustomNiche(null);
       setSiteProfile(data.siteProfile ?? null);
       setSyncedCatalog(nextCatalog);
       setSyncedCount(nextCatalog.length);
@@ -383,6 +420,17 @@ export function Dashboard() {
   const handleScanMarket = async () => {
     setIsScanningMarket(true);
     setSyncError(null);
+    const effectiveSiteProfile: SiteProfile | undefined = hasManualCustomNiche
+      ? {
+          businessName: siteProfile?.businessName,
+          nichePl: trimmedCustomNiche,
+          nicheEn: trimmedCustomNiche,
+          matchedIndustryId: "custom",
+          searchQueriesPl: [trimmedCustomNiche],
+          searchQueriesEn: [trimmedCustomNiche],
+        }
+      : (siteProfile ?? undefined);
+
     try {
       const response = await fetch("/api/market/scan", {
         method: "POST",
@@ -393,7 +441,7 @@ export function Dashboard() {
           radiusKm,
           locale,
           excludeUrl: websiteUrl.trim() || undefined,
-          siteProfile: siteProfile ?? undefined,
+          siteProfile: effectiveSiteProfile,
           services: market.benchmarks.map((row) => ({
             serviceKey: row.serviceKey,
             label: resolveServiceLabel(row, t, locale),
@@ -659,6 +707,10 @@ export function Dashboard() {
               industryId={industryId}
               onMarketChange={handleMarketChange}
               onIndustryChange={handleIndustryChange}
+              industryMode={industryMode}
+              activeIndustryDisplay={activeIndustryLabel}
+              customNiche={customNiche}
+              onCustomNicheChange={handleCustomNicheChange}
               websiteUrl={websiteUrl}
               onWebsiteUrlChange={(next) => {
                 if (next.trim() !== websiteUrl.trim()) {

@@ -90,6 +90,29 @@ const CANONICAL_SERVICE_KEYS = new Set<string>([
   "drainUnclog",
 ]);
 
+const UPHOLSTERY_DETECTION_KEYS = new Set<string>([
+  "carpetArea",
+  "carpetFlooring",
+  "upholsteryChair",
+  "cornerSofa",
+  "twoSeatCouch",
+  "live:armchair-cleaning",
+  "live:mattress-cleaning",
+  "live:paver-cleaning",
+]);
+
+const HVAC_DETECTION_KEYS = new Set<string>([
+  "acService",
+  "heatPumpCheck",
+  "ductCleaning",
+]);
+
+const PLUMBING_DETECTION_KEYS = new Set<string>([
+  "leakRepair",
+  "boilerService",
+  "drainUnclog",
+]);
+
 interface FallbackKeywordRule {
   serviceKey: string;
   labelPl: string;
@@ -108,6 +131,7 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
       /prani[ea]\s+dywan[óo]w/gi,
       /czyszczenie\s+dywan/gi,
       /carpet\s+washing/gi,
+      /\bcarpet\b/gi,
     ],
   },
   {
@@ -118,7 +142,9 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     patterns: [
       /prani[ea]\s+wyk[łl]adzin/gi,
       /czyszczenie\s+wyk[łl]adzin/gi,
+      /wyk[łl]adzin/gi,
       /fitted\s+carpet/gi,
+      /\bfloor\b/gi,
     ],
   },
   {
@@ -126,21 +152,21 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     labelPl: "Tapicerka — krzesło (za szt.)",
     labelEn: "Upholstery — chair (per pc)",
     unitType: "piece",
-    patterns: [/krzes[łl][oa]/gi, /upholstery\s+chair/gi],
+    patterns: [/krzes[łl][oa]/gi, /upholstery\s+chair/gi, /\bchair\b/gi],
   },
   {
     serviceKey: "live:pouf-cleaning",
     labelPl: "Pranie pufy (za szt.)",
     labelEn: "Pouf / ottoman cleaning (per pc)",
     unitType: "piece",
-    patterns: [/puf[ayę]?/gi, /ottoman/gi],
+    patterns: [/puf[ayę]?/gi, /\bpouf\b/gi, /ottoman/gi],
   },
   {
     serviceKey: "live:armchair-cleaning",
     labelPl: "Pranie fotela",
     labelEn: "Armchair cleaning",
     unitType: "fixed",
-    patterns: [/fotel[aui]?/gi, /armchair/gi],
+    patterns: [/fotel[aui]?/gi, /\barmchair\b/gi],
   },
   {
     serviceKey: "twoSeatCouch",
@@ -153,6 +179,8 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
       /tapczan/gi,
       /2-seater/gi,
       /two-seat/gi,
+      /\bsofa[23]?\b/gi,
+      /\bcouch\b/gi,
     ],
   },
   {
@@ -160,14 +188,14 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     labelPl: "Czyszczenie narożnika / sofy",
     labelEn: "Corner sofa cleaning",
     unitType: "fixed",
-    patterns: [/naro[żz]nik/gi, /corner\s+sofa/gi],
+    patterns: [/naro[żz]nik/gi, /corner\s+sofa/gi, /\bcorner\b/gi],
   },
   {
     serviceKey: "live:mattress-cleaning",
     labelPl: "Pranie materaca",
     labelEn: "Mattress cleaning",
     unitType: "fixed",
-    patterns: [/materac/gi, /mattress/gi],
+    patterns: [/materac/gi, /\bmattress[12]?\b/gi],
   },
   {
     serviceKey: "live:car-upholstery",
@@ -195,21 +223,21 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     labelPl: "Mycie kostki brukowej (za m²)",
     labelEn: "Paver pressure washing (per m²)",
     unitType: "m2",
-    patterns: [/kostk[aię]\s+brukow/gi, /paver/gi],
+    patterns: [/kostk[aię]\s+brukow/gi, /\bpaver\b/gi],
   },
   {
     serviceKey: "live:tile-cleaning",
     labelPl: "Mycie płytek / tarasu (za m²)",
     labelEn: "Tile & patio washing (per m²)",
     unitType: "m2",
-    patterns: [/p[łl]yt(?:ki|ek|y)|taras/gi, /tile\s+clean/gi],
+    patterns: [/p[łl]yt(?:ki|ek|y)|taras/gi, /tile\s+clean/gi, /\btile\b/gi],
   },
   {
     serviceKey: "live:drying-service",
     labelPl: "Dosuszanie / wynajem wentylatora (za szt.)",
     labelEn: "Air mover drying service (per pc)",
     unitType: "piece",
-    patterns: [/dosusz/gi, /drying/gi],
+    patterns: [/dosusz/gi, /\bdrying\b/gi],
   },
   {
     serviceKey: "acService",
@@ -411,12 +439,14 @@ function collectJsonLdOffers(node: unknown, out: RawOffer[], parentName = "") {
       : typeof itemOffered?.name === "string"
         ? itemOffered.name
         : parentName;
+
   const priceSpec =
     record.priceSpecification && typeof record.priceSpecification === "object"
       ? (record.priceSpecification as Record<string, unknown>)
       : null;
   const rawPrice =
     record.price ?? record.lowPrice ?? priceSpec?.price ?? undefined;
+
   if (
     ownName &&
     (typeof rawPrice === "number" || typeof rawPrice === "string")
@@ -542,7 +572,6 @@ function formatReadableKeySlug(rawKey: string): string {
 function decodeJsBundleLines(jsRaw: string): string[] {
   const js = decodeJsEscapes(jsRaw);
   const strMap = new Map<string, string>();
-  // Match BOTH quoted ("specification.label.x": "val") AND unquoted (carpetPriceTag: "val") keys
   const keyPairRe =
     /(?:["']([a-zA-Z0-9_.-]{2,90})["']|([a-zA-Z0-9_.-]{2,48}))\s*:\s*(?:"((?:[^"\\]|\\.){1,180})"|'((?:[^'\\]|\\.){1,180})')/g;
 
@@ -587,7 +616,6 @@ function decodeJsBundleLines(jsRaw: string): string[] {
     if (!Number.isFinite(num) || num <= 0 || num > 100_000) continue;
     const idx = match.index ?? 0;
 
-    // Keep scan strictly inside the same {...} object
     const openBrace = js.lastIndexOf("{", idx);
     const closeBrace = js.indexOf("}", idx);
     const ownStart =
@@ -620,7 +648,6 @@ function decodeJsBundleLines(jsRaw: string): string[] {
 
     if (!currencyRaw && !period && !ownName && !ownLabelKey) continue;
 
-    // Enclosing product/category name strictly to the LEFT
     const widerLeft = js.slice(Math.max(0, idx - 1800), idx);
     const parentNameMatches = Array.from(
       widerLeft.matchAll(/\bname\s*:\s*["']([^"']{2,80})["']/g),
@@ -662,7 +689,6 @@ function decodeJsBundleLines(jsRaw: string): string[] {
     });
   }
 
-  // Filter redundant section-level "od" summary rows if specific items for the same category exist
   const primariesWithDetails = new Set(
     catalogEntries
       .filter((e) => e.primary && !/^od|from$/i.test(e.period))
@@ -692,10 +718,13 @@ function decodeJsBundleLines(jsRaw: string): string[] {
     }
     const baseKey = key.replace(/(?:PriceTag|Price|Cost|Rate|Fee)$/i, "");
     const resolvedBase =
-      baseKey !== key && strMap.has(baseKey) ? `${strMap.get(baseKey)} — ` : "";
+      baseKey !== key
+        ? (strMap.get(baseKey) ?? strMap.get(`${baseKey}Cleaning`) ?? "")
+        : "";
+    const basePrefix = resolvedBase ? `${resolvedBase} — ` : "";
     const readableKey = formatReadableKeySlug(key);
     const prefix = readableKey ? `${readableKey}: ` : "";
-    pushLine(`KEY_PAIR: ${prefix}${resolvedBase}${value}`);
+    pushLine(`KEY_PAIR: ${prefix}${basePrefix}${value}`);
   }
 
   // 3. Standalone quoted strings containing explicit currency/price
@@ -806,6 +835,7 @@ function matchPriceInWindow(windowText: string): {
   detectedAmount: number;
   detectedCurrency: "PLN" | "USD" | "EUR";
 } | null {
+  if (/^\s*\+/.test(windowText)) return null;
   const priceSuffixRe =
     /(?:od|from)?\s*(\d{1,5}(?:[.,]\d{1,2})?)(?:\s*[-–]\s*\d{1,5}(?:[.,]\d{1,2})?)?\s*(z[łl]|pln|usd|eur|\$|€)/i;
   const pricePrefixRe = /(\$|€|usd|eur)\s*(\d{1,5}(?:[.,]\d{1,2})?)/i;
@@ -889,26 +919,78 @@ function extractDeterministicFallback(
     });
   }
 
-  // 2. Match canonical service rules on remaining clean lines
-  const cleanLines = contextLines
-    .map((line) => line.replace(/^KEY_PAIR:\s*/i, "").trim())
-    .filter(
-      (line) =>
-        line.length > 1 &&
-        !line.startsWith("CATALOG_ITEM:") &&
-        !line.startsWith("SITE_"),
-    );
+  // 2. Match canonical & common service rules on KEY_PAIR + visible text lines
+  interface CleanSegment {
+    searchTarget: string;
+    priceTarget: string;
+    snippet: string;
+  }
+
+  const segments: CleanSegment[] = [];
+  const plainLines: string[] = [];
+
+  for (const line of contextLines) {
+    if (line.startsWith("CATALOG_ITEM:") || line.startsWith("SITE_")) continue;
+    if (line.startsWith("KEY_PAIR:")) {
+      const rawBody = line.slice("KEY_PAIR:".length).trim();
+      const colonIdx = rawBody.indexOf(":");
+      if (colonIdx > 0) {
+        const keyPart = rawBody.slice(0, colonIdx).trim();
+        const valPart = rawBody.slice(colonIdx + 1).trim();
+        if (!valPart || /^\s*\+/.test(valPart)) continue;
+        // Skip purely instructional/add-on keys like "info ..." or "faq ..."
+        if (/^(?:info|faq|cushions)\b/i.test(keyPart)) continue;
+        segments.push({
+          searchTarget: `${keyPart} ${valPart}`,
+          priceTarget: valPart,
+          snippet: valPart.slice(0, 110),
+        });
+      } else if (rawBody && !/^\s*\+/.test(rawBody)) {
+        segments.push({
+          searchTarget: rawBody,
+          priceTarget: rawBody,
+          snippet: rawBody.slice(0, 110),
+        });
+      }
+      continue;
+    }
+
+    const cleaned = line.trim();
+    if (cleaned.length > 1) {
+      plainLines.push(cleaned);
+      segments.push({
+        searchTarget: cleaned,
+        priceTarget: cleaned,
+        snippet: cleaned.slice(0, 110),
+      });
+    }
+  }
+
+  const defaultMethod: ExtractedPrice["method"] = hasSubpages
+    ? "subpage"
+    : hasSpaBundle
+      ? "spa-bundle"
+      : "html-text";
 
   const tryMatchSegment = (
     entry: FallbackKeywordRule,
-    segment: string,
+    seg: CleanSegment,
+    useWindowFromMatch: boolean,
   ): boolean => {
     for (const pattern of entry.patterns) {
       const testRe = new RegExp(pattern.source, pattern.flags.replace("g", ""));
-      const match = segment.match(testRe);
+      const match = seg.searchTarget.match(testRe);
       if (!match || match.index === undefined) continue;
-      const forward = segment.slice(match.index, match.index + 140);
-      const found = matchPriceInWindow(forward);
+
+      const candidateWindow = useWindowFromMatch
+        ? seg.priceTarget.slice(match.index, match.index + 140)
+        : seg.priceTarget;
+      const found =
+        matchPriceInWindow(candidateWindow) ??
+        (seg.priceTarget.length <= 140
+          ? matchPriceInWindow(seg.priceTarget)
+          : null);
+
       if (found) {
         byService.set(entry.serviceKey, {
           serviceKey: entry.serviceKey,
@@ -916,12 +998,8 @@ function extractDeterministicFallback(
           labelEn: entry.labelEn,
           unitType: entry.unitType,
           ...found,
-          method: hasSubpages
-            ? "subpage"
-            : hasSpaBundle
-              ? "spa-bundle"
-              : "html-text",
-          snippet: segment.slice(0, 110).trim(),
+          method: defaultMethod,
+          snippet: seg.snippet,
         });
         return true;
       }
@@ -932,14 +1010,23 @@ function extractDeterministicFallback(
   for (const entry of FALLBACK_SERVICE_RULES) {
     if (byService.has(entry.serviceKey)) continue;
     let matched = false;
-    for (let i = 0; i < cleanLines.length && !matched; i++) {
-      matched = tryMatchSegment(entry, cleanLines[i]);
+    for (let i = 0; i < segments.length && !matched; i++) {
+      const isKeyed = segments[i].searchTarget !== segments[i].priceTarget;
+      matched = tryMatchSegment(entry, segments[i], !isKeyed);
     }
     if (!matched) {
-      for (let i = 0; i < cleanLines.length - 1 && !matched; i++) {
-        const pair = `${cleanLines[i]} · ${cleanLines[i + 1]}`;
+      for (let i = 0; i < plainLines.length - 1 && !matched; i++) {
+        const pair = `${plainLines[i]} · ${plainLines[i + 1]}`;
         if (pair.length <= 180) {
-          matched = tryMatchSegment(entry, pair);
+          matched = tryMatchSegment(
+            entry,
+            {
+              searchTarget: pair,
+              priceTarget: pair,
+              snippet: pair.slice(0, 110),
+            },
+            true,
+          );
         }
       }
     }
@@ -972,6 +1059,23 @@ interface RawAiResponsePayload {
   prices?: RawAiPriceRow[];
 }
 
+function inferPresetFromPrices(
+  prices: ExtractedPrice[],
+): DetectedIndustryMatch {
+  let upholsteryHits = 0;
+  let hvacHits = 0;
+  let plumbingHits = 0;
+  for (const item of prices) {
+    if (UPHOLSTERY_DETECTION_KEYS.has(item.serviceKey)) upholsteryHits++;
+    if (HVAC_DETECTION_KEYS.has(item.serviceKey)) hvacHits++;
+    if (PLUMBING_DETECTION_KEYS.has(item.serviceKey)) plumbingHits++;
+  }
+  if (upholsteryHits >= 2) return "upholstery";
+  if (hvacHits >= 2) return "hvac";
+  if (plumbingHits >= 2) return "plumbing";
+  return "custom";
+}
+
 function normalizeSiteProfile(
   raw: RawAiSiteProfile | undefined,
   metadata: HtmlMetadata,
@@ -983,7 +1087,9 @@ function normalizeSiteProfile(
   const matchedIndustryId: DetectedIndustryMatch =
     rawMatch === "upholstery" || rawMatch === "hvac" || rawMatch === "plumbing"
       ? rawMatch
-      : "custom";
+      : rawMatch === "custom"
+        ? "custom"
+        : inferPresetFromPrices(prices);
 
   const normalizeQueries = (list: unknown): string[] =>
     Array.isArray(list)
@@ -1079,8 +1185,9 @@ function normalizeAiPayload(
 }
 
 const AI_SYSTEM_INSTRUCTION =
-  "You analyze compact website pricing extracts from ANY service or rental company (event/party rentals, cleaning, HVAC, plumbing, automotive, catering, medical, etc.) and return strict JSON.\n" +
-  "1) Build 'siteProfile': detect 'businessName', concise 'nichePl' (Polish, 2-6 words), concise 'nicheEn' (English, 2-6 words), 'matchedIndustryId' ('upholstery' | 'hvac' | 'plumbing' | 'custom' — choose 'custom' unless the business is genuinely carpet/upholstery cleaning, HVAC, or plumbing), and 3-4 short local search query stems WITHOUT city names in 'searchQueriesPl' and 'searchQueriesEn'.\n" +
+  "You are a universal pricing-page extractor and business-niche classifier for any local service website.\n" +
+  "Given a compact site summary (SITE_TITLE/DESC/HEADINGS, CATALOG_PRICE_ITEMS, KEYED_PRICES, PAGE_PRICE_LINES), return strictly valid JSON:\n" +
+  "1) Populate 'siteProfile': company 'businessName', concise 'nichePl' (Polish, 2-6 words), concise 'nicheEn' (English, 2-6 words), 'matchedIndustryId' ('upholstery' | 'hvac' | 'plumbing' | 'custom' — choose 'custom' unless the business is genuinely carpet/upholstery cleaning, HVAC, or plumbing), and 3-4 short local search query stems WITHOUT city names in 'searchQueriesPl' and 'searchQueriesEn'.\n" +
   "2) Extract EVERY distinct customer service, attraction, or rental option into 'prices' (up to 25 items). CRITICAL: You MUST include ALL items listed under CATALOG_PRICE_ITEMS (each tent size, table/chair rental, inflatable, machine, package, etc.) PLUS any additional priced services from PAGE_PRICE_LINES or KEYED_PRICES. Never return only add-ons while skipping main catalog items.\n" +
   "Reuse canonical keys ONLY if exact match: [carpetArea, carpetFlooring, upholsteryChair, twoSeatCouch, cornerSofa, acService, heatPumpCheck, ductCleaning, leakRepair, boilerService, drainUnclog]. For everything else generate unique descriptive 'live:<slug>' keys (keep distinct sizes/packages separate, e.g. 6x6m vs 6x10m).\n" +
   "For ranges like '20 - 50 zł' or '3,5 - 5 PLN', use the starting price as 'detectedAmount'. Strictly exclude travel/distance fees (dojazd, PLN/km), security deposits (zadatek, kaucja), and 0 PLN freebies.";
