@@ -20,6 +20,7 @@ const GROQ_FALLBACK_MODELS = [
   "qwen/qwen3.8-27b",
   "openai/gpt-oss-20b",
 ] as const;
+const MAX_GROQ_RESEARCH_CHARS = 8_500;
 
 interface GroundingSource {
   title: string;
@@ -340,6 +341,7 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
       rawUrls.push(part);
     }
   }
+
   const competitorUrls = Array.from(
     new Set(
       rawUrls
@@ -420,7 +422,6 @@ function compactSiteText(rawText: string, maxChars = 2400): string {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 1);
-  // Universal, industry-agnostic price & offer signal matcher
   const signalRe =
     /(z[łl]|pln|eur|usd|\$|€|,-|cennik|cena|od\s+\d+|from\s+\d+|m²|m2|szt|godz|hour|dzie[ńn]|day|imprez|event|wynajem|us[łl]ug|dojazd|gratis|opinie|price|pricing|rate)/i;
   const picked = new Set<number>();
@@ -436,6 +437,67 @@ function compactSiteText(rawText: string, maxChars = 2400): string {
     .map((idx) => lines[idx]);
   const joined = (selected.length > 0 ? selected : lines).join("\n");
   return joined.slice(0, maxChars);
+}
+
+function prioritizeCurrencyLines(rawText: string, maxChars: number): string {
+  const lines = rawText
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 2);
+  const currencyRe = /\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)\b/i;
+  const currencyLines = lines.filter((l) => currencyRe.test(l));
+  const otherLines = lines.filter((l) => !currencyRe.test(l));
+  const ordered = [...currencyLines, ...otherLines];
+  const chunks: string[] = [];
+  let len = 0;
+  for (const line of ordered) {
+    const next = len + line.length + 1;
+    if (next > maxChars) break;
+    chunks.push(line);
+    len = next;
+  }
+  return chunks.join("\n");
+}
+
+function buildCompactGroqResearch(
+  gbpContext: string,
+  fetchedSites: FetchedSiteContext[],
+  maxChars = MAX_GROQ_RESEARCH_CHARS,
+): string {
+  const sections: string[] = [];
+  let remaining = maxChars;
+
+  if (gbpContext) {
+    const gbpCap = Math.min(2_600, Math.floor(maxChars * 0.35));
+    const gbpSlice = gbpContext.slice(0, gbpCap).trim();
+    sections.push(gbpSlice);
+    remaining -= gbpSlice.length + 2;
+  }
+
+  if (fetchedSites.length > 0 && remaining > 400) {
+    const sitesToInclude = fetchedSites.slice(0, 9);
+    const perSiteBudget = Math.max(
+      360,
+      Math.floor(remaining / sitesToInclude.length) - 70,
+    );
+    for (const site of sitesToInclude) {
+      if (remaining < 180) break;
+      const header = `=== SITE: ${site.title.slice(0, 60)} (${site.url}) ===`;
+      const compactBody = prioritizeCurrencyLines(site.text, perSiteBudget);
+      if (!compactBody) continue;
+      const block = `${header}\n${compactBody}`;
+      if (block.length + 2 <= remaining) {
+        sections.push(block);
+        remaining -= block.length + 2;
+      } else if (remaining > 220) {
+        sections.push(block.slice(0, remaining));
+        remaining = 0;
+        break;
+      }
+    }
+  }
+
+  return sections.join("\n\n").slice(0, maxChars);
 }
 
 function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
@@ -951,6 +1013,7 @@ async function discoverCompetitorUrlsViaOsm(
     const lat = Number(geoData?.[0]?.lat);
     const lon = Number(geoData?.[0]?.lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
+
     const tagFilterMap: Record<IndustryId, string> = {
       upholstery: `(node(around:25000,${lat},${lon})["shop"~"carpet|furniture|laundry|dry_cleaning"]["website"];way(around:25000,${lat},${lon})["shop"~"carpet|furniture|laundry|dry_cleaning"]["website"];node(around:25000,${lat},${lon})["craft"~"cleaning|upholsterer"]["website"];)`,
       hvac: `(node(around:25000,${lat},${lon})["craft"~"hvac|heating|electrician"]["website"];way(around:25000,${lat},${lon})["craft"~"hvac|heating|electrician"]["website"];)`,
@@ -1062,6 +1125,7 @@ function buildSynthesisPrompt(
   validServiceKeys: Set<string>,
   activeServices: ActiveServiceDescriptor[],
   nicheContextLabel: string,
+  maxResearchChars = 22_000,
 ): string {
   const languageLabel = params.locale === "pl" ? "Polish" : "English";
   const trackedServicesList = activeServices
@@ -1091,7 +1155,7 @@ function buildSynthesisPrompt(
     `Active tracked services to benchmark (use these EXACT serviceKey values): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
     `Match local competitor prices against those exact serviceKey entries whenever real price evidence exists in the text (e.g., match rentals, event equipment, installations, cleaning items, repairs by their actual service meaning).`,
     `Compute avgPricePln, minPricePln, maxPricePln across found local companies only for serviceKey entries with real price evidence.`,
-    `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, 22_000)}`,
+    `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, maxResearchChars)}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -1113,6 +1177,7 @@ async function structureReportWithGemini(
     validServiceKeys,
     activeServices,
     nicheContextLabel,
+    22_000,
   );
 
   const structuredResponse = await ai.models.generateContent({
@@ -1186,21 +1251,22 @@ async function structureReportWithGemini(
 }
 
 async function structureReportWithGroq(
-  researchText: string,
+  compactResearchText: string,
   params: ScanRequestParams,
   validServiceKeys: Set<string>,
   activeServices: ActiveServiceDescriptor[],
   nicheContextLabel: string,
 ): Promise<StructuredScanPayload | null> {
   const groqKey = process.env.GROQ_API_KEY?.trim();
-  if (!groqKey) return null;
+  if (!groqKey || !compactResearchText.trim()) return null;
 
   const extractionPrompt = buildSynthesisPrompt(
-    researchText,
+    compactResearchText,
     params,
     validServiceKeys,
     activeServices,
     nicheContextLabel,
+    MAX_GROQ_RESEARCH_CHARS,
   );
 
   for (const model of GROQ_FALLBACK_MODELS) {
@@ -1231,8 +1297,13 @@ async function structureReportWithGroq(
       });
 
       if (!response.ok) {
+        const errSnippet = (await response.text().catch(() => "")).slice(
+          0,
+          120,
+        );
         console.warn(
-          `[/api/market/scan] Groq ${model} HTTP ${response.status}`,
+          `[/api/market/scan] Groq ${model} HTTP ${response.status}:`,
+          errSnippet,
         );
         continue;
       }
@@ -1366,7 +1437,6 @@ async function runMarketScan(params: ScanRequestParams) {
     s.serviceKey.startsWith("live:"),
   );
 
-  // Detect custom website niche when siteProfile says custom OR live-synced catalog has zero overlap with the dropdown preset
   const isCustomSiteNiche =
     params.siteProfile?.matchedIndustryId === "custom" ||
     (Boolean(params.siteProfile?.searchQueriesPl?.length) &&
@@ -1578,8 +1648,13 @@ async function runMarketScan(params: ScanRequestParams) {
       !Array.isArray(parsed.competitors) ||
       parsed.competitors.length === 0
     ) {
+      const compactGroqText = buildCompactGroqResearch(
+        gbpContext,
+        fetchedSites,
+        MAX_GROQ_RESEARCH_CHARS,
+      );
       const groqParsed = await structureReportWithGroq(
-        combinedText,
+        compactGroqText || combinedText,
         params,
         validServiceKeys,
         activeServices,
