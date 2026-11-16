@@ -1,11 +1,15 @@
 # Northstar Ops — GeoIntelligence & Service Operations Hub
 
-> Parameterized GeoIntelligence platform and Atlassian Forge / Rovo MCP ecosystem for local service operators. Features a verified Radom case study (10–100 km radius, powered by real local pricing from pranie-dywanow.j.pl), dynamic OpenStreetMap + Wikidata discovery for any city worldwide, AI competitor scanning, and native Atlassian Forge Rovo Agent + Skill + MCP Server integration.
+> Parameterized GeoIntelligence platform and Atlassian Forge / Rovo MCP ecosystem for local service operators. Features a verified Radom case study (10–100 km radius, powered by real local pricing from pranie-dywanow.j.pl), dynamic OpenStreetMap + Wikidata discovery for any city worldwide, live SPA pricing extraction, AI competitor scanning, a cross-provider Multi-Model AI Council with human-in-the-loop constraints, and native Atlassian Forge Rovo Agent + Skill + MCP Server integration.
 
 ## Live Application & Endpoints
-- Interactive Web Hub: `https://radom-geo-intelligence.vercel.app`
-- Privacy Policy: `https://radom-geo-intelligence.vercel.app/privacy`
-- Terms of Service: `https://radom-geo-intelligence.vercel.app/terms`
+- Interactive Web Hub: `https://nsops.vercel.app`
+- Privacy Policy: `https://nsops.vercel.app/privacy`
+- Terms of Service: `https://nsops.vercel.app/terms`
+- Live Website Pricing Extractor (`GET`): `/api/pricing/sync?url=...`
+- Live Competitor & Review Pain-Point Scanner (`POST`): `/api/market/scan`
+- Cross-Provider Multi-Model AI Council (`POST`): `/api/council`
+- City & Surrounding Towns Geo Resolver (`GET`): `/api/geo/resolve?city=...`
 - Web MCP Discovery (`GET`): `/api/mcp`
 - Web MCP JSON-RPC 2.0 Execution (`POST`): `/api/mcp` (`initialize`, `tools/list`, `tools/call`)
 
@@ -16,10 +20,10 @@
   - Computes zone travel surcharge and total customer quote in PLN for supported towns.
 - `generateLocalizedCampaign({ season, targetTowns, industryId?, locale? })`
   - Generates localized go-to-market strategy copy tailored to verified customer pain points.
-- `exportStrategyToConfluence({ center, radiusKm, season, industryId?, townsInRadius?, competitorsTracked?, benchmarks?, locale? })`
-  - Publishes a live formatted Confluence strategy page via Atlassian REST API v2.
-- `createJiraMarketingEpics({ center, radiusKm, industryId?, townsInRadius?, competitorsTracked?, locale? })`
-  - Creates a Jira marketing Epic with localized town subtasks via Atlassian REST API v3.
+- `exportStrategyToConfluence({ center, radiusKm, season, industryId?, detectedIndustryLabel?, topPainPoint?, townsInRadius?, competitorsTracked?, benchmarks?, councilContext?, locale? })`
+  - Publishes a live formatted Confluence strategy page via Atlassian REST API v2 (including AI Council debate audit trail when provided).
+- `createJiraMarketingEpics({ center, radiusKm, industryId?, townsInRadius?, competitorsTracked?, councilContext?, locale? })`
+  - Creates a Jira marketing Epic with localized town tasks and approved AI Council action items via Atlassian REST API v3.
 - `createCustomerQuote({ center, town, serviceKey, serviceLabel?, quantity?, unitLabel?, unitPricePln, travelFeePln, totalPln, inZone?, locale? })`
   - Creates a live Jira customer quote task directly from the Customer Price Preview calculator.
 
