@@ -323,6 +323,10 @@ export function Dashboard() {
   const currentYear = new Date().getFullYear();
   const copyrightRange = currentYear >= 2027 ? `2026 - ${currentYear}` : "2026";
   const liveCompetitorsCount = liveScan?.competitors.length ?? 0;
+  const topLivePainPoint =
+    liveScan?.aiEnhanced && liveScan.painPoints.length > 0
+      ? liveScan.painPoints[0].label
+      : undefined;
 
   const handleSyncPrices = async () => {
     const trimmed = websiteUrl.trim();
@@ -497,7 +501,10 @@ export function Dashboard() {
               radiusKm,
               industryId,
               townsInRadius,
-              competitorsTracked: metrics.competitorsTracked,
+              competitorsTracked:
+                liveCompetitorsCount > 0
+                  ? liveCompetitorsCount
+                  : metrics.competitorsTracked,
               locale,
             },
           },
@@ -508,10 +515,16 @@ export function Dashboard() {
     }
   };
 
-  const gapMetricLabel =
-    metrics.avgGapPct <= 0
+  const hasComparableBenchmarks = market.benchmarks.some(
+    (row) => row.localPricePln > 0,
+  );
+  const gapMetricLabel = !hasComparableBenchmarks
+    ? "—"
+    : metrics.avgGapPct < 0
       ? `−${Math.abs(metrics.avgGapPct)}%`
-      : `+${metrics.avgGapPct}%`;
+      : metrics.avgGapPct === 0
+        ? "0%"
+        : `+${metrics.avgGapPct}%`;
 
   return (
     <div className={dark ? "dark" : ""}>
@@ -767,8 +780,12 @@ export function Dashboard() {
                 icon={<TrendingUp size={16} />}
                 label={t.avgMarketGap}
                 value={gapMetricLabel}
-                foot={t.belowMarketAverage}
-                highlight={metrics.avgGapPct <= 0}
+                foot={
+                  hasComparableBenchmarks
+                    ? t.belowMarketAverage
+                    : t.noLocalBenchmark
+                }
+                highlight={hasComparableBenchmarks && metrics.avgGapPct <= 0}
               />
             </section>
 
@@ -800,6 +817,13 @@ export function Dashboard() {
                 running={running}
                 onRun={runScan}
                 industryId={industryId}
+                liveCompetitorsCount={liveCompetitorsCount}
+                detectedIndustryLabel={
+                  isWebsiteAutoNiche || hasManualCustomNiche
+                    ? activeIndustryLabel
+                    : undefined
+                }
+                topPainPoint={topLivePainPoint}
               />
               <PricingCalculator
                 t={t}

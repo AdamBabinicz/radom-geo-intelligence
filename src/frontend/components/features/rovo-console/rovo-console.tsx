@@ -28,6 +28,9 @@ interface RovoConsoleProps {
   running: boolean;
   onRun: () => void;
   industryId?: IndustryId;
+  liveCompetitorsCount?: number;
+  detectedIndustryLabel?: string;
+  topPainPoint?: string;
 }
 
 async function invokeMcpTool<T>(
@@ -60,6 +63,9 @@ export function RovoConsole({
   running,
   onRun,
   industryId = "upholstery",
+  liveCompetitorsCount,
+  detectedIndustryLabel,
+  topPainPoint,
 }: RovoConsoleProps) {
   const [busyAction, setBusyAction] = useState<"confluence" | "jira" | null>(
     null,
@@ -73,9 +79,14 @@ export function RovoConsole({
     setConfluenceResult(null);
     setJiraResult(null);
     setActionError(null);
-  }, [market.id, radiusKm, industryId]);
+  }, [market.id, radiusKm, industryId, detectedIndustryLabel]);
 
   const metrics = getMarketMetrics(market, radiusKm);
+  const effectiveCompetitorsCount =
+    typeof liveCompetitorsCount === "number" && liveCompetitorsCount > 0
+      ? liveCompetitorsCount
+      : metrics.competitorsTracked;
+
   const townsInRadius = [
     market.centerName,
     ...metrics.localTowns
@@ -95,7 +106,9 @@ export function RovoConsole({
           season: "Q4",
           industryId,
           townsInRadius,
-          competitorsTracked: metrics.competitorsTracked,
+          competitorsTracked: effectiveCompetitorsCount,
+          ...(detectedIndustryLabel ? { detectedIndustryLabel } : {}),
+          ...(topPainPoint ? { topPainPoint } : {}),
           benchmarks: market.benchmarks.map((b) => ({
             serviceKey: b.serviceKey,
             serviceLabel: resolveServiceLabel(b, t, locale),
@@ -127,7 +140,7 @@ export function RovoConsole({
           radiusKm,
           industryId,
           townsInRadius,
-          competitorsTracked: metrics.competitorsTracked,
+          competitorsTracked: effectiveCompetitorsCount,
           locale,
         },
       );
@@ -164,7 +177,6 @@ export function RovoConsole({
           {t.rovoAgentLabel}
         </span>
       </div>
-
       <div className="mx-5 rounded-lg border border-slate-200/80 bg-slate-50 p-4 font-mono text-[11px] text-slate-700 dark:border-white/10 dark:bg-[#111a1c] dark:text-slate-300">
         <div className="mb-3 flex items-center justify-between border-b border-slate-200/80 pb-2 text-[9px] text-slate-500 dark:border-white/10 dark:text-slate-400">
           <span className="font-semibold tracking-wider">{t.executionLog}</span>
@@ -181,7 +193,7 @@ export function RovoConsole({
           />
           <LogLine
             icon={<Check size={12} />}
-            text={`${t.logCompetitorsPrefix} ${metrics.competitorsTracked} ${t.logCompetitorsSuffix}`}
+            text={`${t.logCompetitorsPrefix} ${effectiveCompetitorsCount} ${t.logCompetitorsSuffix}`}
             status="done"
           />
           <LogLine
@@ -206,7 +218,6 @@ export function RovoConsole({
           {running ? t.agentWorking : t.runSuccessful}
         </div>
       </div>
-
       <RovoActionPreview
         t={t}
         confluenceResult={confluenceResult}
@@ -216,13 +227,11 @@ export function RovoConsole({
           setJiraResult(null);
         }}
       />
-
       {actionError && (
         <div className="mx-5 mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
           {actionError}
         </div>
       )}
-
       <div className="flex flex-wrap items-center gap-2 px-5 pt-4">
         <button
           type="button"
@@ -245,7 +254,6 @@ export function RovoConsole({
           {busyAction === "jira" ? t.creatingJiraEpics : t.createJiraEpics}
         </button>
       </div>
-
       <div className="flex flex-col gap-3 p-5 pt-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-[280px] text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
           {t.agentDescription}

@@ -45,7 +45,7 @@ interface AiCouncilPanelProps {
   radiusKm: number;
   avgGapPct: number;
   townsInRadius: string[];
-  liveScan: LiveMarketScanResult | null;
+  liveScan: (LiveMarketScanResult & { detectedIndustryLabel?: string }) | null;
 }
 
 function toSafeHttpUrl(raw?: string): string | null {
@@ -208,6 +208,13 @@ export function AiCouncilPanel({
 
     const competitorsCount =
       liveScan?.competitors.length || Math.max(1, market.baseCompetitorsCount);
+    const topPainPoint =
+      liveScan?.aiEnhanced && liveScan.painPoints.length > 0
+        ? liveScan.painPoints[0].label
+        : undefined;
+    const detectedIndustryLabel = liveScan?.detectedIndustryLabel?.trim()
+      ? liveScan.detectedIndustryLabel.trim()
+      : undefined;
 
     const councilContext: CouncilExecutionContext = {
       selectedOptionTitle: chosen.title,
@@ -236,6 +243,8 @@ export function AiCouncilPanel({
                 radiusKm,
                 season: "Q4",
                 industryId,
+                ...(detectedIndustryLabel ? { detectedIndustryLabel } : {}),
+                ...(topPainPoint ? { topPainPoint } : {}),
                 townsInRadius,
                 competitorsTracked: competitorsCount,
                 benchmarks: updatedBenchmarks,

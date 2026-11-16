@@ -17,6 +17,10 @@ function parseIndustryId(value: unknown): IndustryId | undefined {
     : undefined;
 }
 
+function parseOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function parseStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) ? value.map(String) : undefined;
 }
@@ -164,6 +168,8 @@ export const mcpTools = [
           type: "string",
           enum: ["upholstery", "hvac", "plumbing"],
         },
+        detectedIndustryLabel: { type: "string" },
+        topPainPoint: { type: "string" },
         townsInRadius: { type: "array", items: { type: "string" } },
         competitorsTracked: { type: "number", minimum: 0 },
         benchmarks: {
@@ -269,6 +275,8 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       radiusKm: Number(args.radiusKm ?? 30),
       season: String(args.season ?? "Q4"),
       industryId: parseIndustryId(args.industryId),
+      detectedIndustryLabel: parseOptionalString(args.detectedIndustryLabel),
+      topPainPoint: parseOptionalString(args.topPainPoint),
       townsInRadius: parseStringArray(args.townsInRadius),
       competitorsTracked: parseOptionalNumber(args.competitorsTracked),
       benchmarks: parseBenchmarks(args.benchmarks),
