@@ -28,6 +28,7 @@ export const metadata: Metadata = {
   description:
     "GeoIntelligence & Service Operations Hub for local service businesses: live website pricing extraction, competitor discovery, dynamic radius quoting (10–100 km), Multi-Model AI Council, and Atlassian Forge Rovo/MCP automation.",
   applicationName: "Northstar Ops",
+  manifest: "/site.webmanifest",
   keywords: [
     "GeoIntelligence",
     "Local Market Analysis",
@@ -50,33 +51,23 @@ export const metadata: Metadata = {
       "Live local market intelligence, dynamic 10–100 km radius quoting, Multi-Model AI Council, and native Atlassian Rovo/MCP + Jira & Confluence integration.",
     locale: "en_US",
     alternateLocale: ["pl_PL"],
-    images: [
-      {
-        url: "/apple-icon.png",
-        width: 180,
-        height: 180,
-        alt: "Northstar Ops logo",
-      },
-    ],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "Northstar Ops | GeoIntelligence & Service Operations Hub",
     description:
       "Local market analysis, live competitor discovery, Multi-Model AI Council, and Atlassian Forge Rovo/MCP workflows.",
-    images: ["/apple-icon.png"],
   },
   robots: {
     index: true,
     follow: true,
   },
   icons: {
-    icon: [
-      { url: "/icon-light-32x32.png", media: "(prefers-color-scheme: light)" },
-      { url: "/icon-dark-32x32.png", media: "(prefers-color-scheme: dark)" },
-      { url: "/icon.svg", type: "image/svg+xml" },
+    icon: [{ url: "/favicon-96x96.png", sizes: "96x96", type: "image/png" }],
+    shortcut: ["/favicon-96x96.png"],
+    apple: [
+      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
     ],
-    apple: "/apple-icon.png",
   },
 };
 
