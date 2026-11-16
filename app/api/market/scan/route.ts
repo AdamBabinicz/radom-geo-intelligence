@@ -140,6 +140,12 @@ const AGGREGATOR_HOSTS = [
   "pf.pl",
   "pomocedomowe.pl",
   "sprzatanko.pl",
+  "weselezklasa.pl",
+  "gdziewesele.pl",
+  "planujemywesele.pl",
+  "slubnaglowie.pl",
+  "oprawa.pl",
+  "evently.pl",
   "booksy.com",
   "fresha.com",
   "yelp.com",
@@ -168,6 +174,7 @@ function isSafePublicUrl(rawUrl: string): URL | null {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return null;
     }
+
     const host = parsed.hostname.toLowerCase();
     if (
       host === "localhost" ||
@@ -400,6 +407,7 @@ function extractGroundingSources(
 function extractVisibleText(html: string): { title: string; text: string } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = (titleMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
+
   const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -414,6 +422,7 @@ function extractVisibleText(html: string): { title: string; text: string } {
     .replace(/[ \t\r\f\v]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
+
   return { title, text: stripped.slice(0, 10_000) };
 }
 
@@ -422,8 +431,10 @@ function compactSiteText(rawText: string, maxChars = 2400): string {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 1);
+
   const signalRe =
     /(z[łl]|pln|eur|usd|\$|€|,-|cennik|cena|od\s+\d+|from\s+\d+|m²|m2|szt|godz|hour|dzie[ńn]|day|imprez|event|wynajem|us[łl]ug|dojazd|gratis|opinie|price|pricing|rate)/i;
+
   const picked = new Set<number>();
   lines.forEach((line, idx) => {
     if (signalRe.test(line)) {
@@ -432,9 +443,11 @@ function compactSiteText(rawText: string, maxChars = 2400): string {
       if (idx + 1 < lines.length) picked.add(idx + 1);
     }
   });
+
   const selected = Array.from(picked)
     .sort((a, b) => a - b)
     .map((idx) => lines[idx]);
+
   const joined = (selected.length > 0 ? selected : lines).join("\n");
   return joined.slice(0, maxChars);
 }
@@ -444,7 +457,8 @@ function prioritizeCurrencyLines(rawText: string, maxChars: number): string {
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 2);
-  const currencyRe = /\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)\b/i;
+  const currencyRe =
+    /(?:\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])|(?:€|\$|pln|eur)\s*\d)/i;
   const currencyLines = lines.filter((l) => currencyRe.test(l));
   const otherLines = lines.filter((l) => !currencyRe.test(l));
   const ordered = [...currencyLines, ...otherLines];
@@ -480,6 +494,7 @@ function buildCompactGroqResearch(
       360,
       Math.floor(remaining / sitesToInclude.length) - 70,
     );
+
     for (const site of sitesToInclude) {
       if (remaining < 180) break;
       const header = `=== SITE: ${site.title.slice(0, 60)} (${site.url}) ===`;
@@ -504,30 +519,32 @@ function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
   const anchorMatches = Array.from(
     html.matchAll(/<a[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi),
   );
+  let fallbackOfferUrl: string | null = null;
   for (const match of anchorMatches) {
     const href = (match[1] ?? "").trim();
     const label = (match[2] ?? "").replace(/<[^>]+>/g, " ").trim();
     const haystack = `${href} ${label}`.toLowerCase();
-    if (
-      /(cennik|cena|oferta|wynajem|atrakcj|pricing|price-list|prices|rates)/.test(
-        haystack,
-      ) &&
-      !/\.(jpg|jpeg|png|webp|avif|pdf|svg)$/i.test(href)
-    ) {
-      try {
-        const resolved = new URL(href, baseUrl);
-        if (
-          resolved.origin === baseUrl.origin &&
-          resolved.pathname !== baseUrl.pathname
-        ) {
-          return resolved.toString();
-        }
-      } catch {
-        continue;
+    if (/\.(jpg|jpeg|png|webp|avif|pdf|svg)$/i.test(href)) continue;
+
+    const isDirectPricing =
+      /(cennik|cena|pricing|price-list|prices|rates)/.test(haystack);
+    const isSecondaryOffer = /(oferta|wynajem|atrakcj)/.test(haystack);
+    if (!isDirectPricing && !isSecondaryOffer) continue;
+
+    try {
+      const resolved = new URL(href, baseUrl);
+      if (
+        resolved.origin === baseUrl.origin &&
+        resolved.pathname !== baseUrl.pathname
+      ) {
+        if (isDirectPricing) return resolved.toString();
+        if (!fallbackOfferUrl) fallbackOfferUrl = resolved.toString();
       }
+    } catch {
+      continue;
     }
   }
-  return null;
+  return fallbackOfferUrl;
 }
 
 async function fetchHtmlPage(url: string): Promise<string | null> {
@@ -554,8 +571,10 @@ async function fetchSiteContext(
   if (!safeUrl) return null;
   const html = await fetchHtmlPage(safeUrl.toString());
   if (!html) return null;
+
   const { title, text } = extractVisibleText(html);
   let combined = text;
+
   const subpageUrl = findPricingSubpageUrl(html, safeUrl);
   if (subpageUrl) {
     const subHtml = await fetchHtmlPage(subpageUrl);
@@ -566,6 +585,7 @@ async function fetchSiteContext(
       }
     }
   }
+
   if (
     combined.length < 400 ||
     !/\d\s*(?:zł|pln|eur|usd|\$|€)/i.test(combined)
@@ -596,8 +616,10 @@ async function fetchSiteContext(
       }
     }
   }
+
   const compacted = compactSiteText(combined, 2400);
   if (!compacted) return null;
+
   return {
     url: safeUrl.toString(),
     title: title || safeUrl.hostname,
@@ -703,6 +725,7 @@ function buildSearchQueries(
     };
     return map[industryId];
   }
+
   const mapEn: Record<IndustryId, string[]> = {
     upholstery: [
       `carpet cleaning ${city}`,
@@ -961,6 +984,7 @@ async function searchDuckDuckGoSingle(
         : Array.from(
             html.matchAll(/href=['"]([^'"]*(?:uddg=|https?:\/\/)[^'"]+)['"]/gi),
           );
+
     const urls: string[] = [];
     for (const match of fallbackMatches) {
       const candidate = unwrapDuckDuckGoHref(match[1] ?? "");
@@ -1066,7 +1090,6 @@ function buildFallbackCompetitors(
     const nameKey = place.name.toLowerCase();
     if (seenNames.has(nameKey)) continue;
     if (host && seenHosts.has(host)) continue;
-
     seenNames.add(nameKey);
     if (host) seenHosts.add(host);
 
@@ -1074,7 +1097,6 @@ function buildFallbackCompetitors(
     const priceMatch = matchedSite?.text.match(
       /([^\n]{0,45}\d{1,4}(?:[.,]\d{1,2})?\s*(?:zł|pln|eur|usd|\$|€)[^\n]{0,45})/i,
     );
-
     const summary = priceMatch
       ? priceMatch[1].replace(/\s+/g, " ").trim()
       : place.category
@@ -1101,7 +1123,6 @@ function buildFallbackCompetitors(
     const host = getNormalizedHostFromUrl(site.url);
     if (host && seenHosts.has(host)) continue;
     if (host) seenHosts.add(host);
-
     const priceMatch = site.text.match(
       /([^\n]{0,45}\d{1,4}(?:[.,]\d{1,2})?\s*(?:zł|pln|eur|usd|\$|€)[^\n]{0,45})/i,
     );
@@ -1134,6 +1155,7 @@ function buildSynthesisPrompt(
         `"${s.serviceKey}"`,
         s.label ? `(${s.label})` : "",
         s.unitType ? `[${s.unitType}]` : "",
+        s.ourPricePln ? `[our price: ${s.ourPricePln} PLN]` : "",
       ]
         .filter(Boolean)
         .join(" "),
@@ -1153,8 +1175,8 @@ function buildSynthesisPrompt(
     `Do NOT invent companies, numbers, ratings, or prices not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
     `Active tracked services to benchmark (use these EXACT serviceKey values): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
-    `Match local competitor prices against those exact serviceKey entries whenever real price evidence exists in the text (e.g., match rentals, event equipment, installations, cleaning items, repairs by their actual service meaning).`,
-    `Compute avgPricePln, minPricePln, maxPricePln across found local companies only for serviceKey entries with real price evidence.`,
+    `CRITICAL UNIT RULE: Match local competitor prices into marketBenchmarks ONLY when BOTH the service scope AND billing unit match (e.g., NEVER match an hourly rate like "50 zł/h", a per-hour surcharge, a security deposit/zadatek, or a delivery fee against a full-day/full-event package price like 800 PLN). If a competitor only lists an incompatible unit (such as zł/h vs full-day rental), mention it in competitors[].priceSummary and OMIT that service from marketBenchmarks.`,
+    `Compute avgPricePln, minPricePln, maxPricePln across found local companies only for serviceKey entries with real, unit-compatible price evidence.`,
     `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, maxResearchChars)}`,
   ]
     .filter(Boolean)
@@ -1285,7 +1307,7 @@ async function structureReportWithGroq(
             {
               role: "system",
               content:
-                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Only cite companies and numbers supported by input.',
+                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Only cite companies and numbers supported by input, and never compare hourly/add-on rates against full-day/package prices.',
             },
             {
               role: "user",
@@ -1325,28 +1347,36 @@ async function structureReportWithGroq(
       );
     }
   }
-
   return null;
 }
 
 function sanitizeStructuredPayload(
   parsed: StructuredScanPayload,
   validServiceKeys: Set<string>,
+  activeServices: ActiveServiceDescriptor[],
   excludeHost?: string,
 ) {
   const seenNames = new Set<string>();
   const seenHosts = new Set<string>();
+  const ourPriceByKey = new Map<string, number>();
+  for (const svc of activeServices) {
+    if (
+      typeof svc.ourPricePln === "number" &&
+      Number.isFinite(svc.ourPricePln) &&
+      svc.ourPricePln > 0
+    ) {
+      ourPriceByKey.set(svc.serviceKey, svc.ourPricePln);
+    }
+  }
 
   const competitors = (parsed?.competitors ?? [])
     .filter((c: CompetitorFinding) => {
       if (typeof c?.name !== "string" || !c.name.trim()) return false;
       if (isExcludedCompetitorWebsite(c.website, excludeHost)) return false;
-
       const nameKey = c.name.trim().toLowerCase();
       const hostKey = getNormalizedHostFromUrl(c.website);
       if (seenNames.has(nameKey)) return false;
       if (hostKey && seenHosts.has(hostKey)) return false;
-
       seenNames.add(nameKey);
       if (hostKey) seenHosts.add(hostKey);
       return true;
@@ -1370,23 +1400,44 @@ function sanitizeStructuredPayload(
     }));
 
   const marketBenchmarks = (parsed?.marketBenchmarks ?? [])
-    .filter(
-      (b: BenchmarkFinding) =>
-        typeof b?.serviceKey === "string" &&
-        validServiceKeys.has(b.serviceKey) &&
-        typeof b.avgPricePln === "number" &&
-        Number.isFinite(b.avgPricePln) &&
-        b.avgPricePln > 0,
-    )
+    .filter((b: BenchmarkFinding) => {
+      if (
+        typeof b?.serviceKey !== "string" ||
+        !validServiceKeys.has(b.serviceKey) ||
+        typeof b.avgPricePln !== "number" ||
+        !Number.isFinite(b.avgPricePln) ||
+        b.avgPricePln <= 0
+      ) {
+        return false;
+      }
+
+      const ourPrice = ourPriceByKey.get(b.serviceKey);
+      if (ourPrice && ourPrice > 0) {
+        const samples = Math.max(1, Math.round(b.sampleCount || 1));
+        const ratio = b.avgPricePln / ourPrice;
+        // Guard against unit mismatches (e.g. 50 PLN/h matched against 800 PLN/day)
+        if (samples <= 2 && (ratio < 0.2 || ratio > 6)) {
+          return false;
+        }
+        if (ratio < 0.12 || ratio > 8) {
+          return false;
+        }
+      }
+      return true;
+    })
     .map((b: BenchmarkFinding) => ({
       ...b,
       avgPricePln: Math.round(b.avgPricePln),
       minPricePln:
-        typeof b.minPricePln === "number" && Number.isFinite(b.minPricePln)
+        typeof b.minPricePln === "number" &&
+        Number.isFinite(b.minPricePln) &&
+        b.minPricePln > 0
           ? Math.round(b.minPricePln)
           : undefined,
       maxPricePln:
-        typeof b.maxPricePln === "number" && Number.isFinite(b.maxPricePln)
+        typeof b.maxPricePln === "number" &&
+        Number.isFinite(b.maxPricePln) &&
+        b.maxPricePln > 0
           ? Math.round(b.maxPricePln)
           : undefined,
       sampleCount: Math.max(1, Math.round(b.sampleCount || 1)),
@@ -1436,7 +1487,6 @@ async function runMarketScan(params: ScanRequestParams) {
   const hasLiveServices = activeServices.some((s) =>
     s.serviceKey.startsWith("live:"),
   );
-
   const isCustomSiteNiche =
     params.siteProfile?.matchedIndustryId === "custom" ||
     (Boolean(params.siteProfile?.searchQueriesPl?.length) &&
@@ -1534,8 +1584,10 @@ async function runMarketScan(params: ScanRequestParams) {
         const clean = sanitizeStructuredPayload(
           parsed,
           validServiceKeys,
+          activeServices,
           params.excludeHost,
         );
+
         return NextResponse.json({
           source: "ai-web-grounding",
           aiEnhanced: true,
@@ -1673,8 +1725,10 @@ async function runMarketScan(params: ScanRequestParams) {
       const clean = sanitizeStructuredPayload(
         parsed,
         validServiceKeys,
+        activeServices,
         params.excludeHost,
       );
+
       return NextResponse.json({
         source: gbpContext ? "live-maps-and-sites" : "live-competitor-sites",
         aiEnhanced: true,
@@ -1696,6 +1750,7 @@ async function runMarketScan(params: ScanRequestParams) {
       params.locale,
       params.excludeHost,
     );
+
     const warningMsg = !ai
       ? params.locale === "pl"
         ? "Brak GEMINI_API_KEY na serwerze — wyświetlono surowe wizytówki Google Maps i znalezione strony bez analizy AI."

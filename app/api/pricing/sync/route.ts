@@ -323,7 +323,6 @@ function decodeHtmlEntities(raw: string): string {
 function extractHtmlMetadata(html: string): HtmlMetadata {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = decodeHtmlEntities(titleMatch?.[1] ?? "").slice(0, 140);
-
   const descMatch =
     html.match(
       /<meta[^>]+name=["']description["'][^>]*content=["']([\s\S]*?)["']/i,
@@ -332,7 +331,6 @@ function extractHtmlMetadata(html: string): HtmlMetadata {
       /<meta[^>]+content=["']([\s\S]*?)["'][^>]*name=["']description["']/i,
     );
   const description = decodeHtmlEntities(descMatch?.[1] ?? "").slice(0, 260);
-
   const headings: string[] = [];
   const headingRe = /<h[1-2][^>]*>([\s\S]*?)<\/h[1-2]>/gi;
   for (const match of html.matchAll(headingRe)) {
@@ -346,7 +344,6 @@ function extractHtmlMetadata(html: string): HtmlMetadata {
     }
     if (headings.length >= 3) break;
   }
-
   return { title, description, headings };
 }
 
@@ -439,7 +436,6 @@ function collectJsonLdOffers(node: unknown, out: RawOffer[], parentName = "") {
       : typeof itemOffered?.name === "string"
         ? itemOffered.name
         : parentName;
-
   const priceSpec =
     record.priceSpecification && typeof record.priceSpecification === "object"
       ? (record.priceSpecification as Record<string, unknown>)
@@ -459,6 +455,7 @@ function collectJsonLdOffers(node: unknown, out: RawOffer[], parentName = "") {
       out.push({ name: ownName, amount, currency });
     }
   }
+
   for (const value of Object.values(record)) {
     if (value && typeof value === "object") {
       collectJsonLdOffers(value, out, ownName);
@@ -479,6 +476,7 @@ function extractFromJsonLd(html: string): Map<string, ExtractedPrice> {
       continue;
     }
   }
+
   for (const offer of offers) {
     let matchedRule: FallbackKeywordRule | null = null;
     for (const entry of FALLBACK_SERVICE_RULES) {
@@ -491,9 +489,11 @@ function extractFromJsonLd(html: string): Map<string, ExtractedPrice> {
         break;
       }
     }
+
     const key =
       matchedRule?.serviceKey ?? normalizeExtractedServiceKey("", offer.name);
     if (!key || results.has(key)) continue;
+
     results.set(key, {
       serviceKey: key,
       labelPl: matchedRule?.labelPl ?? offer.name.slice(0, 70).trim(),
@@ -571,10 +571,10 @@ function formatReadableKeySlug(rawKey: string): string {
 
 function decodeJsBundleLines(jsRaw: string): string[] {
   const js = decodeJsEscapes(jsRaw);
+
   const strMap = new Map<string, string>();
   const keyPairRe =
     /(?:["']([a-zA-Z0-9_.-]{2,90})["']|([a-zA-Z0-9_.-]{2,48}))\s*:\s*(?:"((?:[^"\\]|\\.){1,180})"|'((?:[^'\\]|\\.){1,180})')/g;
-
   for (const match of js.matchAll(keyPairRe)) {
     const key = match[1] ?? match[2];
     const value = (match[3] ?? match[4] ?? "").replace(/\s+/g, " ").trim();
@@ -614,8 +614,8 @@ function decodeJsBundleLines(jsRaw: string): string[] {
   for (const match of js.matchAll(objPriceRe)) {
     const num = Number(match[1].replace(",", "."));
     if (!Number.isFinite(num) || num <= 0 || num > 100_000) continue;
-    const idx = match.index ?? 0;
 
+    const idx = match.index ?? 0;
     const openBrace = js.lastIndexOf("{", idx);
     const closeBrace = js.indexOf("}", idx);
     const ownStart =
@@ -707,7 +707,7 @@ function decodeJsBundleLines(jsRaw: string): string[] {
 
   // 2. Generic key -> price string pairs (i18n bundles)
   const priceTextRe =
-    /(?:\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)\b|(?:€|\$|pln|eur)\s*\d)/i;
+    /(?:\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])|(?:€|\$|pln|eur)\s*\d)/i;
   for (const [key, value] of strMap.entries()) {
     if (value.length > 180 || !priceTextRe.test(value)) continue;
     if (
@@ -753,7 +753,7 @@ function buildHighSignalContext(
   }
 
   const priceSignalRe =
-    /(?:^CATALOG_ITEM:\s|^KEY_PAIR:\s|\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)\b|(?:€|\$|pln|eur)\s*\d|cennik|cena|od\s+\d|from\s+\d|\/\s*(?:m²|m2|szt|pc|h|godz|dzie[ńn]|day|hour|event|imprez|os))/i;
+    /(?:^CATALOG_ITEM:\s|^KEY_PAIR:\s|\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])|(?:€|\$|pln|eur)\s*\d|cennik|cena|od\s+\d|from\s+\d|\/\s*(?:m²|m2|szt|pc|h|godz|dzie[ńn]|day|hour|event|imprez|os))/i;
 
   const pickedIndices = new Set<number>();
   lines.forEach((line, idx) => {
@@ -865,7 +865,6 @@ function matchPriceInWindow(windowText: string): {
       };
     }
   }
-
   return null;
 }
 
@@ -981,7 +980,6 @@ function extractDeterministicFallback(
       const testRe = new RegExp(pattern.source, pattern.flags.replace("g", ""));
       const match = seg.searchTarget.match(testRe);
       if (!match || match.index === undefined) continue;
-
       const candidateWindow = useWindowFromMatch
         ? seg.priceTarget.slice(match.index, match.index + 140)
         : seg.priceTarget;
@@ -990,7 +988,6 @@ function extractDeterministicFallback(
         (seg.priceTarget.length <= 140
           ? matchPriceInWindow(seg.priceTarget)
           : null);
-
       if (found) {
         byService.set(entry.serviceKey, {
           serviceKey: entry.serviceKey,
@@ -1014,6 +1011,7 @@ function extractDeterministicFallback(
       const isKeyed = segments[i].searchTarget !== segments[i].priceTarget;
       matched = tryMatchSegment(entry, segments[i], !isKeyed);
     }
+
     if (!matched) {
       for (let i = 0; i < plainLines.length - 1 && !matched; i++) {
         const pair = `${plainLines[i]} · ${plainLines[i + 1]}`;
@@ -1114,7 +1112,6 @@ function normalizeSiteProfile(
 
   const queriesPl = normalizeQueries(raw?.searchQueriesPl);
   const queriesEn = normalizeQueries(raw?.searchQueriesEn);
-
   if (queriesPl.length === 0) {
     const derived = prices
       .slice(0, 3)
@@ -1152,13 +1149,16 @@ function normalizeAiPayload(
     const labelEn = String(item.labelEn ?? item.labelPl ?? "").trim();
     const labelPl = String(item.labelPl ?? item.labelEn ?? "").trim();
     if (!labelPl && !labelEn) continue;
+
     const key = normalizeExtractedServiceKey(
       item.serviceKey,
       labelEn || labelPl,
     );
     if (!key || deduped.has(key)) continue;
+
     const amount = Number(item.detectedAmount);
     if (!Number.isFinite(amount) || amount <= 0) continue;
+
     const currency = normalizeCurrency(item.detectedCurrency);
     deduped.set(key, {
       serviceKey: key,
@@ -1204,6 +1204,7 @@ async function extractWithGemini(
       warning: "GEMINI_API_KEY is not configured.",
     };
   }
+
   if (!contextText.trim()) {
     return {
       prices: null,
@@ -1374,7 +1375,6 @@ async function extractWithGroq(
       );
     }
   }
-
   return { prices: null };
 }
 
@@ -1383,6 +1383,7 @@ function findPricingSubpages(html: string, baseUrl: URL): string[] {
   const linkRe = /<a[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   const hintRe =
     /(cennik|pricing|oferta|ceny|us[łl]ug|services|rates|wynajem|atrakcj)/i;
+
   for (const match of html.matchAll(linkRe)) {
     const href = match[1].trim();
     const label = match[2].replace(/<[^>]+>/g, " ").trim();
@@ -1450,12 +1451,14 @@ async function handleSync(rawUrl: string) {
   } catch {
     return NextResponse.json({ error: "Invalid URL format" }, { status: 400 });
   }
+
   if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
     return NextResponse.json(
       { error: "Only HTTP/HTTPS URLs are allowed" },
       { status: 400 },
     );
   }
+
   if (isBlockedHost(parsedUrl.hostname)) {
     return NextResponse.json(
       { error: "Private or local network hosts are blocked" },
@@ -1500,9 +1503,10 @@ async function handleSync(rawUrl: string) {
   }
 
   const combinedSoFar = contextLines.join("\n");
-  const hasVisiblePriceSignals = /\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)\b/i.test(
-    combinedSoFar,
-  );
+  const hasVisiblePriceSignals =
+    /\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])/i.test(
+      combinedSoFar,
+    );
 
   let hasSpaBundle = false;
   if (
@@ -1551,6 +1555,7 @@ async function handleSync(rawUrl: string) {
       siteProfile: aiResult.siteProfile,
       prices: aiResult.prices,
     });
+
     return NextResponse.json({
       source: "live-website",
       aiEnhanced: true,
