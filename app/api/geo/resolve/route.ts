@@ -32,12 +32,24 @@ type CandidateTown = TownGeo & {
 };
 
 const HEADERS = {
-  "User-Agent": "NorthstarOps-GeoIntelligence/1.0 (Codegeist2026)",
+  "User-Agent": "NorthstarOps-GeoIntelligence/1.1 (Codegeist2026)",
   Accept: "application/json",
 };
 
 const SKIP_ADMIN_REGEX =
-  /powiat|gmina|województwo|diecezj|metropoli|obszar|konurbacj|rzeczpospolita|gubernator|dzielnica|hrabstwo|county|state|diocese|region|district|parish|aglomeracj|urban area|urban unit|greater |statistical area|landkreis|okres|republic|voivodeship|kingdom|empire|general government|borough|suburb|arrondissement|canton|département|departement|préfecture|prefecture|commune|comarca|bezirk|unterbezirk|circoscrizione|municipality/i;
+  /powiat|gmina|województwo|diecezj|metropoli|obszar|konurbacj|rzeczpospolita|gubernator|dzielnica|hrabstwo|county|state|diocese|archdiocese|eparchy|exarchate|ordinariate|vicariate|region|district|parish|aglomeracj|agglomerat|agglomération|communauté|intercommunal|métropole|metropole|urban area|urban unit|greater |statistical area|landkreis|okres|republic|voivodeship|kingdom|empire|general government|borough|suburb|arrondissement|canton|département|departement|préfecture|prefecture|commune|comarca|bezirk|unterbezirk|circoscrizione|municipality|constituency|unitary authority|\bpark$/i;
+
+function parseWktPoint(locValue: string | undefined): GeoPoint | null {
+  if (!locValue) return null;
+  const match = locValue.match(
+    /^Point\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)$/i,
+  );
+  if (!match) return null;
+  const lon = Number(match[1]);
+  const lat = Number(match[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { lat, lon };
+}
 
 async function geocodeCity(
   city: string,
@@ -109,10 +121,11 @@ async function queryWikidataRadius(
   center: GeoPoint,
   radKm: number,
   minPop: number,
+  maxPop: number,
   limit: number,
   timeoutMs: number,
 ): Promise<RawPlace[]> {
-  const sparql = `SELECT ?placeLabel ?lat ?lon ?pop WHERE { SERVICE wikibase:around { ?place wdt:P625 ?loc . bd:serviceParam wikibase:center "Point(${center.lon} ${center.lat})"^^geo:wktLiteral . bd:serviceParam wikibase:radius "${radKm}" . } ?place wdt:P1082 ?pop . FILTER(?pop > ${minPop}) ?place p:P625/psv:P625 [ wikibase:geoLatitude ?lat ; wikibase:geoLongitude ?lon ] . SERVICE wikibase:label { bd:serviceParam wikibase:language "en,pl" . } } LIMIT ${limit}`;
+  const sparql = `SELECT ?placeLabel ?loc ?pop WHERE { SERVICE wikibase:around { ?place wdt:P625 ?loc . bd:serviceParam wikibase:center "Point(${center.lon.toFixed(4)} ${center.lat.toFixed(4)})"^^geo:wktLiteral . bd:serviceParam wikibase:radius "${radKm}" . } ?place wdt:P1082 ?pop . FILTER(?pop > ${minPop} && ?pop < ${maxPop}) SERVICE wikibase:label { bd:serviceParam wikibase:language "en,pl" . } } LIMIT ${limit}`;
   const url = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
   const res = await fetch(url, {
     headers: { ...HEADERS, Accept: "application/sparql-results+json" },
@@ -123,8 +136,7 @@ async function queryWikidataRadius(
     results?: {
       bindings?: Array<{
         placeLabel?: { value: string };
-        lat?: { value: string };
-        lon?: { value: string };
+        loc?: { value: string };
         pop?: { value: string };
       }>;
     };
@@ -132,33 +144,53 @@ async function queryWikidataRadius(
   const out: RawPlace[] = [];
   for (const b of json.results?.bindings ?? []) {
     const name = b.placeLabel?.value?.trim();
-    const lat = Number(b.lat?.value);
-    const lon = Number(b.lon?.value);
+    const point = parseWktPoint(b.loc?.value);
     const pop = Number(b.pop?.value);
-    if (
-      !name ||
-      /^Q\d+$/.test(name) ||
-      !Number.isFinite(lat) ||
-      !Number.isFinite(lon) ||
-      pop > 3500000
-    )
+    if (!name || /^Q\d+$/.test(name) || !point || !Number.isFinite(pop))
       continue;
-    out.push({ name, lat, lon, pop, isCity: pop >= 50000 });
+    out.push({
+      name,
+      lat: point.lat,
+      lon: point.lon,
+      pop,
+      isCity: pop >= 50000,
+    });
   }
   return out;
 }
 
 async function fetchViaWikidata(center: GeoPoint): Promise<RawPlace[]> {
-  const [nearRes, hubsRes] = await Promise.allSettled([
-    queryWikidataRadius(center, 38, 3000, 160, 9500),
-    queryWikidataRadius(center, 95, 35000, 140, 9000),
+  const lonOffsetDeg =
+    0.2 / Math.max(0.25, Math.cos((center.lat * Math.PI) / 180));
+  const westCenter: GeoPoint = {
+    lat: center.lat,
+    lon: center.lon - lonOffsetDeg,
+  };
+  const eastCenter: GeoPoint = {
+    lat: center.lat,
+    lon: center.lon + lonOffsetDeg,
+  };
+
+  const [westRes, eastRes, hubsRes] = await Promise.allSettled([
+    queryWikidataRadius(westCenter, 26, 3000, 380000, 80, 9000),
+    queryWikidataRadius(eastCenter, 26, 3000, 380000, 80, 9000),
+    queryWikidataRadius(center, 95, 40000, 600000, 100, 9000),
   ]);
-  const near = nearRes.status === "fulfilled" ? nearRes.value : [];
+
+  const west = westRes.status === "fulfilled" ? westRes.value : [];
+  const east = eastRes.status === "fulfilled" ? eastRes.value : [];
   const hubs = hubsRes.status === "fulfilled" ? hubsRes.value : [];
-  const merged = [...near, ...hubs];
+  const merged = [...west, ...east, ...hubs];
   if (merged.length >= 3) return merged;
 
-  const fallback = await queryWikidataRadius(center, 55, 800, 80, 8000);
+  const fallback = await queryWikidataRadius(
+    center,
+    55,
+    500,
+    1200000,
+    80,
+    8000,
+  );
   if (fallback.length < 3) throw new Error("Wikidata returned too few places");
   return fallback;
 }
@@ -194,7 +226,6 @@ function selectBalancedAcrossSectors(
   const usedNames = new Set<string>();
   const usedSectors = new Set<number>();
 
-  // Pass 1: pick highest-ranked candidate in each distinct compass sector
   for (
     let sector = 0;
     sector < sectorCount && selected.length < maxCount;
@@ -213,7 +244,6 @@ function selectBalancedAcrossSectors(
     }
   }
 
-  // Pass 2: fill remaining slots keeping spatial separation (e.g. coastal cities)
   for (const item of pool) {
     if (selected.length >= maxCount) break;
     if (usedNames.has(item.name)) continue;
@@ -225,7 +255,6 @@ function selectBalancedAcrossSectors(
     }
   }
 
-  // Pass 3: relax spacing only if fewer than maxCount towns exist in the region
   for (const item of pool) {
     if (selected.length >= maxCount) break;
     if (usedNames.has(item.name)) continue;
@@ -292,9 +321,16 @@ function buildDynamicTowns(
   );
   const regionalHubs = selectBalancedAcrossSectors(hubPool, 5, 5, 16);
 
-  return [...localTowns, ...regionalHubs].map(
-    ({ pop: _p, isCity: _c, ...town }) => town,
-  );
+  return [...localTowns, ...regionalHubs].map((town) => ({
+    name: town.name,
+    distKm: town.distKm,
+    dxKm: town.dxKm,
+    dyKm: town.dyKm,
+    driveMin: town.driveMin,
+    travelFeePln: town.travelFeePln,
+    competitorsCount: town.competitorsCount,
+    isRegionalHub: town.isRegionalHub,
+  }));
 }
 
 export async function GET(request: Request) {
