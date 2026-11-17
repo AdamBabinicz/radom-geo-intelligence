@@ -22,11 +22,11 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "Northstar Ops | GeoIntelligence & Service Operations Hub",
+    default: "Northstar Ops | Local Service Market & Price Intelligence",
     template: "%s | Northstar Ops",
   },
   description:
-    "GeoIntelligence Hub for local service businesses: live pricing sync, AI competitor discovery, 10-100 km quoting & Atlassian Forge Rovo/MCP automation.",
+    "Live local service market & price intelligence hub: competitor pricing sync, 10-100 km quoting, Multi-AI Council & Atlassian Forge Rovo/MCP workflows.",
   applicationName: "Northstar Ops",
   manifest: "/site.webmanifest",
   keywords: [
@@ -46,17 +46,17 @@ export const metadata: Metadata = {
     type: "website",
     url: SITE_URL,
     siteName: "Northstar Ops",
-    title: "Northstar Ops | GeoIntelligence & Service Operations Hub",
+    title: "Northstar Ops | Local Service Market & Price Intelligence",
     description:
-      "Live local market intelligence, dynamic 10–100 km radius quoting, Multi-Model AI Council, and native Atlassian Rovo/MCP + Jira & Confluence integration.",
+      "Live local service market & price intelligence hub with 10–100 km radius quoting, Multi-Model AI Council, and Atlassian Forge Rovo/MCP automation.",
     locale: "en_US",
     alternateLocale: ["pl_PL"],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Northstar Ops | GeoIntelligence & Service Operations Hub",
+    title: "Northstar Ops | Local Service Market & Price Intelligence",
     description:
-      "Local market analysis, live competitor discovery, Multi-Model AI Council, and Atlassian Forge Rovo/MCP workflows.",
+      "Local service market analysis, live competitor price discovery, Multi-AI Council, and Atlassian Forge Rovo/MCP workflows.",
   },
   robots: {
     index: true,
@@ -86,6 +86,17 @@ export const viewport: Viewport = {
   ],
 };
 
+const organizationJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: "Northstar Ops",
+  url: SITE_URL,
+  logo: `${SITE_URL}/web-app-manifest-512x512.png`,
+  description:
+    "GeoIntelligence & Service Operations platform for local service businesses and Atlassian Forge / Rovo MCP workflows.",
+  sameAs: ["https://github.com/AdamBabinicz/radom-geo-intelligence"],
+};
+
 const softwareApplicationJsonLd = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
@@ -93,6 +104,11 @@ const softwareApplicationJsonLd = {
   applicationCategory: "BusinessApplication",
   operatingSystem: "Web, Atlassian Cloud (Jira, Confluence, Rovo)",
   url: SITE_URL,
+  publisher: {
+    "@type": "Organization",
+    name: "Northstar Ops",
+    url: SITE_URL,
+  },
   description:
     "GeoIntelligence & Service Operations Hub with live SPA pricing extraction, competitor discovery, Multi-Model AI Council, and Atlassian Forge Rovo/MCP execution.",
   featureList: [
@@ -115,6 +131,12 @@ export default function RootLayout({
       className={`${plusJakarta.variable} ${jetbrainsMono.variable}`}
     >
       <body className="font-sans antialiased">
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(organizationJsonLd),
+          }}
+        />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
