@@ -152,7 +152,7 @@ export function CompetitorTable({
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-sm font-semibold">{t.competitorTitle}</h2>
           {industryBadgeLabel && (
-            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
               {industryBadgeLabel}
             </span>
           )}
@@ -167,7 +167,7 @@ export function CompetitorTable({
             </span>
           )}
         </div>
-        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+        <p className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
           {t.competitorSubtitle}
         </p>
       </div>
@@ -175,7 +175,7 @@ export function CompetitorTable({
       <div className="overflow-x-auto">
         <table className="w-full min-w-[460px] border-collapse text-left">
           <thead>
-            <tr className="border-y border-slate-100 text-[9px] uppercase tracking-[.1em] text-slate-400 dark:border-slate-800">
+            <tr className="border-y border-slate-100 text-[9px] uppercase tracking-[.1em] text-slate-600 dark:border-slate-800 dark:text-slate-400">
               <th className="px-5 py-2.5 font-semibold">{t.serviceType}</th>
               <th className="px-3 py-2.5 font-semibold">{t.localAvg}</th>
               <th className="px-3 py-2.5 font-semibold">{t.ourPrice}</th>
@@ -204,11 +204,11 @@ export function CompetitorTable({
                   <td className="px-5 py-3.5 text-xs font-medium text-slate-800 dark:text-slate-100">
                     {label}
                   </td>
-                  <td className="px-3 py-3.5 text-xs text-slate-500 dark:text-slate-400">
+                  <td className="px-3 py-3.5 text-xs text-slate-600 dark:text-slate-400">
                     {hasLocalAvg ? (
                       formatPrice(row.localPricePln, locale)
                     ) : (
-                      <span className="text-slate-400 dark:text-slate-500">
+                      <span className="text-slate-600 dark:text-slate-400">
                         —
                       </span>
                     )}
@@ -233,7 +233,7 @@ export function CompetitorTable({
                         {gapPct < 0 ? `−${Math.abs(gapPct)}%` : `+${gapPct}%`}
                       </span>
                     ) : (
-                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                         {t.noLocalBenchmark}
                       </span>
                     )}
@@ -251,7 +251,7 @@ export function CompetitorTable({
             <span className="text-[10px] font-semibold text-slate-700 dark:text-slate-200">
               {t.reviewInsights}
             </span>
-            <span className="text-[9px] text-slate-500 dark:text-slate-400">
+            <span className="text-[9px] text-slate-600 dark:text-slate-400">
               {hasLivePainPoints ? t.competitorsScannedBadge : t.last30days}
             </span>
           </div>
@@ -295,7 +295,7 @@ export function CompetitorTable({
               {cleanDisplayText(liveScan!.summary)}
             </p>
           )}
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">
             {t.discoveredCompetitorsLabel} ({liveScan!.competitors.length})
           </p>
           <div className="max-h-[460px] space-y-2 overflow-y-auto pr-1">
@@ -324,7 +324,7 @@ export function CompetitorTable({
                           {comp.rating.toFixed(1)}
                           {typeof comp.reviewCount === "number" &&
                             comp.reviewCount > 0 && (
-                              <span className="font-normal text-amber-700/80 dark:text-amber-300/80">
+                              <span className="font-normal text-amber-800 dark:text-amber-300">
                                 ({comp.reviewCount})
                               </span>
                             )}
@@ -347,7 +347,7 @@ export function CompetitorTable({
                     {cleanDisplayText(comp.priceSummary)}
                   </p>
                   {comp.travelFeeNote && (
-                    <p className="mt-0.5 break-words text-[10px] text-slate-500 dark:text-slate-400">
+                    <p className="mt-0.5 break-words text-[10px] text-slate-600 dark:text-slate-400">
                       {cleanDisplayText(comp.travelFeeNote)}
                     </p>
                   )}
@@ -357,7 +357,7 @@ export function CompetitorTable({
           </div>
           {uniqueSources.length > 0 && (
             <div className="mt-3 border-t border-slate-200/70 pt-2 dark:border-slate-800">
-              <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+              <span className="text-[10px] font-medium text-slate-600 dark:text-slate-400">
                 {t.verifiedSourcesLabel}:{" "}
               </span>
               <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">

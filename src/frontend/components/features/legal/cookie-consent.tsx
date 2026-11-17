@@ -85,8 +85,9 @@ export function CookieConsent({
   if (!open) return null;
 
   return (
-    <aside
+    <div
       role="dialog"
+      aria-modal="false"
       aria-label={t.cookieTitle}
       className="fixed bottom-4 left-4 right-4 z-40 mx-auto max-w-2xl rounded-xl border border-slate-200 bg-white/95 p-4 shadow-xl backdrop-blur-md dark:border-slate-700 dark:bg-[#141c1e]/95"
     >
@@ -201,6 +202,6 @@ export function CookieConsent({
           </button>
         )}
       </div>
-    </aside>
+    </div>
   );
 }

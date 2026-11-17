@@ -63,7 +63,7 @@ export function CoverageMap({
                 {t.zoomBadge} {Math.round(zoomMultiplier * 100)}%
               </span>
             </div>
-            <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+            <p className="mt-0.5 text-[11px] text-slate-600 dark:text-slate-400">
               <b className="text-slate-800 dark:text-slate-200">
                 {market.centerName}
               </b>{" "}
@@ -74,7 +74,7 @@ export function CoverageMap({
 
           <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-slate-700 dark:bg-slate-800/60">
             <Sliders size={13} className="text-teal-700 dark:text-teal-400" />
-            <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+            <span className="text-[10px] font-medium text-slate-600 dark:text-slate-400">
               {t.radiusLabel}:
             </span>
             <span className="text-xs font-bold text-teal-800 dark:text-teal-300">
@@ -84,7 +84,7 @@ export function CoverageMap({
         </div>
 
         <div className="mt-4 flex items-center gap-3">
-          <span className="text-[10px] font-semibold text-slate-400">
+          <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-400">
             10 {t.kmUnit}
           </span>
           <input
@@ -97,7 +97,7 @@ export function CoverageMap({
             className="h-1.5 flex-1 cursor-pointer appearance-none rounded-lg bg-slate-200 accent-teal-700 dark:bg-slate-700 dark:accent-teal-400"
             aria-label={t.radiusLabel}
           />
-          <span className="text-[10px] font-semibold text-slate-400">
+          <span className="text-[10px] font-semibold text-slate-600 dark:text-slate-400">
             100 {t.kmUnit}
           </span>
         </div>
@@ -193,7 +193,7 @@ export function CoverageMap({
             type="button"
             onClick={() => onSelectTown(null)}
             aria-label={t.clearSelection}
-            className="rounded p-1 text-slate-500 hover:bg-white/70 dark:text-slate-300 dark:hover:bg-slate-800"
+            className="rounded p-1 text-slate-600 hover:bg-white/70 dark:text-slate-300 dark:hover:bg-slate-800"
           >
             <X size={13} />
           </button>
@@ -213,23 +213,23 @@ export function CoverageMap({
                 isSelected ? "ring-2 ring-teal-500/60" : ""
               } ${
                 inRange
-                  ? "border-teal-200 bg-teal-50/70 text-teal-800 hover:bg-teal-100 dark:border-teal-800 dark:bg-teal-950/60 dark:text-teal-300"
-                  : "border-slate-200 bg-slate-100 text-slate-500 line-through dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400"
+                  ? "border-teal-200 bg-teal-50/70 text-teal-900 hover:bg-teal-100 dark:border-teal-800 dark:bg-teal-950/60 dark:text-teal-300"
+                  : "border-slate-200 bg-slate-100 text-slate-700 line-through dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
               }`}
             >
               {inRange ? (
                 <CheckCircle2
                   size={12}
-                  className="text-teal-600 dark:text-teal-400"
+                  className="text-teal-700 dark:text-teal-400"
                 />
               ) : (
                 <AlertCircle
                   size={12}
-                  className="text-amber-600 dark:text-amber-400"
+                  className="text-amber-700 dark:text-amber-400"
                 />
               )}
               <span className="font-semibold">{town.name}</span>
-              <span className="text-[10px] opacity-75">
+              <span className="text-[10px] font-medium">
                 ({town.distKm} {t.kmUnit})
               </span>
             </button>

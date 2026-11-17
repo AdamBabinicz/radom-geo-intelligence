@@ -3,36 +3,34 @@
 > Parameterized GeoIntelligence platform and Atlassian Forge / Rovo MCP ecosystem for local service operators. Features a verified Radom case study (10–100 km radius, powered by real local pricing from pranie-dywanow.j.pl), dynamic OpenStreetMap + Wikidata discovery for any city worldwide, live SPA pricing extraction, AI competitor scanning, a cross-provider Multi-Model AI Council with human-in-the-loop constraints, and native Atlassian Forge Rovo Agent + Skill + MCP Server integration.
 
 ## Live Application & Endpoints
-- Interactive Web Hub: `https://nsops.vercel.app`
-- Privacy Policy: `https://nsops.vercel.app/privacy`
-- Terms of Service: `https://nsops.vercel.app/terms`
-- Live Website Pricing Extractor (`GET`): `/api/pricing/sync?url=...`
-- Live Competitor & Review Pain-Point Scanner (`POST`): `/api/market/scan`
-- Cross-Provider Multi-Model AI Council (`POST`): `/api/council`
-- City & Surrounding Towns Geo Resolver (`GET`): `/api/geo/resolve?city=...`
-- Web MCP Discovery (`GET`): `/api/mcp`
-- Web MCP JSON-RPC 2.0 Execution (`POST`): `/api/mcp` (`initialize`, `tools/list`, `tools/call`)
+
+- [Interactive Web Hub](https://nsops.vercel.app/): Main dashboard for service coverage, competitor benchmarks, customer pricing calculator, and AI Strategy Council.
+- [Web MCP Discovery](https://nsops.vercel.app/api/mcp): Model Context Protocol endpoint (`GET` discovery and `POST` JSON-RPC 2.0 `initialize`, `tools/list`, `tools/call`).
+- [City & Surrounding Towns Geo Resolver](https://nsops.vercel.app/api/geo/resolve?city=Radom): OpenStreetMap and Wikidata geographic radius resolver (`GET`).
+- [Live Website Pricing Extractor](https://nsops.vercel.app/api/pricing/sync?url=https://pranie-dywanow.j.pl/): Extracts live service pricing from operator websites (`GET`).
+- [Live Competitor & Review Pain-Point Scanner](https://nsops.vercel.app/api/market/scan): AI-powered local competitor and review analysis (`POST`).
+- [Cross-Provider Multi-Model AI Council](https://nsops.vercel.app/api/council): Multi-round AI strategy debate with human-in-the-loop constraints (`POST`).
+- [Privacy Policy](https://nsops.vercel.app/privacy): Data handling and cookie preferences documentation.
+- [Terms of Service](https://nsops.vercel.app/terms): Platform usage terms and service conditions.
+
+## Documentation & Source Code
+
+- [GitHub Repository](https://github.com/AdamBabinicz/radom-geo-intelligence): Full source code for the Next.js hub and Atlassian Forge app.
+- [Project README](https://github.com/AdamBabinicz/radom-geo-intelligence/blob/main/README.md): Architecture overview, setup guide, and testing instructions.
+- [Atlassian Forge Manifest](https://github.com/AdamBabinicz/radom-geo-intelligence/blob/main/northstar-ops-rovo/manifest.yml): Forge `nodejs24.x` manifest declaring `rovo:agent`, `rovo:skill`, and `rovo:mcp`.
+- [Rovo Strategist Skill](https://github.com/AdamBabinicz/radom-geo-intelligence/blob/main/northstar-ops-rovo/skills/geo-pricing-strategist/SKILL.md): Domain skill instructions for pricing and localized campaign planning.
 
 ## Web App MCP Tools (`/api/mcp`)
-- `analyzeCompetitors({ center, radiusKm, industryId?, townsInRadius?, competitorsTracked?, locale? })`
-  - Evaluates competitor price positioning, serviceable towns inside `radiusKm` (10–100), and customer review pain points.
-- `calculateServiceFee({ town, orderValue })`
-  - Computes zone travel surcharge and total customer quote in PLN for supported towns.
-- `generateLocalizedCampaign({ season, targetTowns, industryId?, locale? })`
-  - Generates localized go-to-market strategy copy tailored to verified customer pain points.
-- `exportStrategyToConfluence({ center, radiusKm, season, industryId?, detectedIndustryLabel?, topPainPoint?, townsInRadius?, competitorsTracked?, benchmarks?, councilContext?, locale? })`
-  - Publishes a live formatted Confluence strategy page via Atlassian REST API v2 (including AI Council debate audit trail when provided).
-- `createJiraMarketingEpics({ center, radiusKm, industryId?, townsInRadius?, competitorsTracked?, councilContext?, locale? })`
-  - Creates a Jira marketing Epic with localized town tasks and approved AI Council action items via Atlassian REST API v3.
-- `createCustomerQuote({ center, town, serviceKey, serviceLabel?, quantity?, unitLabel?, unitPricePln, travelFeePln, totalPln, inZone?, locale? })`
-  - Creates a live Jira customer quote task directly from the Customer Price Preview calculator.
+
+- `analyzeCompetitors({ center, radiusKm, industryId?, townsInRadius?, competitorsTracked?, locale? })` — Evaluates competitor price positioning, serviceable towns inside `radiusKm` (10–100), and customer review pain points.
+- `calculateServiceFee({ town, orderValue })` — Computes zone travel surcharge and total customer quote in PLN for supported towns.
+- `generateLocalizedCampaign({ season, targetTowns, industryId?, locale? })` — Generates localized go-to-market strategy copy tailored to verified customer pain points.
+- `exportStrategyToConfluence({ center, radiusKm, season, industryId?, detectedIndustryLabel?, topPainPoint?, townsInRadius?, competitorsTracked?, benchmarks?, councilContext?, locale? })` — Publishes a live formatted Confluence strategy page via Atlassian REST API v2 (including AI Council debate audit trail when provided).
+- `createJiraMarketingEpics({ center, radiusKm, industryId?, townsInRadius?, competitorsTracked?, councilContext?, locale? })` — Creates a Jira marketing Epic with localized town tasks and approved AI Council action items via Atlassian REST API v3.
+- `createCustomerQuote({ center, town, serviceKey, serviceLabel?, quantity?, unitLabel?, unitPricePln, travelFeePln, totalPln, inZone?, locale? })` — Creates a live Jira customer quote task directly from the Customer Price Preview calculator.
 
 ## Atlassian Forge App (`northstar-ops-rovo/`)
-- Manifest location: `northstar-ops-rovo/manifest.yml`
+
 - Forge Runtime: `nodejs24.x` (`Runs on Atlassian` eligible, zero external egress)
-- Modules:
-  - `rovo:agent` (`northstar-ops-geo-strategist`)
-  - `rovo:skill` (`geo-pricing-strategist` in `northstar-ops-rovo/skills/geo-pricing-strategist/SKILL.md`)
-  - `rovo:mcp` (`northstar-ops-mcp` Forge MCP Server exposing all 4 Rovo actions)
-  - `action` + `function`: `get-market-brief`, `calculate-service-fee`, `publish-confluence-playbook`, `create-jira-campaign`
+- Modules: `rovo:agent` (`northstar-ops-geo-strategist`), `rovo:skill` (`geo-pricing-strategist`), `rovo:mcp` (`northstar-ops-mcp`), and actions `get-market-brief`, `calculate-service-fee`, `publish-confluence-playbook`, `create-jira-campaign`
 - Required scopes: `read:space:confluence`, `write:page:confluence`, `read:jira-work`, `write:jira-work`
