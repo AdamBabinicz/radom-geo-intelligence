@@ -3,6 +3,18 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  async rewrites() {
+    return [
+      {
+        source: "/polityka-prywatnosci",
+        destination: "/privacy?lang=pl",
+      },
+      {
+        source: "/regulamin",
+        destination: "/terms?lang=pl",
+      },
+    ];
+  },
   async headers() {
     return [
       {

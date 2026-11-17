@@ -21,6 +21,12 @@ export function LegalDocumentView({
   useEffect(() => {
     const savedTheme = window.localStorage.getItem(THEME_KEY);
     if (savedTheme === "dark") setDark(true);
+    const pathname = window.location.pathname;
+    if (pathname === "/polityka-prywatnosci" || pathname === "/regulamin") {
+      setLocale("pl");
+      window.localStorage.setItem(LOCALE_KEY, "pl");
+      return;
+    }
     const queryLang = new URLSearchParams(window.location.search).get("lang");
     if (queryLang === "pl" || queryLang === "en") {
       setLocale(queryLang);
