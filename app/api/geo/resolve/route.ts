@@ -40,7 +40,7 @@ async function geocodeCity(
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=jsonv2&limit=1`;
   const res = await fetch(url, {
     headers: HEADERS,
-    signal: AbortSignal.timeout(6000),
+    signal: AbortSignal.timeout(7000),
   });
   if (!res.ok) return null;
 
@@ -60,7 +60,7 @@ async function geocodeCity(
 }
 
 async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
-  const q = `[out:json][timeout:7];(node["place"="town"](around:38000,${center.lat},${center.lon});node["place"="city"](around:95000,${center.lat},${center.lon}););out body 45;`;
+  const q = `[out:json][timeout:8];(node["place"="town"](around:38000,${center.lat},${center.lon});node["place"="city"](around:80000,${center.lat},${center.lon}););out body 45;`;
   const res = await fetch("https://overpass-api.de/api/interpreter", {
     method: "POST",
     headers: {
@@ -68,7 +68,7 @@ async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: `data=${encodeURIComponent(q)}`,
-    signal: AbortSignal.timeout(6500),
+    signal: AbortSignal.timeout(8500),
   });
   if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
 
@@ -102,12 +102,13 @@ async function queryWikidataRadius(
   radKm: number,
   minPop: number,
   limit: number,
+  timeoutMs: number,
 ): Promise<RawPlace[]> {
   const sparql = `SELECT ?placeLabel ?lat ?lon ?pop WHERE { SERVICE wikibase:around { ?place wdt:P625 ?loc . bd:serviceParam wikibase:center "Point(${center.lon} ${center.lat})"^^geo:wktLiteral . bd:serviceParam wikibase:radius "${radKm}" . } ?place wdt:P1082 ?pop . FILTER(?pop > ${minPop}) ?place p:P625/psv:P625 [ wikibase:geoLatitude ?lat ; wikibase:geoLongitude ?lon ] . SERVICE wikibase:label { bd:serviceParam wikibase:language "en,pl" . } } LIMIT ${limit}`;
   const url = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
   const res = await fetch(url, {
     headers: { ...HEADERS, Accept: "application/sparql-results+json" },
-    signal: AbortSignal.timeout(7000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`Wikidata HTTP ${res.status}`);
 
@@ -140,13 +141,18 @@ async function queryWikidataRadius(
 }
 
 async function fetchViaWikidata(center: GeoPoint): Promise<RawPlace[]> {
-  const [near, hubs] = await Promise.all([
-    queryWikidataRadius(center, 38, 2500, 60),
-    queryWikidataRadius(center, 95, 22000, 60),
+  const [nearRes, hubsRes] = await Promise.allSettled([
+    queryWikidataRadius(center, 38, 2500, 50, 9500),
+    queryWikidataRadius(center, 85, 22000, 40, 8500),
   ]);
+  const near = nearRes.status === "fulfilled" ? nearRes.value : [];
+  const hubs = hubsRes.status === "fulfilled" ? hubsRes.value : [];
   const merged = [...near, ...hubs];
-  if (merged.length < 3) throw new Error("Wikidata returned too few places");
-  return merged;
+  if (merged.length >= 3) return merged;
+
+  const fallback = await queryWikidataRadius(center, 50, 1000, 45, 8000);
+  if (fallback.length < 3) throw new Error("Wikidata returned too few places");
+  return fallback;
 }
 
 function buildDynamicTowns(
@@ -251,6 +257,15 @@ export async function GET(request: Request) {
       { headers: { "Cache-Control": "public, s-maxage=3600" } },
     );
   } catch (error) {
+    if (error instanceof AggregateError) {
+      return NextResponse.json(
+        {
+          error:
+            "OpenStreetMap and Wikidata timed out for this area. Please try again in a moment.",
+        },
+        { status: 503 },
+      );
+    }
     const message =
       error instanceof Error ? error.message : "Geo lookup failed";
     return NextResponse.json({ error: message }, { status: 502 });
