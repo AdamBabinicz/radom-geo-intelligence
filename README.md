@@ -1,0 +1,238 @@
+# Northstar Ops — GeoIntelligence & Service Operations Hub
+
+> Parameterized Geo-Intelligence platform, Multi-Model AI Strategy Council, and Atlassian Forge Rovo + MCP ecosystem for local field-service operators.
+
+[![Live Production](https://img.shields.io/badge/Live_App-nsops.vercel.app-0d9488?style=flat-square)](https://nsops.vercel.app)
+[![Atlassian Forge](https://img.shields.io/badge/Atlassian_Forge-Runs_on_Atlassian-0052cc?style=flat-square)](https://developer.atlassian.com/platform/forge/)
+[![MCP JSON-RPC 2.0](https://img.shields.io/badge/Protocol-MCP_JSON--RPC_2.0-1e293b?style=flat-square)](https://nsops.vercel.app/api/mcp)
+[![Next.js 16.4](https://img.shields.io/badge/Next.js-16.4.6-000000?style=flat-square)](https://nextjs.org)
+
+- **Live Web Application:** https://nsops.vercel.app
+- **Web MCP Discovery & `llms.txt`:** https://nsops.vercel.app/api/mcp · https://nsops.vercel.app/llms.txt
+- **Privacy Policy & Terms:** https://nsops.vercel.app/privacy · https://nsops.vercel.app/terms
+- **Forge App ID:** `ari:cloud:ecosystem::app/0f3e249d-8d6d-42b2-a2a8-dc3aa49696d0` (`Runs on Atlassian` eligible — zero external egress)
+
+---
+
+## 1. The Real-World Problem & Live Case Study
+
+Local field-service businesses (upholstery and carpet cleaning, HVAC, plumbing, event services) rarely lose customers because of poor craft—they lose margin and leads because of **fragmented pricing intelligence and manual Jira/Confluence coordination**:
+
+- Competitors hide prices inside React/Vite SPA bundles, subpages (`/cennik`), or unstructured Google Business listings.
+- Operators underprice core services or absorb out-of-zone fuel and travel costs without transparent distance rules.
+- Insights discovered in ad-hoc spreadsheets never turn into structured Confluence playbooks or actionable Jira marketing epics.
+
+**Northstar Ops** solves this end-to-end. Rather than relying on Lorem Ipsum mockups, it ships with a **verified live case study** for [**SUPER PUCUŚ**](https://pranie-dywanow.j.pl/) (upholstery & carpet cleaning in **Radom, Poland**, `10–100 km` radius with real OpenStreetMap coordinates), while remaining **100% parameterized** for any city on Earth, any custom service niche, and any public website URL.
+
+---
+
+## 2. Architecture Overview
+
+Northstar Ops combines two synchronized layers: a **parameterized Next.js Intelligence Hub** and a **native Atlassian Forge Rovo + MCP App (`northstar-ops-rovo/`)** eligible for **Runs on Atlassian**.
+
+```text
++-------------------------------------------------------------------------+
+|                    NORTHSTAR OPS WEB HUB (Next.js 16)                   |
+|                         https://nsops.vercel.app                        |
++-------------------------------------------------------------------------+
+|  1. Geo Resolver (/api/geo/resolve)   -> OSM Nominatim + Overpass/Wikidata
+|  2. SPA Price Sync (/api/pricing/sync)-> SSRF-guarded HTML/JS + Gemini/Groq
+|  3. Market Scan (/api/market/scan)    -> Serper Google Maps/Search + AI
+|  4. Multi-Model AI Council (/api/council)
+|     |-- Round 1: Strategist (Gemini 4 Hydrogen / Groq fallback)
+|     |-- Round 2: Independent Devil's Advocate Critic (Cross-provider LLM)
+|     |-- Round 3: Moderator Synthesis (Option A vs Option B)
+|     +-- Human-in-the-Loop Rule + localStorage Lessons Learned
+|  5. Web MCP Server (/api/mcp, JSON-RPC 2.0) + /public/llms.txt
++------------------------------------+------------------------------------+
+                                     |
+              Atlassian REST API v2 (Confluence) & v3 (Jira)
+                                     v
++-------------------------------------------------------------------------+
+|               ATLASSIAN CLOUD (Jira + Confluence + Rovo)                |
++-------------------------------------------------------------------------+
+|  Native Forge App: northstar-ops-rovo/ (nodejs24.x, arm64, zero egress) |
+|  |-- rovo:agent -> Northstar Ops Geo Strategist                         |
+|  |-- rovo:skill -> geo-pricing-strategist (SKILL.md)                    |
+|  |-- rovo:mcp   -> northstar-ops-mcp (Forge MCP Server)                 |
+|  +-- 4 Actions  -> get-market-brief | calculate-service-fee             |
+|                    publish-confluence-playbook | create-jira-campaign   |
++-------------------------------------------------------------------------+
+```
+
+---
+
+## 3. Core Capabilities
+
+### A. Global Geo-Intelligence & Interactive Coverage Map
+
+- **Any City Worldwide:** Resolves coordinates and surrounding towns within `10–100 km` using OpenStreetMap Nominatim, Overpass API, and Wikidata SPARQL races (`/api/geo/resolve`).
+- **Interactive SVG Coverage Radar:** Smooth Google Maps-style zoom (`+ / − / Reset` up to `5.5x`), dynamic `10–100 km` radius slider synced with KPI cards, keyboard-accessible town pins, and straight-line distance + drive-time estimations with `cos(lat)` projection correction.
+- **Bilingual & Multi-Currency (`PL` / `EN`):** Strict i18n dictionaries (`src/locales/pl|en/*.json`) with automatic `PLN ↔ USD` conversion via `Intl.NumberFormat` and full Light/Dark mode.
+
+### B. Universal SPA Price Sync & Live Competitor Discovery
+
+- **Live Website Pricing Sync (`/api/pricing/sync`):** Extracts service menus not only from static HTML and JSON-LD, but also from client-side React/Vite JS bundles and `/cennik` subpages, normalized into structured service units (`m²`, `pcs`). Includes SSRF protection and deterministic fallback parsing.
+- **Competitor & Pain-Point Scanner (`/api/market/scan`):** Discovers real local competitors via Google Maps & Google Search (`Serper.dev`, with DuckDuckGo/OSM fallback), filters out lead-gen aggregators, compares market averages per service, and extracts verified customer review pain points.
+
+### C. Cross-Provider Multi-Model AI Strategy Council (`HITL`)
+
+Pricing decisions never rely on a single unchallenged LLM prompt:
+
+1. **Round 1 — Strategist:** Proposes concrete pricing moves grounded in live competitor averages and customer pain points.
+2. **Round 2 — Independent Critic (Cross-Provider, Fresh Context):** Runs in an isolated session on a different model/provider family (Gemini ↔ Groq `openai/gpt-oss-120b` / `qwen/qwen3.8-27b` or OpenAI) to challenge margin/churn risks, calculate a `riskScore`, and enforce operator limits.
+3. **Round 3 — Moderator Synthesis:** Produces two distinct go-to-market options (**Option A** vs **Option B**) for human selection.
+4. **Human-in-the-Loop & Lessons Learned:** Operators can enforce custom rules (e.g., _"Do not raise corner sofa above 250 PLN"_) and persist approved rules in browser `localStorage` so every subsequent council debate inherits past governance decisions.
+5. **Direct Atlassian Execution:** Clicking **Publish Strategy to Confluence** or **Create Jira Campaign** sends the approved `councilContext` (selected option, AI audit trail, critic warnings, and action items) straight to Confluence and Jira.
+
+### D. Native Atlassian Forge App (`northstar-ops-rovo/`)
+
+- **Runtime:** `nodejs24.x`, `arm64`, `256 MB`, zero external egress (**Runs on Atlassian** compliant).
+- **Modules in `northstar-ops-rovo/manifest.yml`:**
+  - `rovo:agent`: `northstar-ops-geo-strategist` (_Northstar Ops Geo Strategist_)
+  - `rovo:skill`: `geo-pricing-strategist` (`skills/geo-pricing-strategist/SKILL.md`)
+  - `rovo:mcp`: `northstar-ops-mcp` (_Northstar Ops MCP Server_)
+  - `action` + `function`:
+    - `get-market-brief` (`GET`) — Regional benchmarks, towns in radius, pain points, live workspace status
+    - `calculate-service-fee` (`GET`) — Zone travel fee & total customer quote calculator
+    - `publish-confluence-playbook` (`CREATE`) — Creates a formatted strategy playbook page in Confluence
+    - `create-jira-campaign` (`CREATE`) — Creates a parent Jira Epic + linked execution tasks
+- **Scopes:** `read:space:confluence`, `write:page:confluence`, `read:jira-work`, `write:jira-work`
+
+### E. Open Web MCP Endpoint (`/api/mcp` & `/llms.txt`)
+
+In addition to the Forge MCP server (`rovo:mcp`), the web hub exposes a full **MCP JSON-RPC 2.0** endpoint at `POST /api/mcp` (discoverable via `GET /api/mcp` and `/llms.txt`) with 6 tools:
+
+1. `analyzeCompetitors`
+2. `calculateServiceFee`
+3. `generateLocalizedCampaign`
+4. `exportStrategyToConfluence`
+5. `createJiraMarketingEpics`
+6. `createCustomerQuote` _(creates a live Jira lead/quote task directly from the Customer Price Preview calculator)_
+
+Example JSON-RPC call:
+
+```bash
+curl -X POST https://nsops.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "calculateServiceFee",
+      "arguments": { "town": "Pionki", "orderValue": 250 }
+    }
+  }'
+```
+
+---
+
+## 4. Tech Stack
+
+- **Web Framework:** Next.js `16.4.6` (App Router, Turbopack), React `19`, TypeScript `5.7.3` (strict)
+- **Styling & UI:** Tailwind CSS v4 (`@tailwindcss/postcss`), shadcn/ui (`button`), `lucide-react`, `Plus Jakarta Sans` & `JetBrains Mono`
+- **AI & Search:** `@google/genai` (`gemini-4-hydrogen`), Groq OpenAI-compatible fallback chain (`openai/gpt-oss-120b` → `qwen/qwen3.8-27b` → `openai/gpt-oss-20b`), optional OpenAI fallback, Serper.dev Google Search & Maps, OpenStreetMap + Wikidata
+- **Atlassian Platform:** Atlassian Forge CLI, `@forge/api ^8.5.0`, Confluence REST API v2, Jira REST API v3, Rovo Agent, Rovo Skill, Rovo MCP Server
+- **Package Manager:** `pnpm` (root web app) · `npm` (`northstar-ops-rovo/` Forge bundle)
+
+---
+
+## 5. Repository Structure
+
+```text
+.
+├── app/
+│   ├── api/
+│   │   ├── council/route.ts         # 3-round cross-provider AI Strategy Council
+│   │   ├── geo/resolve/route.ts     # Global city + radius town resolver (OSM + Wikidata)
+│   │   ├── market/scan/route.ts     # Live competitor & customer pain-point scanner
+│   │   ├── mcp/route.ts             # Web MCP JSON-RPC 2.0 endpoint
+│   │   └── pricing/sync/route.ts    # SSRF-safe HTML/JSON-LD/SPA price extractor
+│   ├── opengraph-image.tsx          # Dynamic 1200x630 OpenGraph & Twitter card
+│   ├── privacy/page.tsx             # GDPR/RODO privacy notice
+│   ├── terms/page.tsx               # Terms of service
+│   ├── robots.ts & sitemap.ts       # Search & AI crawler metadata
+│   └── layout.tsx & page.tsx        # Root App Router entry & JSON-LD schema
+├── northstar-ops-rovo/              # Native Atlassian Forge Rovo + MCP app
+│   ├── manifest.yml                 # rovo:agent, rovo:skill, rovo:mcp, actions & scopes
+│   ├── skills/geo-pricing-strategist/SKILL.md
+│   └── src/index.js                 # Forge handlers (Jira v3 & Confluence v2)
+├── public/
+│   ├── llms.txt                     # Machine-readable AI discovery specification
+│   └── site.webmanifest             # PWA manifest & custom Northstar Ops icons
+└── src/
+    ├── backend/                     # Gemini client, AI Council engine, MCP tools, REST bridge
+    ├── config/                      # Parameterized industry templates & market geo math
+    ├── frontend/components/         # Dashboard, GIS SVG map, competitor table, calculator, Rovo & Council UI
+    ├── lib/                         # Haversine distance, projection math, currency formatting
+    └── locales/                     # Strict EN & PL i18n JSON dictionaries
+```
+
+---
+
+## 6. Local Development & Deployment
+
+### Prerequisites
+
+- Node.js `22+` or `24+`
+- `pnpm` (`npx pnpm` works out of the box via Corepack)
+- Atlassian Forge CLI (`npx @forge/cli`) for deploying `northstar-ops-rovo/`
+
+### 1. Run the Next.js Web Hub
+
+```bash
+npx pnpm install
+cp .env.example .env.local
+```
+
+Fill in `.env.local` (never commit secrets):
+
+| Variable                         | Required        | Purpose                                                              |
+| -------------------------------- | --------------- | -------------------------------------------------------------------- |
+| `GEMINI_API_KEY`                 | Recommended     | Primary AI extractor, market structurer & Council Strategist         |
+| `GROQ_API_KEY`                   | Recommended     | Cross-provider Devil's Advocate Critic & automatic 429 fallback      |
+| `GROQ_TEXT_MODEL`                | Optional        | Custom Groq model override (defaults to `openai/gpt-oss-120b` chain) |
+| `OPENAI_API_KEY`                 | Optional        | Alternative cross-provider Critic if Groq is unset                   |
+| `SERPER_API_KEY`                 | Recommended     | Google Search & Google Maps competitor discovery                     |
+| `ENABLE_GEMINI_SEARCH_GROUNDING` | Optional        | Set `"true"` to prioritize Gemini Search Grounding before Serper     |
+| `NEXT_PUBLIC_SITE_URL`           | Optional        | Canonical URL for `robots.txt` & `sitemap.xml`                       |
+| `ATLASSIAN_BASE_URL`             | For live export | Your Atlassian Cloud site (e.g. `https://your-site.atlassian.net`)   |
+| `ATLASSIAN_EMAIL`                | For live export | Atlassian account email for REST API auth                            |
+| `ATLASSIAN_API_TOKEN`            | For live export | Atlassian API token                                                  |
+| `ATLASSIAN_CONFLUENCE_SPACE_KEY` | Optional        | Target Confluence space key (default: `northstarg`)                  |
+| `ATLASSIAN_JIRA_PROJECT_KEY`     | Optional        | Target Jira project key (default: `KAN`)                             |
+
+Start development or production build:
+
+```bash
+npx pnpm dev
+# or verify strict TypeScript + production bundle:
+npx pnpm build && npx pnpm start
+```
+
+### 2. Validate & Deploy the Atlassian Forge App
+
+```bash
+cd northstar-ops-rovo
+npm ci
+npx @forge/cli lint
+npx @forge/cli deploy -e production --non-interactive
+npx @forge/cli install --non-interactive --site <your-site>.atlassian.net --product jira --environment production
+npx @forge/cli install --non-interactive --site <your-site>.atlassian.net --product confluence --environment production
+```
+
+---
+
+## 7. Security, Privacy & Compliance
+
+- **Zero Client Secret Exposure:** All AI keys, Serper tokens, and Atlassian API credentials remain strictly server-side.
+- **SSRF Guarding:** `/api/pricing/sync` validates schemes and blocks loopback/private network ranges before fetching external websites.
+- **Runs on Atlassian:** The `northstar-ops-rovo` Forge app performs zero external network egress and executes Confluence/Jira mutations via `api.asUser()`.
+- **GDPR / Consent Mode v2:** Built-in bilingual cookie consent manager (`analytics_storage`, `ad_storage`) with persistent preferences and `/privacy` + `/terms` routes.
+
+---
+
+## License
+
+Built for **Atlassian Codegeist 2026**. See repository metadata and legal notices in `/privacy` and `/terms`.
