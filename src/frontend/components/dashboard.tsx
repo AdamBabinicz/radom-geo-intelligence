@@ -852,13 +852,13 @@ export function Dashboard() {
               <div className="flex flex-wrap items-center gap-4">
                 <span>{isCaseStudy ? t.footerRight : t.citySourceLiveGeo}</span>
                 <Link
-                  href={`/privacy?lang=${locale}`}
+                  href="/privacy"
                   className="font-medium hover:text-teal-700 dark:hover:text-teal-300"
                 >
                   {t.privacyPolicy}
                 </Link>
                 <Link
-                  href={`/terms?lang=${locale}`}
+                  href="/terms"
                   className="font-medium hover:text-teal-700 dark:hover:text-teal-300"
                 >
                   {t.termsOfService}

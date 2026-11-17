@@ -21,11 +21,17 @@ export function LegalDocumentView({
   useEffect(() => {
     const savedTheme = window.localStorage.getItem(THEME_KEY);
     if (savedTheme === "dark") setDark(true);
-    if (!initialLocale) {
-      const savedLocale = window.localStorage.getItem(LOCALE_KEY);
-      if (savedLocale === "pl" || savedLocale === "en") setLocale(savedLocale);
+    const queryLang = new URLSearchParams(window.location.search).get("lang");
+    if (queryLang === "pl" || queryLang === "en") {
+      setLocale(queryLang);
+      window.localStorage.setItem(LOCALE_KEY, queryLang);
+      return;
     }
-  }, [initialLocale]);
+    const savedLocale = window.localStorage.getItem(LOCALE_KEY);
+    if (savedLocale === "pl" || savedLocale === "en") {
+      setLocale(savedLocale);
+    }
+  }, []);
 
   const toggleLocale = () => {
     const next: Locale = locale === "en" ? "pl" : "en";
@@ -48,7 +54,7 @@ export function LegalDocumentView({
         <article className="mx-auto max-w-3xl rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-[#172123]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Link
-              href={`/?lang=${locale}`}
+              href="/"
               className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 hover:underline dark:text-teal-300"
             >
               <ArrowLeft size={14} />
