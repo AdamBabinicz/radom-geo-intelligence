@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     template: "%s | Northstar Ops",
   },
   description:
-    "GeoIntelligence & Service Operations Hub for local service businesses: live website pricing extraction, competitor discovery, dynamic radius quoting (10–100 km), Multi-Model AI Council, and Atlassian Forge Rovo/MCP automation.",
+    "GeoIntelligence Hub for local service businesses: live pricing sync, AI competitor discovery, 10-100 km quoting & Atlassian Forge Rovo/MCP automation.",
   applicationName: "Northstar Ops",
   manifest: "/site.webmanifest",
   keywords: [
