@@ -897,7 +897,7 @@ function Metric({
   highlight?: boolean;
 }) {
   return (
-    <article className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_2px_8px_rgba(20,40,45,.025)] dark:border-slate-800 dark:bg-[#172123] md:p-5">
+    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_2px_8px_rgba(20,40,45,.025)] dark:border-slate-800 dark:bg-[#172123] md:p-5">
       <div className="flex items-center justify-between">
         <span className="text-xs text-slate-600 dark:text-slate-400">
           {label}
@@ -925,6 +925,6 @@ function Metric({
       <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
         {foot}
       </p>
-    </article>
+    </div>
   );
 }
