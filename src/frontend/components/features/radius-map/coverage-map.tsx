@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -38,6 +38,10 @@ export function CoverageMap({
   onSelectTown,
 }: CoverageMapProps) {
   const [zoomMultiplier, setZoomMultiplier] = useState<number>(1.15);
+
+  useEffect(() => {
+    setZoomMultiplier(1.15);
+  }, [market.id, market.centerName]);
 
   const baseExtentKm = Math.max(radiusKm * 1.25, 34);
   const currentExtentKm = baseExtentKm / zoomMultiplier;
