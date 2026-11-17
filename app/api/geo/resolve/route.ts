@@ -16,6 +16,8 @@ interface NominatimItem {
   lon: string;
   name?: string;
   display_name?: string;
+  importance?: number;
+  addresstype?: string;
 }
 
 interface RawPlace {
@@ -36,8 +38,10 @@ const HEADERS = {
   Accept: "application/json",
 };
 
-const SKIP_ADMIN_REGEX =
-  /powiat|gmina|województwo|diecezj|metropoli|obszar|konurbacj|rzeczpospolita|gubernator|dzielnica|hrabstwo|county|state|diocese|archdiocese|eparchy|exarchate|ordinariate|vicariate|region|district|parish|aglomeracj|agglomerat|agglomération|communauté|intercommunal|métropole|metropole|urban area|urban unit|greater |statistical area|landkreis|okres|republic|voivodeship|kingdom|empire|general government|borough|suburb|arrondissement|canton|département|departement|préfecture|prefecture|commune|comarca|bezirk|unterbezirk|circoscrizione|municipality|constituency|unitary authority|\bpark$/i;
+const SKIP_SUPER_ADMIN_REGEX =
+  /powiat|gmina|województwo|diecezj|metropoli|obszar|konurbacj|rzeczpospolita|gubernator|dzielnica|hrabstwo|county|state|diocese|archdiocese|eparchy|exarchate|ordinariate|vicariate|region|parish|aglomeracj|agglomerat|agglomération|communauté|intercommunal|métropole|metropole|urban area|urban unit|built-up|greater |statistical area|landkreis|okres|republic|voivodeship|kingdom|empire|general government|borough|suburb|arrondissement|canton|département|departement|préfecture|prefecture|commune|comarca|bezirk|unterbezirk|circoscrizione|municipality|constituency|unitary authority|\bpark$|\//i;
+
+const SKIP_DISTRICT_REGEX = /\bdistrict\b/i;
 
 function parseWktPoint(locValue: string | undefined): GeoPoint | null {
   if (!locValue) return null;
@@ -54,21 +58,39 @@ function parseWktPoint(locValue: string | undefined): GeoPoint | null {
 async function geocodeCity(
   city: string,
 ): Promise<{ name: string; point: GeoPoint } | null> {
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=jsonv2&limit=1`;
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=jsonv2&limit=5&accept-language=en`;
   const res = await fetch(url, {
     headers: HEADERS,
     signal: AbortSignal.timeout(7000),
   });
   if (!res.ok) return null;
   const items = (await res.json()) as NominatimItem[];
-  const first = items[0];
-  if (!first) return null;
-  const lat = Number(first.lat);
-  const lon = Number(first.lon);
+  if (!items.length) return null;
+
+  const settlementTypes = new Set([
+    "city",
+    "town",
+    "municipality",
+    "village",
+    "administrative",
+  ]);
+  const sorted = [...items].sort((a, b) => {
+    const aTypeBonus = settlementTypes.has(a.addresstype ?? "") ? 0.25 : 0;
+    const bTypeBonus = settlementTypes.has(b.addresstype ?? "") ? 0.25 : 0;
+    return (
+      (Number(b.importance) || 0) +
+      bTypeBonus -
+      ((Number(a.importance) || 0) + aTypeBonus)
+    );
+  });
+
+  const best = sorted[0];
+  const lat = Number(best.lat);
+  const lon = Number(best.lon);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   const cleanName =
-    first.name?.trim() ||
-    first.display_name?.split(",")[0]?.trim() ||
+    best.name?.trim() ||
+    best.display_name?.split(",")[0]?.trim() ||
     city.trim();
   return { name: cleanName, point: { lat, lon } };
 }
@@ -166,28 +188,50 @@ async function fetchViaWikidata(center: GeoPoint): Promise<RawPlace[]> {
     lat: center.lat,
     lon: center.lon - lonOffsetDeg,
   };
-  const eastCenter: GeoPoint = {
-    lat: center.lat,
+  const eastNorthCenter: GeoPoint = {
+    lat: center.lat + 0.11,
     lon: center.lon + lonOffsetDeg,
   };
 
   const [westRes, eastRes, hubsRes] = await Promise.allSettled([
-    queryWikidataRadius(westCenter, 26, 3000, 380000, 80, 9000),
-    queryWikidataRadius(eastCenter, 26, 3000, 380000, 80, 9000),
+    queryWikidataRadius(westCenter, 26, 1500, 380000, 80, 9000),
+    queryWikidataRadius(eastNorthCenter, 27, 1500, 380000, 80, 9000),
     queryWikidataRadius(center, 95, 40000, 600000, 100, 9000),
   ]);
 
   const west = westRes.status === "fulfilled" ? westRes.value : [];
   const east = eastRes.status === "fulfilled" ? eastRes.value : [];
   const hubs = hubsRes.status === "fulfilled" ? hubsRes.value : [];
-  const merged = [...west, ...east, ...hubs];
+
+  const nonDistrictNearCount = [...west, ...east].filter(
+    (p) =>
+      !SKIP_SUPER_ADMIN_REGEX.test(p.name) && !SKIP_DISTRICT_REGEX.test(p.name),
+  ).length;
+
+  let extraDistricts: RawPlace[] = [];
+  if (nonDistrictNearCount < 5) {
+    try {
+      extraDistricts = await queryWikidataRadius(
+        center,
+        42,
+        1000,
+        2500000,
+        75,
+        7500,
+      );
+    } catch {
+      extraDistricts = [];
+    }
+  }
+
+  const merged = [...west, ...east, ...extraDistricts, ...hubs];
   if (merged.length >= 3) return merged;
 
   const fallback = await queryWikidataRadius(
     center,
     55,
-    500,
-    1200000,
+    300,
+    1800000,
     80,
     8000,
   );
@@ -205,15 +249,29 @@ function getSectorIndex(
   return Math.min(sectorCount - 1, Math.floor(normalized * sectorCount));
 }
 
-function isTooClose(
+function getRootToken(name: string): string {
+  return name.toLowerCase().split(/[\s/-]+/)[0] ?? "";
+}
+
+function isTooCloseOrDuplicateRoot(
   candidate: CandidateTown,
   chosen: CandidateTown[],
   minGapKm: number,
 ): boolean {
-  return chosen.some(
-    (c) =>
-      Math.hypot(c.dxKm - candidate.dxKm, c.dyKm - candidate.dyKm) < minGapKm,
-  );
+  const candRoot = getRootToken(candidate.name);
+  return chosen.some((c) => {
+    const gap = Math.hypot(c.dxKm - candidate.dxKm, c.dyKm - candidate.dyKm);
+    if (gap < minGapKm) return true;
+    const chosenRoot = getRootToken(c.name);
+    if (
+      candRoot.length >= 4 &&
+      candRoot === chosenRoot &&
+      gap < Math.max(15, minGapKm * 2)
+    ) {
+      return true;
+    }
+    return false;
+  });
 }
 
 function selectBalancedAcrossSectors(
@@ -221,21 +279,27 @@ function selectBalancedAcrossSectors(
   maxCount: number,
   sectorCount: number,
   minGapKm: number,
+  initialSelected: CandidateTown[] = [],
 ): CandidateTown[] {
-  const selected: CandidateTown[] = [];
-  const usedNames = new Set<string>();
-  const usedSectors = new Set<number>();
+  const selected: CandidateTown[] = [...initialSelected];
+  const usedNames = new Set<string>(initialSelected.map((item) => item.name));
+  const usedSectors = new Set<number>(
+    initialSelected.map((item) =>
+      getSectorIndex(item.dxKm, item.dyKm, sectorCount),
+    ),
+  );
 
   for (
     let sector = 0;
     sector < sectorCount && selected.length < maxCount;
     sector++
   ) {
+    if (usedSectors.has(sector)) continue;
     const match = pool.find(
       (item) =>
         !usedNames.has(item.name) &&
         getSectorIndex(item.dxKm, item.dyKm, sectorCount) === sector &&
-        !isTooClose(item, selected, minGapKm),
+        !isTooCloseOrDuplicateRoot(item, selected, minGapKm),
     );
     if (match) {
       selected.push(match);
@@ -249,7 +313,7 @@ function selectBalancedAcrossSectors(
     if (usedNames.has(item.name)) continue;
     const sector = getSectorIndex(item.dxKm, item.dyKm, sectorCount);
     if (usedSectors.size < sectorCount && usedSectors.has(sector)) continue;
-    if (!isTooClose(item, selected, minGapKm)) {
+    if (!isTooCloseOrDuplicateRoot(item, selected, minGapKm)) {
       selected.push(item);
       usedNames.add(item.name);
     }
@@ -258,7 +322,9 @@ function selectBalancedAcrossSectors(
   for (const item of pool) {
     if (selected.length >= maxCount) break;
     if (usedNames.has(item.name)) continue;
-    if (!isTooClose(item, selected, Math.max(2, minGapKm * 0.45))) {
+    if (
+      !isTooCloseOrDuplicateRoot(item, selected, Math.max(2, minGapKm * 0.45))
+    ) {
       selected.push(item);
       usedNames.add(item.name);
     }
@@ -273,10 +339,11 @@ function buildDynamicTowns(
   raw: RawPlace[],
 ): TownGeo[] {
   const seen = new Set<string>([centerName.toLowerCase()]);
-  const candidates: CandidateTown[] = [];
+  const strictCandidates: CandidateTown[] = [];
+  const districtCandidates: CandidateTown[] = [];
 
   for (const item of raw) {
-    if (SKIP_ADMIN_REGEX.test(item.name)) continue;
+    if (SKIP_SUPER_ADMIN_REGEX.test(item.name)) continue;
     const key = item.name.toLowerCase();
     if (seen.has(key)) continue;
 
@@ -288,7 +355,7 @@ function buildDynamicTowns(
 
     seen.add(key);
     const isHub = distKm > 40;
-    candidates.push({
+    const candidate: CandidateTown = {
       name: item.isCity && isHub ? item.name.toUpperCase() : item.name,
       distKm,
       dxKm,
@@ -299,26 +366,49 @@ function buildDynamicTowns(
       isRegionalHub: isHub,
       pop: item.pop,
       isCity: item.isCity,
-    });
+    };
+
+    if (SKIP_DISTRICT_REGEX.test(item.name)) {
+      districtCandidates.push(candidate);
+    } else {
+      strictCandidates.push(candidate);
+    }
   }
 
-  const localPool = candidates
-    .filter((t) => !t.isRegionalHub)
-    .sort((a, b) => {
-      const aSweetSpot = a.distKm >= 10 && a.distKm <= 34 ? 0 : 1;
-      const bSweetSpot = b.distKm >= 10 && b.distKm <= 34 ? 0 : 1;
-      if (aSweetSpot !== bSweetSpot) return aSweetSpot - bSweetSpot;
-      if (b.pop !== a.pop) return b.pop - a.pop;
-      return a.distKm - b.distKm;
-    });
+  const sortLocal = (arr: CandidateTown[]) =>
+    arr
+      .filter((t) => !t.isRegionalHub)
+      .sort((a, b) => {
+        const aSweetSpot = a.distKm >= 10 && a.distKm <= 34 ? 0 : 1;
+        const bSweetSpot = b.distKm >= 10 && b.distKm <= 34 ? 0 : 1;
+        if (aSweetSpot !== bSweetSpot) return aSweetSpot - bSweetSpot;
+        if (b.pop !== a.pop) return b.pop - a.pop;
+        return a.distKm - b.distKm;
+      });
 
-  const hubPool = candidates
+  const strictLocal = selectBalancedAcrossSectors(
+    sortLocal(strictCandidates),
+    8,
+    8,
+    5,
+  );
+
+  const localTowns = (
+    strictLocal.length >= 4
+      ? strictLocal
+      : selectBalancedAcrossSectors(
+          sortLocal(districtCandidates),
+          8,
+          8,
+          5,
+          strictLocal,
+        )
+  ).sort((a, b) => a.distKm - b.distKm);
+
+  const hubPool = strictCandidates
     .filter((t) => t.isRegionalHub)
     .sort((a, b) => b.pop - a.pop || a.distKm - b.distKm);
 
-  const localTowns = selectBalancedAcrossSectors(localPool, 8, 8, 5).sort(
-    (a, b) => a.distKm - b.distKm,
-  );
   const regionalHubs = selectBalancedAcrossSectors(hubPool, 5, 5, 16);
 
   return [...localTowns, ...regionalHubs].map((town) => ({
