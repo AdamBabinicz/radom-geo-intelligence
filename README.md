@@ -30,37 +30,48 @@ Local field-service businesses (upholstery and carpet cleaning, HVAC, plumbing, 
 
 Northstar Ops combines two synchronized layers: a **parameterized Next.js Intelligence Hub** and a **native Atlassian Forge UI Kit + Rovo + MCP App (`northstar-ops-rovo/`)** eligible for **Runs on Atlassian**.
 
-```text
-+-------------------------------------------------------------------------+
-|                    NORTHSTAR OPS WEB HUB (Next.js 16)                   |
-|                         https://nsops.vercel.app                        |
-+-------------------------------------------------------------------------+
-|  1. Geo Resolver (/api/geo/resolve)   -> OSM Nominatim + Overpass/Wikidata
-|  2. SPA Price Sync (/api/pricing/sync)-> SSRF-guarded HTML/JS + Gemini/Groq
-|  3. Market Scan (/api/market/scan)    -> Serper Google Maps/Search + AI
-|  4. Multi-Model AI Council (/api/council)
-|     |-- Round 1: Strategist (Gemini 4 Hydrogen / Groq fallback)
-|     |-- Round 2: Independent Devil's Advocate Critic (Cross-provider LLM)
-|     |-- Round 3: Moderator Synthesis (Option A vs Option B)
-|     +-- Human-in-the-Loop Rule + localStorage Lessons Learned
-|  5. Web MCP Server (/api/mcp, JSON-RPC 2.0) + /public/llms.txt
-+------------------------------------+------------------------------------+
-                                     |
-              Atlassian REST API v2 (Confluence) & v3 (Jira)
-                                     v
-+-------------------------------------------------------------------------+
-|               ATLASSIAN CLOUD (Jira + Confluence + Rovo)                |
-+-------------------------------------------------------------------------+
-|  Native Forge App: northstar-ops-rovo/ (nodejs24.x, arm64, zero egress) |
-|  |-- jira:projectPage -> Native UI Kit workspace inside Jira projects   |
-|  |     (@forge/react, @forge/resolver, @forge/bridge — EN/PL & themes)  |
-|  |-- rovo:agent       -> Northstar Ops Geo Strategist                   |
-|  |-- rovo:skill       -> geo-pricing-strategist (SKILL.md)              |
-|  |-- rovo:mcp         -> northstar-ops-mcp (Forge MCP Server)           |
-|  +-- 4 Actions        -> get-market-brief | calculate-service-fee       |
-|                          publish-confluence-playbook | create-jira-campaign
-+-------------------------------------------------------------------------+
+```mermaid
+flowchart LR
+  subgraph WEB["Web Geo-Intelligence Hub (Next.js 16 · nsops.vercel.app)"]
+    direction TB
+    W1["Geo Radar & OSM Resolver<br/>/api/geo/resolve · 10–100 km Global Coverage"]
+    W2["SPA Price & Competitor Sync<br/>SSRF Guard · Live HTML/JS + Serper / OSM"]
+    W3["Multi-Model AI Strategy Council<br/>Gemini 4 Hydrogen → Groq 429 Fallback + HITL"]
+    W4["Open Web MCP Gateway<br/>/api/mcp JSON-RPC 2.0 · /llms.txt"]
+  end
+
+  subgraph FORGE["Atlassian Forge App (Runs on Atlassian · Zero Egress)"]
+    direction TB
+    F1["Native Jira Project UI Kit<br/>jira:projectPage · @forge/react · EN/PL & Free Plan"]
+    F2["Rovo Agent & Skill<br/>Northstar Ops Geo Strategist · SKILL.md"]
+    F3["Forge MCP & 4 Actions<br/>Brief · Zone Quote · Playbook · Jira Epic"]
+  end
+
+  subgraph OUT["Atlassian Cloud Outputs (api.asUser)"]
+    direction TB
+    O1["Jira Epics & Quotes<br/>Campaign Tasks & Quote Tickets"]
+    O2["Confluence Playbooks<br/>Audit-Ready Strategy Docs"]
+  end
+
+  WEB -->|"Jira REST v3"| FORGE
+  WEB -->|"Confluence REST v2"| FORGE
+  FORGE --> O1
+  FORGE --> O2
+
+  style WEB fill:#eff6ff,stroke:#93c5fd,stroke-width:2px,color:#091e42
+  style FORGE fill:#eff6ff,stroke:#0052cc,stroke-width:2px,color:#091e42
+  style OUT fill:#ecfdf5,stroke:#00875a,stroke-width:2px,color:#091e42
 ```
+
+| Layer               | Component                       | Endpoint / Module                       | Security & Fallbacks                                                                               |
+| :------------------ | :------------------------------ | :-------------------------------------- | :------------------------------------------------------------------------------------------------- |
+| **Web Geo Hub**     | Geo Radar & OSM Resolver        | `/api/geo/resolve`                      | OpenStreetMap Nominatim + Overpass + Wikidata race                                                 |
+| **Web Geo Hub**     | SPA Price & Competitor Sync     | `/api/pricing/sync`, `/api/market/scan` | SSRF guard; Serper.dev with DuckDuckGo/OSM + deterministic parser fallback                         |
+| **Web Geo Hub**     | Multi-Model AI Strategy Council | `/api/council`                          | `Gemini 4 Hydrogen` → Groq (`429` failover) + cross-provider Critic + HITL rules                   |
+| **Web Geo Hub**     | Open Web MCP Gateway            | `/api/mcp`, `/llms.txt`                 | JSON-RPC 2.0 discovery & 6 parameterized tools (`distanceKm` global quoting)                       |
+| **Atlassian Forge** | Native Jira Project UI Kit      | `jira:projectPage` (`@forge/react`)     | `Runs on Atlassian` zero-egress (`nodejs24.x`, `api.asUser()`), works on Jira Free                 |
+| **Atlassian Forge** | Rovo Agent & Skill              | `rovo:agent` + `rovo:skill`             | `Northstar Ops Geo Strategist` + `SKILL.md` operational playbook                                   |
+| **Atlassian Forge** | Forge MCP & 4 Actions           | `rovo:mcp` + 4 Forge functions          | `get-market-brief`, `calculate-service-fee`, `publish-confluence-playbook`, `create-jira-campaign` |
 
 ---
 
