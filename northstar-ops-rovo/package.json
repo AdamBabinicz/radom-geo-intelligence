@@ -1,8 +1,8 @@
 {
-  "name": "rovo-agent-rovo",
-  "version": "1.2.3",
-  "description": "a sample forge app with rovo-agent module",
-  "main": "index.js",
+  "name": "northstar-ops-rovo",
+  "version": "2.2.0",
+  "description": "Northstar Ops native Atlassian Forge Rovo agent, skill, and MCP server for geo-intelligence, zone quoting, Confluence playbooks, and Jira campaigns.",
+  "main": "src/index.js",
   "private": true,
   "license": "MIT",
   "dependencies": {

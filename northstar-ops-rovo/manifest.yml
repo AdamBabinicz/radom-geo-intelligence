@@ -4,19 +4,22 @@ modules:
       name: Northstar Ops Geo Strategist
       description: >
         AI Geo-Intelligence & Pricing Strategist for local service operators.
-        Audits local competition, calculates zone travel fees, publishes
-        strategy playbooks to Confluence, and creates execution campaigns in Jira.
+        Audits local markets, reads live Jira/Confluence context, calculates
+        multi-currency zone travel fees, publishes playbooks to Confluence, and
+        creates execution campaigns in Jira.
       prompt: >
         You are Northstar Ops Geo Strategist, an operational Atlassian Rovo
-        teammate for local service businesses (upholstery & carpet cleaning,
-        HVAC, and plumbing).
+        teammate for local service businesses (such as upholstery & carpet
+        cleaning, HVAC, plumbing, or any custom service niche).
         Follow these rules:
-        1. When a user asks about a city, service radius, regional pricing, or
-           competitors, call get-market-brief first to load benchmarks, towns
-           within radiusKm (10-100 km), customer pain points, and live
-           Jira/Confluence workspace status.
+        1. When a user asks about a city, service radius, regional pricing,
+           competitors, or recent Jira/Confluence activity, call
+           get-market-brief first to load benchmarks, radius coverage
+           (10-100 km), customer pain points, and live Jira issues + Confluence
+           pages in the workspace.
         2. When asked to quote a customer order or estimate a travel fee for a
-           town, call calculate-service-fee.
+           town, call calculate-service-fee with town, orderValue, radiusKm,
+           optional distanceKm, and optional currency (PLN, USD, EUR, or GBP).
         3. When asked to document a strategy or export a report to Confluence,
            call publish-confluence-playbook. Use spaceKey "northstarg" if the
            user does not specify another space.
@@ -27,8 +30,8 @@ modules:
         5. Reply concisely in the user's language (Polish or English) with
            concrete numbers and links/keys of any created pages or Jira issues.
       conversationStarters:
-        - Audit the Radom upholstery cleaning market within 30 km and suggest pricing
-        - Calculate total quote with travel fee for Pionki on a 200 PLN order
+        - Audit the Radom upholstery market within 30 km and check recent Jira quotes
+        - Calculate a 250 USD quote with travel fee for a town 22 km away
         - Publish a Northstar Ops strategy playbook to Confluence space northstarg
         - Create a local expansion campaign in Jira project KAN
       actions:
@@ -38,6 +41,7 @@ modules:
         - create-jira-campaign
       skills:
         - geo-pricing-strategist
+
   rovo:skill:
     - key: geo-pricing-strategist
       source:
@@ -48,6 +52,7 @@ modules:
           - calculate-service-fee
           - publish-confluence-playbook
           - create-jira-campaign
+
   rovo:mcp:
     - key: northstar-ops-mcp
       name: Northstar Ops MCP Server
@@ -56,48 +61,66 @@ modules:
         - calculate-service-fee
         - publish-confluence-playbook
         - create-jira-campaign
+
   action:
     - key: get-market-brief
       name: Get Northstar Ops Market Brief
       function: getMarketBriefFn
       actionVerb: GET
       description: >
-        Retrieves Northstar Ops geo-intelligence benchmarks, towns inside the
-        service radius, customer pain points, and live Jira/Confluence status.
+        Retrieves Northstar Ops geo-intelligence benchmarks, radius coverage,
+        customer pain points, and live Jira issues + Confluence pages from the
+        workspace.
       inputs:
         city:
           title: City
           type: string
           required: true
-          description: Target city name (for example Radom, Kielce, or Warsaw)
+          description: Target city name (e.g. Radom, Krakow, London, Austin)
         industry:
           title: Industry
           type: string
           required: true
-          description: Service industry key (upholstery, hvac, or plumbing)
+          description: Service industry key (upholstery, hvac, plumbing) or any custom niche
         radiusKm:
           title: Radius (km)
           type: number
           required: false
           description: Operational coverage radius in kilometers (10-100)
+        currency:
+          title: Currency
+          type: string
+          required: false
+          description: Output currency code (PLN, USD, EUR, or GBP)
+        spaceKey:
+          title: Confluence Space Key
+          type: string
+          required: false
+          description: Optional Confluence space key (defaults to northstarg or workspace fallback)
+        projectKey:
+          title: Jira Project Key
+          type: string
+          required: false
+          description: Optional Jira project key (defaults to KAN or workspace fallback)
+
     - key: calculate-service-fee
       name: Calculate Zone Service Fee
       function: calculateServiceFeeFn
       actionVerb: GET
       description: >
-        Calculates zone travel fee and total customer quote in PLN for a
-        target town, order value, and operational radius.
+        Calculates zone travel fee, drive-time estimate, and total customer
+        quote for any town, order value, radius, and currency.
       inputs:
         town:
           title: Town
           type: string
           required: true
-          description: Target service town (for example Pionki, Jedlinsk, or Radom)
-        orderValuePln:
-          title: Order Value (PLN)
+          description: Target service town (e.g. Pionki, Jedlinsk, or any local town)
+        orderValue:
+          title: Order Value
           type: number
           required: true
-          description: Base order value in PLN before travel surcharge
+          description: Base order value before travel surcharge
         radiusKm:
           title: Radius (km)
           type: number
@@ -107,14 +130,20 @@ modules:
           title: Distance (km)
           type: number
           required: false
-          description: Optional straight-line distance in km for towns outside Radom
+          description: Straight-line distance in km from the operations center
+        currency:
+          title: Currency
+          type: string
+          required: false
+          description: Quote currency code (PLN, USD, EUR, or GBP)
+
     - key: publish-confluence-playbook
       name: Publish Confluence Strategy Playbook
       function: publishPlaybookFn
       actionVerb: CREATE
       description: >
         Creates a formatted strategy playbook page inside Atlassian Confluence
-        with local pricing recommendations and service expansion priorities.
+        with local pricing context and service expansion priorities.
       inputs:
         title:
           title: Page Title
@@ -130,7 +159,7 @@ modules:
           title: Industry
           type: string
           required: true
-          description: Service industry (upholstery, hvac, or plumbing)
+          description: Service industry key or custom service niche
         summary:
           title: Strategy Summary
           type: string
@@ -141,11 +170,17 @@ modules:
           type: number
           required: false
           description: Operational coverage radius in kilometers (10-100)
+        currency:
+          title: Currency
+          type: string
+          required: false
+          description: Currency code for benchmarks (PLN, USD, EUR, or GBP)
         spaceKey:
           title: Confluence Space Key
           type: string
           required: false
           description: Optional Confluence space key (defaults to northstarg)
+
     - key: create-jira-campaign
       name: Create Jira Expansion Campaign
       function: createCampaignFn
@@ -168,7 +203,7 @@ modules:
           title: Industry
           type: string
           required: true
-          description: Service industry (upholstery, hvac, or plumbing)
+          description: Service industry key or custom service niche
         actionItems:
           title: Action Items
           type: string
@@ -179,6 +214,7 @@ modules:
           type: string
           required: false
           description: Optional Jira project key (defaults to KAN)
+
   function:
     - key: getMarketBriefFn
       handler: index.getMarketBrief
@@ -188,12 +224,15 @@ modules:
       handler: index.publishConfluencePlaybook
     - key: createCampaignFn
       handler: index.createJiraCampaign
+
 permissions:
   scopes:
     - read:space:confluence
+    - read:page:confluence
     - write:page:confluence
     - read:jira-work
     - write:jira-work
+
 app:
   runtime:
     name: nodejs24.x
