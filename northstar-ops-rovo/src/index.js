@@ -1,4 +1,5 @@
 import api, { route } from "@forge/api";
+import Resolver from "@forge/resolver";
 
 const DEFAULT_CONFLUENCE_SPACE_KEY = "northstarg";
 const DEFAULT_JIRA_PROJECT_KEY = "KAN";
@@ -775,3 +776,120 @@ export async function createJiraCampaign(rawPayload) {
     failedIssues,
   };
 }
+
+async function createJiraQuoteTicket(rawPayload, context) {
+  const input = extractPayload(rawPayload);
+  const projectKey = cleanString(
+    input.projectKey,
+    context?.extension?.project?.key || DEFAULT_JIRA_PROJECT_KEY,
+  ).toUpperCase();
+  const town = cleanString(input.town, REFERENCE_CASE_STUDY_CITY);
+  const serviceLabel = cleanString(input.serviceLabel, "Service Quote");
+  const quote = await calculateServiceFee({
+    town,
+    orderValue: input.orderValue,
+    radiusKm: input.radiusKm,
+    distanceKm: input.distanceKm,
+    currency: input.currency,
+  });
+
+  const projectData = await resolveJiraProject(projectKey);
+  const validIssueTypes = Array.isArray(projectData?.issueTypes)
+    ? projectData.issueTypes.filter((t) => !t.subtask)
+    : [];
+  const taskType =
+    validIssueTypes.find((t) =>
+      /^(task|zadanie|story|historia)$/i.test(t.name),
+    ) || validIssueTypes[0];
+
+  if (!taskType) {
+    throw new Error(
+      `No usable standard issue type found in Jira project "${projectData.key}".`,
+    );
+  }
+
+  const summary =
+    `[Quote] ${serviceLabel} · ${quote.town} · ${quote.total} ${quote.currency}`.slice(
+      0,
+      240,
+    );
+  const issueRes = await api.asUser().requestJira(route`/rest/api/3/issue`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      fields: {
+        project: { key: projectData.key },
+        summary,
+        issuetype: { id: taskType.id },
+        description: buildAdfDocument([
+          `Service: ${serviceLabel}`,
+          `Town: ${quote.town} (${quote.distanceKm} km, ~${quote.estimatedDriveMin} min)`,
+          `Zone status: ${quote.inStandardZone ? "Inside standard radius" : "Outside standard radius"} (${quote.radiusKm} km)`,
+          `Order value: ${quote.orderValue} ${quote.currency} | Travel fee: ${quote.travelFee} ${quote.currency}`,
+          `Total quote: ${quote.total} ${quote.currency}`,
+          "Created directly from Northstar Ops Jira Project Page (Forge UI Kit).",
+        ]),
+      },
+    }),
+  });
+
+  if (!issueRes.ok) {
+    const errText = await issueRes.text();
+    throw new Error(`Jira API ${issueRes.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const created = await issueRes.json();
+  return {
+    ok: true,
+    key: created.key,
+    projectKey: projectData.key,
+    summary,
+    quote,
+    browsePath: `/browse/${created.key}`,
+  };
+}
+
+const resolver = new Resolver();
+
+resolver.define("getProjectWorkspaceData", async ({ payload, context }) => {
+  const projectKey = cleanString(
+    payload?.projectKey,
+    context?.extension?.project?.key || DEFAULT_JIRA_PROJECT_KEY,
+  ).toUpperCase();
+
+  return getMarketBrief({
+    city: cleanString(payload?.city, REFERENCE_CASE_STUDY_CITY),
+    industry: cleanString(payload?.industry, "upholstery"),
+    radiusKm: clampNumber(payload?.radiusKm, 10, 100, 30),
+    currency: cleanString(payload?.currency, "PLN"),
+    spaceKey: payload?.spaceKey,
+    projectKey,
+  });
+});
+
+resolver.define("calculateQuote", async ({ payload }) =>
+  calculateServiceFee(payload),
+);
+
+resolver.define("createQuoteTicket", async ({ payload, context }) =>
+  createJiraQuoteTicket(payload, context),
+);
+
+resolver.define("publishPlaybook", async ({ payload }) =>
+  publishConfluencePlaybook(payload),
+);
+
+resolver.define("createCampaign", async ({ payload, context }) =>
+  createJiraCampaign({
+    ...(payload || {}),
+    projectKey: cleanString(
+      payload?.projectKey,
+      context?.extension?.project?.key || DEFAULT_JIRA_PROJECT_KEY,
+    ),
+  }),
+);
+
+export const projectPageResolver = resolver.getDefinitions();

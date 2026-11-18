@@ -77,9 +77,10 @@ test("UI components contain zero inline style={{...}} attributes", () => {
     ...listFilesRecursive("app", [".tsx"]),
     ...listFilesRecursive("src", [".tsx"]),
     ...listFilesRecursive("components", [".tsx"]),
+    ...listFilesRecursive("northstar-ops-rovo/src", [".jsx", ".tsx"]),
   ].filter((rel) => rel !== "app/opengraph-image.tsx");
 
-  assert.ok(tsxFiles.length > 0, "Expected TSX files to inspect");
+  assert.ok(tsxFiles.length > 0, "Expected TSX/JSX files to inspect");
 
   for (const rel of tsxFiles) {
     const content = readUtf8(rel);
@@ -136,15 +137,20 @@ test("Web MCP tools match llms.txt and support global town/distance quoting", ()
   );
 });
 
-test("Forge Rovo app maintains Runs on Atlassian zero-egress and manifest parity", () => {
+test("Forge Rovo & Jira UI Kit app maintains Runs on Atlassian zero-egress and manifest parity", () => {
   const pkg = JSON.parse(readUtf8("northstar-ops-rovo/package.json"));
   const manifest = readUtf8("northstar-ops-rovo/manifest.yml");
   const skill = readUtf8(
     "northstar-ops-rovo/skills/geo-pricing-strategist/SKILL.md",
   );
   const handler = readUtf8("northstar-ops-rovo/src/index.js");
+  const uiKitFrontend = readUtf8("northstar-ops-rovo/src/frontend/index.jsx");
 
   assert.equal(pkg.name, "northstar-ops-rovo");
+  assert.ok(
+    manifest.includes("jira:projectPage:"),
+    "manifest.yml must declare jira:projectPage",
+  );
   assert.ok(
     manifest.includes("rovo:agent:"),
     "manifest.yml must declare rovo:agent",
@@ -166,6 +172,19 @@ test("Forge Rovo app maintains Runs on Atlassian zero-egress and manifest parity
     /\bfetch\s*\(/.test(handler),
     false,
     "Forge handler must not call external fetch() directly",
+  );
+  assert.equal(
+    /\bfetch\s*\(/.test(uiKitFrontend),
+    false,
+    "Forge UI Kit frontend must not call external fetch() directly",
+  );
+  assert.ok(
+    handler.includes("export const projectPageResolver"),
+    "Forge backend must export projectPageResolver for Jira projectPage",
+  );
+  assert.ok(
+    uiKitFrontend.includes("ForgeReconciler.render"),
+    "Forge UI Kit entry must render via ForgeReconciler",
   );
 
   const expectedActions = [

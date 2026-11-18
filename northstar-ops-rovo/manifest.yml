@@ -1,4 +1,12 @@
 modules:
+  jira:projectPage:
+    - key: northstar-ops-jira-page
+      title: Northstar Ops
+      resource: main
+      resolver:
+        function: projectPageResolver
+      render: native
+
   rovo:agent:
     - key: northstar-ops-geo-strategist
       name: Northstar Ops Geo Strategist
@@ -216,6 +224,8 @@ modules:
           description: Optional Jira project key (defaults to KAN)
 
   function:
+    - key: projectPageResolver
+      handler: index.projectPageResolver
     - key: getMarketBriefFn
       handler: index.getMarketBrief
     - key: calculateServiceFeeFn
@@ -224,6 +234,10 @@ modules:
       handler: index.publishConfluencePlaybook
     - key: createCampaignFn
       handler: index.createJiraCampaign
+
+resources:
+  - key: main
+    path: src/frontend/index.jsx
 
 permissions:
   scopes:
