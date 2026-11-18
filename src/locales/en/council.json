@@ -6,7 +6,7 @@
   "councilCrossProviderLive": "Cross-provider debate active",
   "councilSingleProviderHint": "Isolated fresh-session critic (add GROQ_API_KEY or OPENAI_API_KEY for true cross-provider debate)",
   "councilHumanConstraintLabel": "Human operator rule / constraint (optional)",
-  "councilHumanConstraintPlaceholder": "e.g. Keep corner sofa under 220 PLN, emphasize free travel over 250 PLN",
+  "councilHumanConstraintPlaceholder": "e.g. Keep corner sofa under $60, emphasize free travel over $65",
   "councilRunBtn": "Run multi-model debate",
   "councilRunningBtn": "Agents debating…",
   "councilLessonsTitle": "Remembered operator rules (Lessons Learned)",

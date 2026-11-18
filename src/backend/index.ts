@@ -370,7 +370,7 @@ export function calculateServiceFee(input: ServiceFeeInput): ServiceFeeQuote {
     distanceKm,
     travelFeePln,
     totalPln: Math.round((input.orderValue + travelFeePln) * 100) / 100,
-    sourceStatus: "demo",
+    sourceStatus: "computed",
   };
 }
 

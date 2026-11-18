@@ -33,7 +33,7 @@ export interface ServiceFeeQuote {
   distanceKm?: number;
   travelFeePln: number;
   totalPln: number;
-  sourceStatus: "demo" | "connected";
+  sourceStatus: "computed" | "demo" | "connected";
 }
 
 export interface CampaignSpec {
