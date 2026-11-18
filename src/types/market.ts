@@ -24,11 +24,13 @@ export interface CompetitorInsight {
 export interface ServiceFeeInput {
   town: string;
   orderValue: number;
+  distanceKm?: number;
 }
 
 export interface ServiceFeeQuote {
   town: string;
   orderValue: number;
+  distanceKm?: number;
   travelFeePln: number;
   totalPln: number;
   sourceStatus: "demo" | "connected";

@@ -66,7 +66,6 @@ function parseCouncilContext(
       ? obj.selectedOptionTitle.trim()
       : "";
   if (!selectedOptionTitle) return undefined;
-
   return {
     selectedOptionTitle,
     selectedOptionSummary:
@@ -126,12 +125,14 @@ export const mcpTools = [
   },
   {
     name: "calculateServiceFee",
-    description: "Estimate travel fee and order total for a supported town.",
+    description:
+      "Estimate travel fee and order total for any target town and optional distanceKm.",
     inputSchema: {
       type: "object",
       properties: {
         town: { type: "string" },
         orderValue: { type: "number", minimum: 0 },
+        distanceKm: { type: "number", minimum: 0 },
       },
       required: ["town", "orderValue"],
     },
@@ -257,6 +258,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
     return calculateServiceFee({
       town: String(args.town ?? "Radom"),
       orderValue: Number(args.orderValue ?? 249),
+      distanceKm: parseOptionalNumber(args.distanceKm),
     });
   }
   if (name === "generateLocalizedCampaign") {
@@ -322,20 +324,23 @@ export async function handleMcpJsonRpc(body: {
   params?: Record<string, unknown>;
 }) {
   const id = body.id ?? null;
+
   if (body.method === "initialize") {
     return {
       jsonrpc: "2.0",
       id,
       result: {
         protocolVersion: "2025-03-26",
-        serverInfo: { name: "northstar-ops-mcp", version: "1.0.0" },
+        serverInfo: { name: "northstar-ops-mcp", version: "1.1.0" },
         capabilities: { tools: {} },
       },
     };
   }
+
   if (body.method === "tools/list") {
     return { jsonrpc: "2.0", id, result: { tools: mcpTools } };
   }
+
   if (body.method === "tools/call") {
     const name = String(body.params?.name ?? "");
     const args = (body.params?.arguments ?? {}) as Record<string, unknown>;
@@ -349,6 +354,7 @@ export async function handleMcpJsonRpc(body: {
       },
     };
   }
+
   return {
     jsonrpc: "2.0",
     id,

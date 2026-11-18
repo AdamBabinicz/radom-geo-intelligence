@@ -8,6 +8,7 @@ import {
   getTownTravelFeePln,
   RADOM_UPHOLSTERY_MARKET,
 } from "../config/markets";
+import { estimateZoneTravelFeePln } from "../lib/geo-math";
 import {
   formatTemplate,
   resolveLocale,
@@ -24,13 +25,6 @@ import type {
   ServiceFeeInput,
   ServiceFeeQuote,
 } from "../types/market";
-
-const SUPPORTED_TOWNS = [
-  RADOM_UPHOLSTERY_MARKET.centerName,
-  ...RADOM_UPHOLSTERY_MARKET.towns
-    .filter((t) => !t.isRegionalHub)
-    .map((t) => t.name),
-];
 
 const CAMPAIGN_KEYS: Record<
   IndustryId,
@@ -122,6 +116,7 @@ function getAtlassianConfig(): AtlassianConfig | null {
   const email = process.env.ATLASSIAN_EMAIL?.trim();
   const token = process.env.ATLASSIAN_API_TOKEN?.trim();
   if (!rawUrl || !email || !token) return null;
+
   return {
     baseUrl: rawUrl.replace(/\/+$/, ""),
     authHeader: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`,
@@ -288,21 +283,30 @@ export async function analyzeCompetitors(
   const locale = resolveLocale(input.locale);
   const t = translations[locale];
   const industry = INDUSTRY_TEMPLATES[input.industryId ?? "upholstery"];
+  const centerTrimmed = input.center.trim();
+  const isRadomReference =
+    centerTrimmed.toLowerCase() ===
+    RADOM_UPHOLSTERY_MARKET.centerName.toLowerCase();
   const metrics = getMarketMetrics(RADOM_UPHOLSTERY_MARKET, input.radiusKm);
+
   const townsInRadius =
     input.townsInRadius && input.townsInRadius.length > 0
       ? input.townsInRadius
-      : [
-          input.center.trim(),
-          ...metrics.localTowns
-            .filter((town) => town.distKm <= input.radiusKm)
-            .map((town) => town.name),
-        ];
+      : isRadomReference
+        ? [
+            centerTrimmed,
+            ...metrics.localTowns
+              .filter((town) => town.distKm <= input.radiusKm)
+              .map((town) => town.name),
+          ]
+        : [centerTrimmed];
+
   const serviceableTownsCount = townsInRadius.length;
   const competitorsTracked =
     typeof input.competitorsTracked === "number"
       ? input.competitorsTracked
       : metrics.competitorsTracked;
+
   const painPoints = industry.painPoints.map((p) => ({
     topic: t[p.topicKey],
     mentions: p.percent,
@@ -317,7 +321,7 @@ export async function analyzeCompetitors(
   }));
 
   return {
-    center: input.center,
+    center: centerTrimmed,
     radiusKm: input.radiusKm,
     serviceableTownsCount,
     competitorsTracked,
@@ -328,19 +332,44 @@ export async function analyzeCompetitors(
 }
 
 export function calculateServiceFee(input: ServiceFeeInput): ServiceFeeQuote {
+  const cleanTown = input.town.trim();
   if (
-    !SUPPORTED_TOWNS.includes(input.town) ||
+    !cleanTown ||
     !Number.isFinite(input.orderValue) ||
     input.orderValue < 0
   ) {
     throw new Error("Invalid service fee input");
   }
-  const travelFeePln = getTownTravelFeePln(RADOM_UPHOLSTERY_MARKET, input.town);
+
+  const lowerTown = cleanTown.toLowerCase();
+  const matchedRadomTown = RADOM_UPHOLSTERY_MARKET.towns.find(
+    (t) => !t.isRegionalHub && t.name.toLowerCase() === lowerTown,
+  );
+  const hasExplicitDistance =
+    typeof input.distanceKm === "number" &&
+    Number.isFinite(input.distanceKm) &&
+    input.distanceKm >= 0;
+
+  let distanceKm = 0;
+  let travelFeePln = 0;
+
+  if (hasExplicitDistance) {
+    distanceKm = Math.min(500, Math.round(input.distanceKm! * 10) / 10);
+    travelFeePln = estimateZoneTravelFeePln(distanceKm);
+  } else if (matchedRadomTown) {
+    distanceKm = matchedRadomTown.distKm;
+    travelFeePln = getTownTravelFeePln(
+      RADOM_UPHOLSTERY_MARKET,
+      matchedRadomTown.name,
+    );
+  }
+
   return {
-    town: input.town,
+    town: matchedRadomTown ? matchedRadomTown.name : cleanTown,
     orderValue: input.orderValue,
+    distanceKm,
     travelFeePln,
-    totalPln: input.orderValue + travelFeePln,
+    totalPln: Math.round((input.orderValue + travelFeePln) * 100) / 100,
     sourceStatus: "demo",
   };
 }
@@ -391,6 +420,7 @@ export async function exportStrategyToConfluence(input: {
   const t = translations[locale];
   const industryId = input.industryId ?? "upholstery";
   const template = INDUSTRY_TEMPLATES[industryId];
+
   const activeBenchmarks: ServiceBenchmarkInput[] =
     input.benchmarks && input.benchmarks.length > 0
       ? input.benchmarks
@@ -426,7 +456,6 @@ export async function exportStrategyToConfluence(input: {
     competitorsTracked: input.competitorsTracked,
     locale,
   });
-
   const campaign = generateLocalizedCampaign({
     season: input.season,
     targetTowns: analysis.townsInRadius,
@@ -479,10 +508,12 @@ export async function exportStrategyToConfluence(input: {
   });
 
   const atlassian = getAtlassianConfig();
+
   if (atlassian) {
     try {
       let spaceId: string | null = null;
       let resolvedSpaceKey = atlassian.spaceKey;
+
       const byKeyRes = await fetch(
         `${atlassian.baseUrl}/wiki/api/v2/spaces?keys=${encodeURIComponent(atlassian.spaceKey)}&limit=5`,
         {
@@ -594,6 +625,7 @@ export async function exportStrategyToConfluence(input: {
 
         let finalTitle = pageTitle;
         let createRes = await publishPage(finalTitle);
+
         if (createRes.status === 400) {
           const suffix = new Date()
             .toISOString()
@@ -611,6 +643,7 @@ export async function exportStrategyToConfluence(input: {
           const pageUrl = created._links?.webui
             ? `${atlassian.baseUrl}/wiki${created._links.webui}`
             : `${atlassian.baseUrl}/wiki/spaces/${resolvedSpaceKey}`;
+
           return {
             pageTitle: created.title ?? finalTitle,
             spaceKey: resolvedSpaceKey,
@@ -724,9 +757,11 @@ export async function createJiraMarketingEpics(input: {
       );
     }
   }
+
   epicParagraphs.push(t.jiraCreatedNote);
 
   const atlassian = getAtlassianConfig();
+
   if (atlassian) {
     try {
       const resolved = await resolveJiraProject(atlassian);
@@ -770,7 +805,6 @@ export async function createJiraMarketingEpics(input: {
               summary: string;
               url?: string;
             }> = [];
-
             const childType =
               epicType && taskType ? taskType : (subtaskType ?? taskType);
 
@@ -799,6 +833,7 @@ export async function createJiraMarketingEpics(input: {
                     `${t.jiraEpicBadge}: ${parentCreated.key}`,
                   ]),
                 };
+
                 let childRes = await createIssue(
                   useParentLink
                     ? { ...baseFields, parent: { key: parentCreated.key } }
@@ -810,6 +845,7 @@ export async function createJiraMarketingEpics(input: {
                     issuetype: { id: taskType.id },
                   });
                 }
+
                 if (childRes.ok) {
                   const childData = (await childRes.json()) as { key: string };
                   createdChildren.push({
@@ -868,6 +904,7 @@ export async function createCustomerQuote(
   const summary = `${t.jiraQuotePrefix} ${serviceName}${qtySuffix} · ${input.town} · ${input.totalPln} PLN`;
 
   const atlassian = getAtlassianConfig();
+
   if (atlassian) {
     try {
       const resolved = await resolveJiraProject(atlassian);
