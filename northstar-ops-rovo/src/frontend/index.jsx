@@ -628,104 +628,107 @@ function App() {
           </TabPanel>
 
           <TabPanel>
-            <Box xcss={cardStyle}>
-              <Stack space="space.150">
-                <Heading as="h2">{t.tabCalculator}</Heading>
-                <Inline space="space.150" shouldWrap>
-                  <Stack space="space.050">
-                    <Label labelFor="q-service">{t.serviceNameLabel}</Label>
-                    <Textfield
-                      id="q-service"
-                      value={quoteServiceLabel}
-                      onChange={(e) => setQuoteServiceLabel(e.target.value)}
-                    />
-                  </Stack>
-                  <Stack space="space.050">
-                    <Label labelFor="q-town">{t.townLabel}</Label>
-                    <Textfield
-                      id="q-town"
-                      value={quoteTown}
-                      onChange={(e) => setQuoteTown(e.target.value)}
-                    />
-                  </Stack>
-                  <Stack space="space.050">
-                    <Label labelFor="q-dist">{t.distanceLabel}</Label>
-                    <Textfield
-                      id="q-dist"
-                      type="number"
-                      value={quoteDistanceKm}
-                      onChange={(e) => setQuoteDistanceKm(e.target.value)}
-                    />
-                  </Stack>
-                  <Stack space="space.050">
-                    <Label labelFor="q-val">{t.orderValueLabel}</Label>
-                    <Textfield
-                      id="q-val"
-                      type="number"
-                      value={quoteOrderValue}
-                      onChange={(e) => setQuoteOrderValue(e.target.value)}
-                    />
-                  </Stack>
-                </Inline>
-
-                <Inline space="space.100">
-                  <Button
-                    appearance="default"
-                    isDisabled={quoteBusy}
-                    onClick={handleCalculateQuote}
-                  >
-                    {t.computeQuote}
-                  </Button>
-                  <Button
-                    appearance="primary"
-                    isDisabled={quoteBusy}
-                    onClick={handleCreateQuoteTicket}
-                  >
-                    {t.createQuoteIssue}
-                  </Button>
-                </Inline>
-
-                {quoteResult && (
-                  <SectionMessage
-                    appearance={
-                      quoteResult.inStandardZone ? "success" : "warning"
-                    }
-                    title={`${t.quoteSummaryTitle} — ${quoteResult.town}`}
-                  >
+            <Stack space="space.200">
+              <Box xcss={cardStyle}>
+                <Stack space="space.150">
+                  <Heading as="h2">{t.tabCalculator}</Heading>
+                  <Inline space="space.150" shouldWrap>
                     <Stack space="space.050">
+                      <Label labelFor="q-service">{t.serviceNameLabel}</Label>
+                      <Textfield
+                        id="q-service"
+                        value={quoteServiceLabel}
+                        onChange={(e) => setQuoteServiceLabel(e.target.value)}
+                      />
+                    </Stack>
+                    <Stack space="space.050">
+                      <Label labelFor="q-town">{t.townLabel}</Label>
+                      <Textfield
+                        id="q-town"
+                        value={quoteTown}
+                        onChange={(e) => setQuoteTown(e.target.value)}
+                      />
+                    </Stack>
+                    <Stack space="space.050">
+                      <Label labelFor="q-dist">{t.distanceLabel}</Label>
+                      <Textfield
+                        id="q-dist"
+                        type="number"
+                        value={quoteDistanceKm}
+                        onChange={(e) => setQuoteDistanceKm(e.target.value)}
+                      />
+                    </Stack>
+                    <Stack space="space.050">
+                      <Label labelFor="q-val">{t.orderValueLabel}</Label>
+                      <Textfield
+                        id="q-val"
+                        type="number"
+                        value={quoteOrderValue}
+                        onChange={(e) => setQuoteOrderValue(e.target.value)}
+                      />
+                    </Stack>
+                  </Inline>
+                  <Inline space="space.100" shouldWrap>
+                    <Button
+                      appearance="default"
+                      isDisabled={quoteBusy}
+                      onClick={handleCalculateQuote}
+                    >
+                      {t.computeQuote}
+                    </Button>
+                    <Button
+                      appearance="primary"
+                      isDisabled={quoteBusy}
+                      onClick={handleCreateQuoteTicket}
+                    >
+                      {t.createQuoteIssue}
+                    </Button>
+                  </Inline>
+                  {quoteResult && (
+                    <SectionMessage
+                      appearance={
+                        quoteResult.inStandardZone ? "success" : "warning"
+                      }
+                      title={`${t.quoteSummaryTitle} — ${quoteResult.town}`}
+                    >
+                      <Stack space="space.050">
+                        <Inline space="space.100" alignBlock="center">
+                          <Lozenge
+                            appearance={
+                              quoteResult.inStandardZone ? "success" : "moved"
+                            }
+                          >
+                            {quoteResult.inStandardZone
+                              ? t.inZone
+                              : t.outOfZone}
+                          </Lozenge>
+                          <Text>{`${quoteResult.distanceKm} km · ${t.driveTimeLabel}: ~${quoteResult.estimatedDriveMin} min`}</Text>
+                        </Inline>
+                        <Text>{`${t.travelFeeLabel}: ${quoteResult.travelFee} ${quoteResult.currency} | ${t.totalLabel}: ${quoteResult.total} ${quoteResult.currency}`}</Text>
+                      </Stack>
+                    </SectionMessage>
+                  )}
+                  {quoteCreated?.ok && (
+                    <SectionMessage
+                      appearance="success"
+                      title={`${t.quoteCreatedTitle}: ${quoteCreated.key}`}
+                    >
                       <Inline space="space.100" alignBlock="center">
-                        <Lozenge
-                          appearance={
-                            quoteResult.inStandardZone ? "success" : "moved"
+                        <Text>{quoteCreated.summary}</Text>
+                        <Button
+                          appearance="link"
+                          onClick={() =>
+                            router.navigate(quoteCreated.browsePath)
                           }
                         >
-                          {quoteResult.inStandardZone ? t.inZone : t.outOfZone}
-                        </Lozenge>
-                        <Text>{`${quoteResult.distanceKm} km · ${t.driveTimeLabel}: ~${quoteResult.estimatedDriveMin} min`}</Text>
+                          {t.openIssue}
+                        </Button>
                       </Inline>
-                      <Text>{`${t.travelFeeLabel}: ${quoteResult.travelFee} ${quoteResult.currency} | ${t.totalLabel}: ${quoteResult.total} ${quoteResult.currency}`}</Text>
-                    </Stack>
-                  </SectionMessage>
-                )}
-
-                {quoteCreated?.ok && (
-                  <SectionMessage
-                    appearance="success"
-                    title={`${t.quoteCreatedTitle}: ${quoteCreated.key}`}
-                  >
-                    <Inline space="space.100" alignBlock="center">
-                      <Text>{quoteCreated.summary}</Text>
-                      <Button
-                        appearance="link"
-                        onClick={() => router.navigate(quoteCreated.browsePath)}
-                      >
-                        {t.openIssue}
-                      </Button>
-                    </Inline>
-                  </SectionMessage>
-                )}
-              </Stack>
-            </Box>
+                    </SectionMessage>
+                  )}
+                </Stack>
+              </Box>
+            </Stack>
           </TabPanel>
 
           <TabPanel>
