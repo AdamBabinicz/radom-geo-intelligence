@@ -444,6 +444,8 @@ export async function exportStrategyToConfluence(input: {
   const hasLiveCustomBenchmarks =
     activeBenchmarks.length > 0 &&
     activeBenchmarks.every((b) => b.serviceKey.startsWith("live:"));
+  const isCustomNiche =
+    Boolean(input.detectedIndustryLabel?.trim()) || hasLiveCustomBenchmarks;
 
   const comparableBenchmarks = activeBenchmarks.filter(
     (s) => s.localPricePln > 0,
@@ -480,7 +482,7 @@ export async function exportStrategyToConfluence(input: {
         option: ctx.selectedOptionTitle,
         towns: topTownsShort,
       })
-    : hasLiveCustomBenchmarks
+    : isCustomNiche
       ? formatTemplate(t.councilLocalStrategyTitleTemplate, {
           label: input.detectedIndustryLabel || analysis.center,
           towns: topTownsShort,
@@ -489,20 +491,20 @@ export async function exportStrategyToConfluence(input: {
 
   const pageHeadline = ctx
     ? `${t.brand} — ${t.councilTitle}: ${ctx.selectedOptionTitle}`
-    : hasLiveCustomBenchmarks
+    : isCustomNiche
       ? `${t.brand} — ${input.detectedIndustryLabel || analysis.center} (${analysis.radiusKm} ${t.kmUnit})`
       : `${t.brand} — ${campaign.headline}`;
 
-  const topPain =
+  const rawTopPain =
     input.topPainPoint?.trim() ||
-    ctx?.criticObjections?.[0]?.trim() ||
-    (hasLiveCustomBenchmarks
+    (isCustomNiche
       ? t.councilCustomPainFallback
       : t[template.painPoints[0].topicKey]);
+  const topPain = rawTopPain.replace(/[.!?\s]+$/, "");
 
   const valueProposition =
     ctx?.selectedOptionSummary?.trim() ||
-    (hasLiveCustomBenchmarks ? t.councilCustomOfferFallback : campaign.offer);
+    (isCustomNiche ? t.councilCustomOfferFallback : campaign.offer);
 
   const gapText = `${avgGapPct > 0 ? "+" : ""}${avgGapPct}%`;
   const summary = formatTemplate(t.confluenceSummaryTemplate, {

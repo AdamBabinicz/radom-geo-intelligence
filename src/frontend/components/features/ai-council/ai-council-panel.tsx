@@ -44,6 +44,7 @@ interface AiCouncilPanelProps {
   market: MarketProfile;
   locale: Locale;
   industryId: IndustryId;
+  detectedIndustryLabel?: string;
   radiusKm: number;
   avgGapPct: number;
   townsInRadius: string[];
@@ -106,6 +107,7 @@ export function AiCouncilPanel({
   market,
   locale,
   industryId,
+  detectedIndustryLabel,
   radiusKm,
   avgGapPct,
   townsInRadius,
@@ -152,13 +154,27 @@ export function AiCouncilPanel({
     }
   };
 
+  const activeIndustry = INDUSTRY_TEMPLATES[industryId];
+  const presetKeys = new Set(activeIndustry.services.map((s) => s.serviceKey));
+  const hasPresetOverlap = market.benchmarks.some((row) =>
+    presetKeys.has(row.serviceKey),
+  );
+  const hasLiveServices = market.benchmarks.some((row) =>
+    row.serviceKey.startsWith("live:"),
+  );
+  const resolvedDetectedLabel =
+    liveScan?.detectedIndustryLabel?.trim() ||
+    detectedIndustryLabel?.trim() ||
+    undefined;
+  const isCustomLiveNiche =
+    Boolean(resolvedDetectedLabel) || (hasLiveServices && !hasPresetOverlap);
+
   const handleRunCouncil = async () => {
     setIsDebating(true);
     setDebateError(null);
     setPublishedConfluence(null);
     setPublishedJira(null);
 
-    const activeIndustry = INDUSTRY_TEMPLATES[industryId];
     const painPoints =
       liveScan?.aiEnhanced && liveScan.painPoints.length > 0
         ? liveScan.painPoints.map((p) => ({
@@ -166,10 +182,12 @@ export function AiCouncilPanel({
             score: p.severityScore,
             evidence: p.evidence,
           }))
-        : activeIndustry.painPoints.map((p) => ({
-            label: t[p.topicKey],
-            score: p.percent,
-          }));
+        : isCustomLiveNiche
+          ? []
+          : activeIndustry.painPoints.map((p) => ({
+              label: t[p.topicKey],
+              score: p.percent,
+            }));
 
     const competitors = (liveScan?.competitors ?? []).map((c) => ({
       name: c.name,
@@ -187,6 +205,7 @@ export function AiCouncilPanel({
         body: JSON.stringify({
           city: market.centerName,
           industryId,
+          industryLabel: resolvedDetectedLabel || t[activeIndustry.labelKey],
           radiusKm,
           locale,
           avgGapPct,
@@ -262,9 +281,6 @@ export function AiCouncilPanel({
       liveScan?.aiEnhanced && liveScan.painPoints.length > 0
         ? liveScan.painPoints[0].label
         : undefined;
-    const detectedIndustryLabel = liveScan?.detectedIndustryLabel?.trim()
-      ? liveScan.detectedIndustryLabel.trim()
-      : undefined;
 
     const trimmedNote = humanNote.trim();
     const councilContext: CouncilExecutionContext = {
@@ -295,7 +311,9 @@ export function AiCouncilPanel({
                 radiusKm,
                 season: "Q4",
                 industryId,
-                ...(detectedIndustryLabel ? { detectedIndustryLabel } : {}),
+                ...(resolvedDetectedLabel
+                  ? { detectedIndustryLabel: resolvedDetectedLabel }
+                  : {}),
                 ...(topPainPoint ? { topPainPoint } : {}),
                 townsInRadius,
                 competitorsTracked: competitorsCount,

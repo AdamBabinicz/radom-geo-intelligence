@@ -35,6 +35,7 @@ export interface CouncilPainPointInput {
 export interface CouncilRequestInput {
   city: string;
   industryId: IndustryId;
+  industryLabel?: string;
   radiusKm: number;
   locale: "pl" | "en";
   avgGapPct: number;
@@ -244,6 +245,7 @@ async function callOpenAiCompatibleJson<T>(
 }
 
 function buildCompactMarketBrief(input: CouncilRequestInput): string {
+  const resolvedIndustry = input.industryLabel?.trim() || input.industryId;
   const servicesLines = input.services
     .slice(0, 12)
     .map((s) => {
@@ -251,7 +253,13 @@ function buildCompactMarketBrief(input: CouncilRequestInput): string {
         s.localPricePln > 0
           ? `${Math.round(((s.ourPricePln - s.localPricePln) / s.localPricePln) * 100)}%`
           : "n/a";
-      return `- [${s.serviceKey}] ${s.label}: our=${s.ourPricePln} PLN, localAvg=${s.localPricePln > 0 ? `${s.localPricePln} PLN` : "none"} (gap ${gap})`;
+      const enHint =
+        input.locale === "en"
+          ? ` (~$${Math.round(s.ourPricePln / 4)} USD vs ~$${
+              s.localPricePln > 0 ? Math.round(s.localPricePln / 4) : 0
+            } USD)`
+          : "";
+      return `- [${s.serviceKey}] ${s.label}: our=${s.ourPricePln} PLN, localAvg=${s.localPricePln > 0 ? `${s.localPricePln} PLN` : "none"} (gap ${gap})${enHint}`;
     })
     .join("\n");
 
@@ -283,7 +291,7 @@ function buildCompactMarketBrief(input: CouncilRequestInput): string {
     : "";
 
   return [
-    `City: ${input.city} | Industry: ${input.industryId} | Radius: ${input.radiusKm} km | Avg Market Gap: ${input.avgGapPct}%`,
+    `City: ${input.city} | Industry: ${resolvedIndustry} | Radius: ${input.radiusKm} km | Avg Market Gap: ${input.avgGapPct}%`,
     `Towns in zone: ${input.townsInRadius.slice(0, 10).join(", ")}`,
     `Services:\n${servicesLines || "- none"}`,
     compLines ? `Competitors:\n${compLines}` : "",
@@ -334,6 +342,8 @@ function buildGroundedFallbackCouncil(
   fallbackNotice?: string,
 ): CouncilDebateResult {
   const isPl = input.locale === "pl";
+  const isCustomOrNonUpholstery =
+    Boolean(input.industryLabel?.trim()) || input.industryId !== "upholstery";
   const underpriced = input.services
     .filter((s) => s.localPricePln > 0 && s.ourPricePln < s.localPricePln)
     .sort(
@@ -360,7 +370,7 @@ function buildGroundedFallbackCouncil(
           ? `Średnia w mieście ${input.city} to ${s.localPricePln} zł — bezpieczne domknięcie luki cenowej.`
           : `Korekta marżowa +8% w promieniu ${input.radiusKm} km.`
         : s.localPricePln > 0
-          ? `${input.city} avg is ${s.localPricePln} PLN — closing part of the market gap.`
+          ? `${input.city} avg is ~$${Math.round(s.localPricePln / 4)} — closing part of the market gap.`
           : `Modest +8% margin adjustment inside ${input.radiusKm} km zone.`,
     };
   });
@@ -394,6 +404,29 @@ function buildGroundedFallbackCouncil(
       ? ` Uwzględniono zasadę operatora: "${input.humanNote.trim()}".`
       : ` Honored operator rule: "${input.humanNote.trim()}".`
     : "";
+
+  const addOnCounterProposal = isCustomOrNonUpholstery
+    ? isPl
+      ? "Utrzymaj cenę wejściową głównego pakietu, a marżę buduj na usługach dodatkowych oraz pakietach premium."
+      : "Protect flagship entry pricing while monetizing add-on services and priority packages."
+    : isPl
+      ? "Utrzymaj cenę wejściową głównego pakietu, a marżę buduj na usługach dodatkowych (impregnacja, pufa, dosuszanie)."
+      : "Protect flagship entry price while monetizing add-ons (fabric protection, drying, extra pieces).";
+
+  const marginActionMiddle = isCustomOrNonUpholstery
+    ? isPl
+      ? "Przygotuj pakiety cross-sell (usługi dodatkowe i gwarancja terminu) dla większych zleceń"
+      : "Bundle high-margin add-on services or priority scheduling for larger bookings"
+    : isPl
+      ? "Przygotuj pakiety cross-sell (impregnacja / dosuszanie) dla zleceń powyżej 200 zł"
+      : "Bundle add-ons (fabric protection / drying) for higher-value bookings";
+
+  const sensitivityReasonPl = topPain
+    ? `ryzyka wokół: ${topPain}`
+    : "wrażliwość cenową lokalnego rynku";
+  const sensitivityReasonEn = topPain
+    ? `customer friction around ${topPain}`
+    : "local market price sensitivity";
 
   return {
     aiEnhanced: false,
@@ -431,15 +464,13 @@ function buildGroundedFallbackCouncil(
         isPl
           ? `Rozbij podwyżkę na łagodniejszy krok (+35% luki zamiast +65%) i wyeksponuj darmowy dojazd w promieniu ${input.radiusKm} km.`
           : `Phase increases to ~35% of the gap first and highlight free zone travel inside ${input.radiusKm} km.`,
-        isPl
-          ? `Utrzymaj cenę wejściową głównego pakietu, a marżę buduj na usługach dodatkowych (impregnacja, pufa, dosuszanie).`
-          : `Protect flagship entry price while monetizing add-ons (fabric protection, drying, extra pieces).`,
+        addOnCounterProposal,
       ],
     },
     round3Synthesis: {
       summaryForHuman: isPl
-        ? `Strateg zaproponował domknięcie 65% luki cenowej, ale Krytyk wstrzymał agresywny skok ze względu na wrażliwość klientów na ukryte opłaty.${humanSuffix} Wybierz wariant do publikacji w Confluence i Jira.`
-        : `Strategist proposed closing 65% of the price gap, but Critic flagged churn risk around pricing transparency.${humanSuffix} Select an option to ship to Confluence & Jira.`,
+        ? `Strateg zaproponował domknięcie 65% luki cenowej, ale Krytyk wstrzymał agresywny skok ze względu na ${sensitivityReasonPl}.${humanSuffix} Wybierz wariant do publikacji w Confluence i Jira.`
+        : `Strategist proposed closing 65% of the price gap, but Critic flagged churn risk around ${sensitivityReasonEn}.${humanSuffix} Select an option to ship to Confluence & Jira.`,
       options: [
         {
           id: "safe",
@@ -474,12 +505,12 @@ function buildGroundedFallbackCouncil(
           actionItems: isPl
             ? [
                 `Wdróż wyższe stawki bazowe dla: ${topTargets.map((t) => t.label).join(", ")}`,
-                `Przygotuj pakiety cross-sell (impregnacja / dosuszanie) dla zleceń powyżej 200 zł`,
+                marginActionMiddle,
                 `Skieruj reklamy na dzielnice o najwyższych ocenach konkurencji w Google Maps`,
               ]
             : [
                 `Roll out higher base rates for: ${topTargets.map((t) => t.label).join(", ")}`,
-                `Bundle add-ons (fabric protection / drying) for orders above 200 PLN`,
+                marginActionMiddle,
                 `Target high-intent suburbs around ${secondaryTowns}`,
               ],
         },
@@ -531,6 +562,10 @@ export async function runAiCouncil(
   const ai = getGeminiClient();
   const secondary = getSecondaryProvider();
   const languageLabel = input.locale === "pl" ? "Polish" : "English";
+  const currencyRule =
+    input.locale === "en"
+      ? " Keep JSON price fields (currentPricePln, proposedPricePln, finalPricePln) as integer PLN, while referring to prices in USD ($) in prose."
+      : "";
   const brief = buildCompactMarketBrief(input);
 
   if (!ai && !secondary) {
@@ -551,7 +586,7 @@ export async function runAiCouncil(
   const strategistSystem =
     `You are Agent 1 (Pricing & Geo Strategist) in an executive multi-agent council. ` +
     `Propose profitable, realistic pricing moves and a local expansion angle based ONLY on the provided numbers. ` +
-    `Strictly obey any "Human Operator Constraint" and "Lessons Learned". Write all text in ${languageLabel}.`;
+    `Strictly obey any "Human Operator Constraint" and "Lessons Learned". Write all text in ${languageLabel}.${currencyRule}`;
 
   try {
     if (ai) {
@@ -662,7 +697,7 @@ export async function runAiCouncil(
   const criticSystem =
     `You are Agent 2 (Independent Risk Auditor & Devil's Advocate) running in a separate session. ` +
     `Do NOT blindly agree with Agent 1. Challenge overly aggressive price hikes, hidden travel-fee risks, conversion drops against top-rated Google Maps rivals, and compliance with customer complaints & operator constraints. ` +
-    `Write all text in ${languageLabel}. Return valid JSON.`;
+    `Do NOT invent customer review statistics (%) that are not present in LIVE MARKET CONTEXT. Write all text in ${languageLabel}.${currencyRule} Return valid JSON.`;
 
   const criticPrompt = [
     `LIVE MARKET CONTEXT:\n${brief}`,
@@ -789,7 +824,7 @@ export async function runAiCouncil(
   const synthesisSystem =
     `You are Agent 3 (Council Moderator) synthesizing Agent 1's proposal and Agent 2's critique for the Human Operator. ` +
     `Produce exactly two distinct executable options ("safe" and "margin") that respect the Human Operator Constraint and Lessons Learned. ` +
-    `Write all text in ${languageLabel}. Return valid JSON.`;
+    `Write all text in ${languageLabel}.${currencyRule} Return valid JSON.`;
 
   const synthesisPrompt = [
     `ROUND 1 STRATEGIST:\n${JSON.stringify(round1)}`,

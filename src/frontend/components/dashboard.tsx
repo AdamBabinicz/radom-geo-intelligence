@@ -1167,6 +1167,11 @@ export function Dashboard() {
               market={market}
               locale={locale}
               industryId={industryId}
+              detectedIndustryLabel={
+                isWebsiteAutoNiche || hasManualCustomNiche
+                  ? activeIndustryLabel
+                  : undefined
+              }
               radiusKm={radiusKm}
               avgGapPct={metrics.avgGapPct}
               townsInRadius={townsInRadius}

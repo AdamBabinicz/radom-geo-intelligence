@@ -142,6 +142,10 @@ export async function POST(req: NextRequest) {
         ? body.city.trim().slice(0, 80)
         : "Radom";
     const industryId = parseIndustry(body.industryId);
+    const industryLabel =
+      typeof body.industryLabel === "string" && body.industryLabel.trim()
+        ? body.industryLabel.trim().slice(0, 100)
+        : undefined;
     const parsedRadius = Number(body.radiusKm);
     const radiusKm = Number.isFinite(parsedRadius)
       ? Math.min(100, Math.max(10, Math.round(parsedRadius)))
@@ -175,6 +179,7 @@ export async function POST(req: NextRequest) {
     const input: CouncilRequestInput = {
       city,
       industryId,
+      industryLabel,
       radiusKm,
       locale,
       avgGapPct,
@@ -189,6 +194,7 @@ export async function POST(req: NextRequest) {
     const cacheKey = JSON.stringify([
       input.city,
       input.industryId,
+      input.industryLabel ?? "",
       input.radiusKm,
       input.locale,
       input.avgGapPct,

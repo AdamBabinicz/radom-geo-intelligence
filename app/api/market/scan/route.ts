@@ -17,7 +17,6 @@ export const maxDuration = 60;
 const GEMINI_SCAN_TIMEOUT_MS = 20_000;
 const GROQ_MODEL_TIMEOUT_MS = 12_000;
 const GROQ_TOTAL_BUDGET_MS = 24_000;
-
 const GROQ_CHAT_COMPLETIONS_URL =
   "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_FALLBACK_MODELS = [
@@ -223,6 +222,7 @@ function isSafePublicUrl(rawUrl: string): URL | null {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return null;
     }
+
     const host = parsed.hostname.toLowerCase();
     if (
       host === "localhost" ||
@@ -338,6 +338,7 @@ function parseSiteProfileParam(raw: unknown): SiteProfileParam | undefined {
           .filter((item) => item.length >= 3 && item.length <= 90)
           .slice(0, 4)
       : [];
+
   const nichePl =
     typeof obj.nichePl === "string" ? obj.nichePl.trim().slice(0, 100) : "";
   const nicheEn =
@@ -352,6 +353,7 @@ function parseSiteProfileParam(raw: unknown): SiteProfileParam | undefined {
       : undefined;
   const searchQueriesPl = normalizeList(obj.searchQueriesPl);
   const searchQueriesEn = normalizeList(obj.searchQueriesEn);
+
   if (
     !nichePl &&
     !nicheEn &&
@@ -360,6 +362,7 @@ function parseSiteProfileParam(raw: unknown): SiteProfileParam | undefined {
   ) {
     return undefined;
   }
+
   return {
     businessName,
     nichePl: nichePl || nicheEn,
@@ -400,6 +403,7 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
       rawUrls.push(part);
     }
   }
+
   const competitorUrls = Array.from(
     new Set(
       rawUrls
@@ -459,6 +463,7 @@ function extractGroundingSources(
 function extractVisibleText(html: string): { title: string; text: string } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = (titleMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
+
   const stripped = html
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
@@ -480,6 +485,7 @@ function extractVisibleText(html: string): { title: string; text: string } {
     .replace(/[ \t\r\f\v]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
+
   return { title, text: stripped.slice(0, 14_000) };
 }
 
@@ -491,19 +497,20 @@ function extractJsonLdPricingText(html: string): string {
   const visit = (node: unknown) => {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) {
-      for (const item of node) visit(item);
+      node.forEach(visit);
       return;
     }
     const obj = node as Record<string, unknown>;
     const name =
       typeof obj.name === "string"
         ? obj.name.trim()
-        : typeof obj.title === "string"
-          ? obj.title.trim()
+        : typeof obj.description === "string"
+          ? obj.description.trim().slice(0, 80)
           : "";
-    const priceRaw = obj.price ?? obj.lowPrice ?? obj.minPrice;
+    const priceRaw = obj.price ?? obj.lowPrice;
     const currencyRaw =
-      typeof obj.priceCurrency === "string" ? obj.priceCurrency.trim() : "PLN";
+      typeof obj.priceCurrency === "string" ? obj.priceCurrency : "PLN";
+
     if (
       name &&
       priceRaw != null &&
@@ -529,7 +536,6 @@ function extractJsonLdPricingText(html: string): string {
       // Ignore malformed JSON-LD blocks
     }
   }
-
   return Array.from(new Set(lines)).slice(0, 30).join("\n");
 }
 
@@ -558,6 +564,7 @@ function isJsArtifactLine(line: string): boolean {
 function extractSpaPricingLines(jsTexts: string[]): string {
   const seen = new Set<string>();
   const out: string[] = [];
+
   const pushLine = (line: string) => {
     const cleaned = line.replace(/\s+/g, " ").trim();
     if (
@@ -582,6 +589,7 @@ function extractSpaPricingLines(jsTexts: string[]): string {
       const idx = km.index ?? 0;
       const left = js.slice(Math.max(0, idx - 220), idx);
       const right = js.slice(idx, Math.min(js.length, idx + 140));
+
       const nameMatches = Array.from(
         left.matchAll(
           /\b(?:name|title|label|service)\s*:\s*["']([^"']{3,90})["']/g,
@@ -590,6 +598,7 @@ function extractSpaPricingLines(jsTexts: string[]): string {
       const label =
         nameMatches.length > 0 ? nameMatches[nameMatches.length - 1][1] : "";
       if (!label) continue;
+
       const unitMatch =
         right.match(/\b(?:unit|per|period)\s*:\s*["']([^"']{1,24})["']/) ??
         left.match(/\b(?:unit|per|period)\s*:\s*["']([^"']{1,24})["']/);
@@ -606,7 +615,6 @@ function extractSpaPricingLines(jsTexts: string[]): string {
       if (!val || !CURRENCY_LINE_RE.test(val)) continue;
       pushLine(val);
     }
-
     if (out.length >= 50) break;
   }
 
@@ -636,6 +644,7 @@ function findSameOriginScripts(html: string, baseUrl: URL): string[] {
         if (!resolved.pathname.endsWith(".js")) continue;
         const fileName = resolved.pathname.split("/").pop() ?? "";
         if (VENDOR_SCRIPT_RE.test(fileName)) continue;
+
         const score = APP_OR_PRICING_SCRIPT_RE.test(fileName) ? 10 : 1;
         const urlStr = resolved.toString();
         if (!scripts.has(urlStr) || (scripts.get(urlStr) ?? 0) < score) {
@@ -680,10 +689,12 @@ function findLazyRouteChunks(
         if (!resolved.pathname.endsWith(".js")) return;
         const urlStr = resolved.toString();
         if (alreadyFetched.has(urlStr)) return;
+
         const fileName = (
           resolved.pathname.split("/").pop() ?? ""
         ).toLowerCase();
         if (IGNORE_LAZY_CHUNK_RE.test(fileName)) return;
+
         if (APP_OR_PRICING_SCRIPT_RE.test(fileName)) {
           candidates.set(urlStr, 50);
         }
@@ -708,9 +719,11 @@ function compactSiteText(rawText: string, maxChars = 4_000): string {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 1 && !ZERO_PRICE_ONLY_RE.test(line));
+
   const signalRe =
     /(z[łl]|pln|eur|usd|gbp|chf|cad|aud|\$|€|£|,-|cennik|cena|od\s+\d+|from\s+\d+|m²|m2|szt|godz|hour|dzie[ńn]|day|imprez|event|wynajem|us[łl]ug|dojazd|gratis|opinie|price|pricing|rate|specials|coupon|tune-up|tune up|SCHEMA_OFFER|SPA_ITEM)/i;
   const picked = new Set<number>();
+
   lines.forEach((line, idx) => {
     if (signalRe.test(line)) {
       if (idx > 0) picked.add(idx - 1);
@@ -718,6 +731,7 @@ function compactSiteText(rawText: string, maxChars = 4_000): string {
       if (idx + 1 < lines.length) picked.add(idx + 1);
     }
   });
+
   // Keep strictly in document order so service labels stay directly above their prices
   const selected = Array.from(picked)
     .sort((a, b) => a - b)
@@ -768,12 +782,14 @@ function buildCompactGroqResearch(
 ): string {
   const sections: string[] = [];
   let remaining = maxChars;
+
   if (gbpContext) {
     const gbpCap = Math.min(3_200, Math.floor(maxChars * 0.34));
     const gbpSlice = gbpContext.slice(0, gbpCap).trim();
     sections.push(gbpSlice);
     remaining -= gbpSlice.length + 2;
   }
+
   if (fetchedSites.length > 0 && remaining > 400) {
     const sortedSites = [...fetchedSites].sort(
       (a, b) => Number(b.hasPriceSignals) - Number(a.hasPriceSignals),
@@ -804,6 +820,7 @@ function buildCompactGroqResearch(
         Math.min(targetCap, Math.max(120, remaining - header.length - 4)),
       );
       if (!compactBody) continue;
+
       const block = `${header}\n${compactBody}`;
       if (block.length + 2 <= remaining) {
         sections.push(block);
@@ -815,6 +832,7 @@ function buildCompactGroqResearch(
       }
     }
   }
+
   return sections.join("\n\n").slice(0, maxChars);
 }
 
@@ -830,12 +848,14 @@ function findPricingSubpageUrls(html: string, baseUrl: URL): string[] {
     const href = (match[1] ?? "").trim();
     const label = (match[2] ?? "").replace(/<[^>]+>/g, " ").trim();
     const haystack = `${href} ${label}`.toLowerCase();
+
     if (
       /\.(jpg|jpeg|png|webp|avif|pdf|svg)$/i.test(href) ||
       /^(?:mailto:|tel:|javascript:)/i.test(href)
     ) {
       continue;
     }
+
     const isDirectPricing =
       /(cennik|cena|ceny|pricing|price-list|prices|rates|tarif|specials|coupons|deals|promo|estimate|tune-up|cost|fee|financing)/.test(
         haystack,
@@ -845,6 +865,7 @@ function findPricingSubpageUrls(html: string, baseUrl: URL): string[] {
         haystack,
       );
     if (!isDirectPricing && !isSecondaryOffer) continue;
+
     try {
       const resolved = new URL(href, baseUrl);
       if (
@@ -904,11 +925,13 @@ async function fetchSiteContext(
 ): Promise<FetchedSiteContext | null> {
   const safeUrl = isSafePublicUrl(targetUrl);
   if (!safeUrl) return null;
+
   const html = await fetchHtmlPage(safeUrl.toString());
   if (!html) return null;
 
   const { title, text } = extractVisibleText(html);
   if (isBotChallengePage(title, text)) return null;
+
   const schemaOffers = extractJsonLdPricingText(html);
   const parts: string[] = [text];
   if (schemaOffers) parts.push(schemaOffers);
@@ -940,7 +963,6 @@ async function fetchSiteContext(
       const initialScripts = (
         await Promise.all(scriptUrls.map((u) => fetchJsAsset(u)))
       ).filter((item): item is { url: string; text: string } => item !== null);
-
       const lazyChunkUrls = findLazyRouteChunks(initialScripts, safeUrl);
       const lazyScripts =
         lazyChunkUrls.length > 0
@@ -950,7 +972,6 @@ async function fetchSiteContext(
               (item): item is { url: string; text: string } => item !== null,
             )
           : [];
-
       const allScripts = [...initialScripts, ...lazyScripts];
       if (allScripts.length > 0) {
         const spaLines = extractSpaPricingLines(allScripts.map((s) => s.text));
@@ -963,9 +984,11 @@ async function fetchSiteContext(
 
   const compacted = compactSiteText(combined, 4_000);
   if (!compacted) return null;
+
   const meaningfulPriceLines = compacted
     .split("\n")
     .some((l) => CURRENCY_LINE_RE.test(l) && !ZERO_PRICE_ONLY_RE.test(l));
+
   return {
     url: safeUrl.toString(),
     title: title || safeUrl.hostname,
@@ -994,10 +1017,12 @@ function buildDynamicQueriesFromServices(
     locale === "pl"
       ? (siteProfile?.searchQueriesPl ?? [])
       : (siteProfile?.searchQueriesEn ?? []);
+
   for (const stem of profileStems) {
     const cleaned = stem.trim();
     if (cleaned && !stems.includes(cleaned)) stems.push(cleaned);
   }
+
   if (stems.length < 3) {
     const niche = locale === "pl" ? siteProfile?.nichePl : siteProfile?.nicheEn;
     if (niche) {
@@ -1007,6 +1032,7 @@ function buildDynamicQueriesFromServices(
       }
     }
   }
+
   if (stems.length < 3) {
     for (const svc of services) {
       if (!svc.label) continue;
@@ -1017,6 +1043,7 @@ function buildDynamicQueriesFromServices(
       if (stems.length >= 4) break;
     }
   }
+
   const cityLower = city.toLowerCase();
   const localized = stems.slice(0, 4).map((stem, idx) => {
     const hasCity = stem.toLowerCase().includes(cityLower);
@@ -1101,6 +1128,7 @@ function filterCandidateUrls(
 ): string[] {
   const result: string[] = [];
   const seenHosts = new Set<string>();
+
   for (const raw of rawCandidates) {
     const safe = isSafePublicUrl(raw);
     if (!safe) continue;
@@ -1143,9 +1171,11 @@ async function discoverViaSerper(
   if (!serperKey) {
     return { urls: [], gbpContext: "", mapsSources: [], places: [] };
   }
+
   const gl = countryCode || (locale === "pl" ? "pl" : "us");
   const hl = countryCode === "pl" ? "pl" : countryCode ? "en" : locale;
   const searchLocation = city && country ? `${city}, ${country}` : country;
+
   const collectedUrls: string[] = [];
   const gbpLines: string[] = [];
   const organicSnippets: string[] = [];
@@ -1210,6 +1240,7 @@ async function discoverViaSerper(
     const title = place.title?.trim();
     if (!title) return;
     if (isExcludedCompetitorWebsite(place.website, excludeHost)) return;
+
     const cidStr = place.cid != null ? String(place.cid).trim() : "";
     const hostKey = getNormalizedHostFromUrl(place.website);
     const dedupeKeys = [
@@ -1217,8 +1248,10 @@ async function discoverViaSerper(
       hostKey ? `host:${hostKey}` : "",
       `name:${title.toLowerCase()}`,
     ].filter(Boolean);
+
     const alreadyRegistered = dedupeKeys.some((k) => seenKeys.has(k));
     dedupeKeys.forEach((k) => seenKeys.add(k));
+
     const mapUri = cidStr
       ? `https://www.google.com/maps?cid=${encodeURIComponent(cidStr)}`
       : undefined;
@@ -1234,6 +1267,7 @@ async function discoverViaSerper(
         Number.isFinite(countNum) && countNum > 0
           ? Math.round(countNum)
           : undefined;
+
       places.push({
         name: title,
         website: place.website?.trim() || mapUri,
@@ -1243,6 +1277,7 @@ async function discoverViaSerper(
         category: place.category?.trim() || undefined,
         mapUri,
       });
+
       const parts = [
         `Name: ${title}`,
         validRating ? `Rating: ${validRating}` : "",
@@ -1268,9 +1303,11 @@ async function discoverViaSerper(
   for (const list of mapsResults) {
     for (const place of list) registerPlace(place);
   }
+
   for (const sr of searchResults) {
     if (!sr) continue;
     for (const place of sr.places ?? []) registerPlace(place);
+
     for (const item of sr.organic ?? []) {
       const link = item.link?.trim();
       if (!link) continue;
@@ -1279,6 +1316,7 @@ async function discoverViaSerper(
 
       const safeLink = isSafePublicUrl(link);
       if (!safeLink || isAggregatorHost(safeLink.hostname)) continue;
+
       const snippet = item.snippet?.replace(/\s+/g, " ").trim() ?? "";
       const title = item.title?.replace(/\s+/g, " ").trim() ?? "";
       if (
@@ -1363,6 +1401,7 @@ async function searchDuckDuckGoSingle(
         : Array.from(
             html.matchAll(/href=['"]([^'"]*(?:uddg=|https?:\/\/)[^'"]+)['"]/gi),
           );
+
     const urls: string[] = [];
     for (const match of fallbackMatches) {
       const candidate = unwrapDuckDuckGoHref(match[1] ?? "");
@@ -1421,6 +1460,7 @@ async function discoverCompetitorUrlsViaOsm(
       hvac: `(node(around:25000,${lat},${lon})["craft"~"hvac|heating|electrician"]["website"];way(around:25000,${lat},${lon})["craft"~"hvac|heating|electrician"]["website"];)`,
       plumbing: `(node(around:25000,${lat},${lon})["craft"~"plumber|heating"]["website"];way(around:25000,${lat},${lon})["craft"~"plumber|heating"]["website"];)`,
     };
+
     const query = `[out:json][timeout:6];${tagFilterMap[industryId]};out tags 10;`;
     const osmRes = await fetch("https://overpass-api.de/api/interpreter", {
       method: "POST",
@@ -1502,6 +1542,7 @@ function buildFallbackCompetitors(
     if (host && seenHosts.has(host)) continue;
     if (host) seenHosts.add(host);
     const priceMatch = site.text.match(fallbackPriceRe);
+
     out.push({
       name: site.title.slice(0, 75),
       website: site.url,
@@ -1533,21 +1574,34 @@ function buildSynthesisPrompt(
         s.label ? `(${s.label})` : "",
         s.unitType ? `[${s.unitType}]` : "",
         s.ourPricePln
-          ? `[our price: ${s.ourPricePln} PLN (~$${Math.round(s.ourPricePln / 4)} USD)]`
+          ? params.locale === "en"
+            ? `[our price: ~$${Math.round(s.ourPricePln / 4)} USD]`
+            : `[our price: ${s.ourPricePln} PLN]`
           : "",
       ]
         .filter(Boolean)
         .join(" "),
     )
     .join(", ");
+
   const excludeInstruction = params.excludeHost
     ? `Do NOT include our own business (${params.excludeHost}) in the competitors list.`
     : "";
 
+  const noteCurrencyRule =
+    params.locale === "en"
+      ? `Keep the original local currency in competitors[].priceSummary and cite prices solely in local currency (e.g. USD/EUR/GBP) inside marketBenchmarks[].note — do NOT write "PLN" or "zł" inside prose.`
+      : `Keep the original local currency in competitors[].priceSummary and cite both original local currency and converted PLN in marketBenchmarks[].note.`;
+
+  const currencyDisplayRule =
+    params.locale === "en"
+      ? `CRITICAL CURRENCY DISPLAY RULE: When writing in English, NEVER mention "PLN" or "zł" inside "summary", "competitors[].priceSummary", or "marketBenchmarks[].note" — express all narrative, summary, and note figures solely in local currency / ${summaryCurrency}. Reserve integer PLN strictly for numeric JSON fields (avgPricePln, minPricePln, maxPricePln).`
+      : `In the narrative "summary", express monetary figures in ${summaryCurrency} matching the active UI currency.`;
+
   const benchmarkInstruction = trackedServicesList
     ? [
         `Active tracked services to benchmark (use these EXACT serviceKey values, including "live:*" keys): ${trackedServicesList}.`,
-        `CURRENCY NORMALIZATION RULE: Output ALL marketBenchmarks prices (avgPricePln, minPricePln, maxPricePln) as integer PLN values. Convert foreign currencies to PLN using: 1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN, 1 CHF = 4.5 PLN, 1 CAD = 2.9 PLN, 1 AUD = 2.6 PLN (e.g. $99 = 396 PLN, $125 = 500 PLN). Keep the original local currency in competitors[].priceSummary and cite both original local currency and converted PLN in marketBenchmarks[].note.`,
+        `CURRENCY NORMALIZATION RULE: Output ALL marketBenchmarks numeric prices (avgPricePln, minPricePln, maxPricePln) as integer PLN values. Convert foreign currencies to PLN using: 1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN, 1 CHF = 4.5 PLN, 1 CAD = 2.9 PLN, 1 AUD = 2.6 PLN (e.g. $99 = 396 PLN, $125 = 500 PLN). ${noteCurrencyRule}`,
         `CRITICAL SCOPE & UNIT RULE: Match each service strictly by its human label and billing unit — never rely on internal serviceKey naming alone. NEVER map prices between different item sizes, furniture types, or service tiers (for example: NEVER assign a small chair/pouf/cushion price like 15-25 PLN to an armchair/fotel, NEVER assign a 2-seat sofa price to a corner sofa/narożnik, NEVER assign a doormat price to a full carpet, NEVER assign a 1-seat mattress price to a double mattress, and NEVER compare hourly/add-on/deposit/travel fees against full-service or full-day prices). For HVAC: a standard residential AC tune-up / AC inspection / diagnostic fee is valid for "acService", and a heat pump tune-up / maintenance is valid for "heatPumpCheck"; never map a gas furnace-only tune-up to AC split service, and never map a whole-house flat duct-cleaning package to a per-m2 rate.`,
         `If a competitor only lists an incompatible item or unit, mention it in competitors[].priceSummary and OMIT that service from marketBenchmarks.`,
         `Compute avgPricePln, minPricePln, maxPricePln across found local companies for every tracked serviceKey (including "live:*" keys) with exact item-and-unit-compatible price evidence, and briefly cite the matched competitor items/prices in "note".`,
@@ -1562,9 +1616,11 @@ function buildSynthesisPrompt(
     `Return ALL distinct local competitors present in the source data (aim for 8-12 companies when available, covering both Google Business Profiles / Maps listings and websites).`,
     excludeInstruction,
     `Populate "rating" and "reviewCount" whenever verified Google review numbers appear in the source text.`,
+    `NEVER leave "competitors[].priceSummary" empty — when no numeric price list is published for a company, summarize its core service scope and pricing/quote model in 1 brief line (e.g., "Wycena indywidualna / brak jawnego cennika WWW" or "Local service — quote on request").`,
+    `Always return 2-4 niche-specific "painPoints" for ${nicheContextLabel} in ${params.city}: extract verified customer complaints when available, or derive the main buyer friction points directly implied by the local competitor offers and pricing models (e.g., unclear pricing, travel surcharges, minimum booking fees, scheduling delays) with calibrated severityScore (25-85).`,
     `Do NOT invent companies, numbers, ratings, or prices not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
-    `In the narrative "summary", express monetary figures in ${summaryCurrency} matching the active UI currency.`,
+    currencyDisplayRule,
     ...benchmarkInstruction,
     `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, maxResearchChars)}`,
   ]
@@ -1683,7 +1739,6 @@ async function structureReportWithGroq(
     nicheContextLabel,
     MAX_GROQ_RESEARCH_CHARS,
   );
-
   const deadline = Date.now() + GROQ_TOTAL_BUDGET_MS;
 
   for (const model of GROQ_FALLBACK_MODELS) {
@@ -1706,7 +1761,7 @@ async function structureReportWithGroq(
             {
               role: "system",
               content:
-                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Include up to 12 competitors present in input, convert foreign currencies to integer PLN (1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN), benchmark every tracked serviceKey with exact item-and-unit match (or [] when none provided), and never mix furniture sizes, item categories, or billing units.',
+                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Include up to 12 competitors present in input, convert foreign currencies to integer PLN (1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN), benchmark every tracked serviceKey with exact item-and-unit match (or [] when none provided), always include non-empty priceSummary and 2-4 niche painPoints, and never mix furniture sizes, item categories, or billing units.',
             },
             {
               role: "user",
@@ -1748,6 +1803,7 @@ async function structureReportWithGroq(
       );
     }
   }
+
   return null;
 }
 
@@ -1755,11 +1811,13 @@ function sanitizeStructuredPayload(
   parsed: StructuredScanPayload,
   validServiceKeys: Set<string>,
   activeServices: ActiveServiceDescriptor[],
+  locale: "pl" | "en",
   excludeHost?: string,
 ) {
   const seenNames = new Set<string>();
   const seenHosts = new Set<string>();
   const ourPriceByKey = new Map<string, number>();
+
   for (const svc of activeServices) {
     if (
       typeof svc.ourPricePln === "number" &&
@@ -1769,6 +1827,11 @@ function sanitizeStructuredPayload(
       ourPriceByKey.set(svc.serviceKey, svc.ourPricePln);
     }
   }
+
+  const emptyPriceFallback =
+    locale === "pl"
+      ? "Brak jawnego cennika WWW — wycena indywidualna."
+      : "No public rate card — individual quote.";
 
   const competitors = (parsed?.competitors ?? [])
     .filter((c: CompetitorFinding) => {
@@ -1783,22 +1846,41 @@ function sanitizeStructuredPayload(
       return true;
     })
     .slice(0, 12)
-    .map((c: CompetitorFinding) => ({
-      ...c,
-      rating:
-        typeof c.rating === "number" &&
-        Number.isFinite(c.rating) &&
-        c.rating > 0 &&
-        c.rating <= 5
-          ? Math.round(c.rating * 10) / 10
-          : undefined,
-      reviewCount:
-        typeof c.reviewCount === "number" &&
-        Number.isFinite(c.reviewCount) &&
-        c.reviewCount > 0
-          ? Math.round(c.reviewCount)
-          : undefined,
-    }));
+    .map((c: CompetitorFinding) => {
+      const trimmedSummary =
+        typeof c.priceSummary === "string"
+          ? c.priceSummary.replace(/\s+/g, " ").trim()
+          : "";
+      const trimmedTravelNote =
+        typeof c.travelFeeNote === "string"
+          ? c.travelFeeNote.replace(/\s+/g, " ").trim() || undefined
+          : undefined;
+      const trimmedWebsite =
+        typeof c.website === "string"
+          ? c.website.trim() || undefined
+          : undefined;
+
+      return {
+        ...c,
+        name: c.name.trim(),
+        website: trimmedWebsite,
+        travelFeeNote: trimmedTravelNote,
+        priceSummary: trimmedSummary || emptyPriceFallback,
+        rating:
+          typeof c.rating === "number" &&
+          Number.isFinite(c.rating) &&
+          c.rating > 0 &&
+          c.rating <= 5
+            ? Math.round(c.rating * 10) / 10
+            : undefined,
+        reviewCount:
+          typeof c.reviewCount === "number" &&
+          Number.isFinite(c.reviewCount) &&
+          c.reviewCount > 0
+            ? Math.round(c.reviewCount)
+            : undefined,
+      };
+    });
 
   const seenBenchmarkKeys = new Set<string>();
   const marketBenchmarks = (parsed?.marketBenchmarks ?? [])
@@ -1813,6 +1895,7 @@ function sanitizeStructuredPayload(
       ) {
         return false;
       }
+
       const ourPrice = ourPriceByKey.get(b.serviceKey);
       if (ourPrice && ourPrice > 0) {
         const samples = Math.max(1, Math.round(b.sampleCount || 1));
@@ -1824,6 +1907,7 @@ function sanitizeStructuredPayload(
           return false;
         }
       }
+
       seenBenchmarkKeys.add(b.serviceKey);
       return true;
     })
@@ -1853,6 +1937,8 @@ function sanitizeStructuredPayload(
     .slice(0, 4)
     .map((p: PainPointFinding) => ({
       ...p,
+      label: p.label.trim(),
+      evidence: typeof p.evidence === "string" ? p.evidence.trim() : "",
       severityScore: Math.min(
         95,
         Math.max(20, Math.round(p.severityScore || 50)),
@@ -1873,7 +1959,6 @@ async function runMarketScan(params: ScanRequestParams) {
   const presetKeys = new Set(
     template.services.map((s: IndustryServiceItem) => s.serviceKey),
   );
-
   const isExplicitCustomProfile =
     params.siteProfile?.matchedIndustryId === "custom" ||
     (Boolean(
@@ -2007,8 +2092,10 @@ async function runMarketScan(params: ScanRequestParams) {
           parsed,
           validServiceKeys,
           activeServices,
+          params.locale,
           params.excludeHost,
         );
+
         return NextResponse.json({
           source: "ai-web-grounding",
           aiEnhanced: true,
@@ -2151,6 +2238,7 @@ async function runMarketScan(params: ScanRequestParams) {
         parsed,
         validServiceKeys,
         activeServices,
+        params.locale,
         params.excludeHost,
       );
       return NextResponse.json({

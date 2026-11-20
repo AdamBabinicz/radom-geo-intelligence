@@ -73,6 +73,30 @@ interface CompetitorTableProps {
   isScanningMarket?: boolean;
 }
 
+const NAMED_HTML_ENTITIES: Record<string, string> = {
+  nbsp: " ",
+  amp: "&",
+  quot: '"',
+  apos: "'",
+  lt: "<",
+  gt: ">",
+  ndash: "–",
+  mdash: "—",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  hellip: "…",
+  bull: "•",
+  laquo: "«",
+  raquo: "»",
+  deg: "°",
+  copy: "©",
+  reg: "®",
+  trade: "™",
+  sup2: "²",
+};
+
 function getSafeHref(rawUrl?: string): string | null {
   if (!rawUrl) return null;
   const trimmed = rawUrl.trim();
@@ -82,12 +106,22 @@ function getSafeHref(rawUrl?: string): string | null {
 
 function cleanDisplayText(raw: string): string {
   return raw
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_, dec: string) => {
+      const code = Number.parseInt(dec, 10);
+      return code >= 32 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+        ? String.fromCodePoint(code)
+        : "";
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => {
+      const code = Number.parseInt(hex, 16);
+      return code >= 32 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+        ? String.fromCodePoint(code)
+        : "";
+    })
+    .replace(/&([a-zA-Z0-9]+);/g, (full, name: string) => {
+      const mapped = NAMED_HTML_ENTITIES[name.toLowerCase()];
+      return mapped !== undefined ? mapped : full;
+    })
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -336,19 +370,23 @@ export function CompetitorTable({
           <div className="max-h-[460px] space-y-2 overflow-y-auto pr-1">
             {liveScan!.competitors.map((comp, idx) => {
               const safeHref = getSafeHref(comp.website);
+              const cleanSummary = cleanDisplayText(comp.priceSummary ?? "");
+              const cleanTravelNote = comp.travelFeeNote
+                ? cleanDisplayText(comp.travelFeeNote)
+                : "";
               return (
                 <div
                   key={`${comp.name}-${comp.website ?? ""}-${idx}`}
                   className="min-w-0 rounded-md border border-slate-200/70 bg-white p-2.5 text-[11px] dark:border-slate-800 dark:bg-[#172123]"
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="inline-flex min-w-0 items-center gap-1.5 break-words font-semibold text-slate-800 dark:text-slate-100">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="inline-flex min-w-0 items-start gap-1.5 break-words font-semibold text-slate-800 dark:text-slate-100">
                         <Store
                           size={12}
-                          className="shrink-0 text-teal-700 dark:text-teal-400"
+                          className="mt-0.5 shrink-0 text-teal-700 dark:text-teal-400"
                         />
-                        {cleanDisplayText(comp.name)}
+                        <span>{cleanDisplayText(comp.name)}</span>
                       </span>
                       {typeof comp.rating === "number" && comp.rating > 0 && (
                         <span className="inline-flex shrink-0 items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
@@ -371,19 +409,21 @@ export function CompetitorTable({
                         href={safeHref}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-teal-700 hover:underline dark:text-teal-300"
+                        className="inline-flex shrink-0 items-center gap-1 pt-0.5 text-[10px] font-medium text-teal-700 hover:underline dark:text-teal-300"
                       >
                         WWW
                         <ExternalLink size={10} />
                       </a>
                     )}
                   </div>
-                  <p className="mt-1 break-words text-slate-600 dark:text-slate-300">
-                    {cleanDisplayText(comp.priceSummary)}
-                  </p>
-                  {comp.travelFeeNote && (
+                  {cleanSummary && (
+                    <p className="mt-1 break-words text-slate-600 dark:text-slate-300">
+                      {cleanSummary}
+                    </p>
+                  )}
+                  {cleanTravelNote && (
                     <p className="mt-0.5 break-words text-[10px] text-slate-600 dark:text-slate-400">
-                      {cleanDisplayText(comp.travelFeeNote)}
+                      {cleanTravelNote}
                     </p>
                   )}
                 </div>
