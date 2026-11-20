@@ -34,7 +34,12 @@ import {
   type MarketProfile,
   type TownGeo,
 } from "@/src/config/markets";
-import { translations, type Locale } from "@/src/locales";
+import {
+  formatTemplate,
+  SUPPORTED_LOCALES,
+  translations,
+  type Locale,
+} from "@/src/locales";
 import { AiCouncilPanel } from "./features/ai-council/ai-council-panel";
 import {
   CompetitorTable,
@@ -53,6 +58,16 @@ import { RovoConsole } from "./features/rovo-console/rovo-console";
 const LOCALE_KEY = "northstar_locale";
 const THEME_KEY = "northstar_theme";
 const DEFAULT_WEBSITE_URL = "https://pranie-dywanow.j.pl/";
+const CLIENT_SYNC_TIMEOUT_MS = 55_000;
+
+const LEGAL_ROUTE_OVERRIDES: Partial<
+  Record<Locale, { privacy: string; terms: string }>
+> = {
+  pl: {
+    privacy: "/polityka-prywatnosci",
+    terms: "/regulamin",
+  },
+};
 
 interface PricingSyncItem {
   serviceKey: string;
@@ -83,6 +98,29 @@ interface PricingSyncResponse {
 type LiveScanWithNiche = LiveMarketScanResult & {
   detectedIndustryLabel?: string;
 };
+
+function isSupportedLocale(value: string | null): value is Locale {
+  if (!value) return false;
+  return (SUPPORTED_LOCALES as readonly string[]).includes(value);
+}
+
+async function readJsonSafe<T>(response: Response): Promise<T | null> {
+  try {
+    const raw = await response.text();
+    if (!raw.trim()) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isTimeoutFailure(err: unknown, status?: number): boolean {
+  if (status === 408 || status === 504) return true;
+  if (err instanceof DOMException) {
+    return err.name === "TimeoutError" || err.name === "AbortError";
+  }
+  return false;
+}
 
 function resolveWorkspaceProfile(
   websiteUrl: string,
@@ -169,10 +207,10 @@ export function Dashboard() {
   useEffect(() => {
     const queryLang = new URLSearchParams(window.location.search).get("lang");
     const savedLocale = window.localStorage.getItem(LOCALE_KEY);
-    if (queryLang === "pl" || queryLang === "en") {
+    if (isSupportedLocale(queryLang)) {
       setLocale(queryLang);
       window.localStorage.setItem(LOCALE_KEY, queryLang);
-    } else if (savedLocale === "pl" || savedLocale === "en") {
+    } else if (isSupportedLocale(savedLocale)) {
       setLocale(savedLocale);
     }
     const savedTheme = window.localStorage.getItem(THEME_KEY);
@@ -191,7 +229,9 @@ export function Dashboard() {
   }, []);
 
   const toggleLocale = () => {
-    const next: Locale = locale === "en" ? "pl" : "en";
+    const currentIndex = SUPPORTED_LOCALES.indexOf(locale);
+    const nextIndex = (currentIndex + 1) % SUPPORTED_LOCALES.length;
+    const next = SUPPORTED_LOCALES[nextIndex];
     setLocale(next);
     window.localStorage.setItem(LOCALE_KEY, next);
   };
@@ -328,6 +368,11 @@ export function Dashboard() {
       ? liveScan.painPoints[0].label
       : undefined;
 
+  const legalRoutes = LEGAL_ROUTE_OVERRIDES[locale] ?? {
+    privacy: "/privacy",
+    terms: "/terms",
+  };
+
   const handleSyncPrices = async () => {
     const trimmed = websiteUrl.trim();
     if (!trimmed) return;
@@ -339,14 +384,29 @@ export function Dashboard() {
     try {
       const response = await fetch(
         `/api/pricing/sync?url=${encodeURIComponent(trimmed)}`,
+        {
+          signal: AbortSignal.timeout(CLIENT_SYNC_TIMEOUT_MS),
+        },
       );
-      const data = (await response.json()) as PricingSyncResponse;
+      const data = await readJsonSafe<PricingSyncResponse>(response);
+
+      if (!data) {
+        setSyncError(
+          isTimeoutFailure(null, response.status)
+            ? t.syncWebsiteTimeoutError
+            : formatTemplate(t.syncWebsiteHttpError, {
+                status: response.status,
+              }),
+        );
+        return;
+      }
+
       if (
         !response.ok ||
         !Array.isArray(data.prices) ||
         data.prices.length === 0
       ) {
-        setSyncError(data.error ?? t.syncWebsiteError);
+        setSyncError(data.error ?? data.warning ?? t.syncWebsiteError);
         return;
       }
 
@@ -414,8 +474,10 @@ export function Dashboard() {
       if (data.aiEnhanced === false && data.warning) {
         setSyncError(data.warning);
       }
-    } catch {
-      setSyncError(t.syncWebsiteError);
+    } catch (err) {
+      setSyncError(
+        isTimeoutFailure(err) ? t.syncWebsiteTimeoutError : t.syncWebsiteError,
+      );
     } finally {
       setIsSyncingPrices(false);
     }
@@ -453,14 +515,31 @@ export function Dashboard() {
             ourPricePln: row.ourPricePln,
           })),
         }),
+        signal: AbortSignal.timeout(CLIENT_SYNC_TIMEOUT_MS),
       });
-      const data = (await response.json()) as LiveScanWithNiche & {
-        error?: string;
-      };
-      if (!response.ok) {
-        setSyncError(data.error ?? t.scanMarketError);
+      const data = await readJsonSafe<
+        LiveScanWithNiche & {
+          error?: string;
+          warning?: string;
+        }
+      >(response);
+
+      if (!data) {
+        setSyncError(
+          isTimeoutFailure(null, response.status)
+            ? t.scanMarketTimeoutError
+            : formatTemplate(t.scanMarketHttpError, {
+                status: response.status,
+              }),
+        );
         return;
       }
+
+      if (!response.ok) {
+        setSyncError(data.error ?? data.warning ?? t.scanMarketError);
+        return;
+      }
+
       setLiveScan(data);
       const nextBenchmarks: Record<string, number> = {};
       for (const item of data.marketBenchmarks ?? []) {
@@ -477,8 +556,10 @@ export function Dashboard() {
       if (!data.aiEnhanced && data.warning) {
         setSyncError(data.warning);
       }
-    } catch {
-      setSyncError(t.scanMarketError);
+    } catch (err) {
+      setSyncError(
+        isTimeoutFailure(err) ? t.scanMarketTimeoutError : t.scanMarketError,
+      );
     } finally {
       setIsScanningMarket(false);
     }
@@ -547,7 +628,6 @@ export function Dashboard() {
           <p className="mb-3 mt-10 px-2 text-[10px] font-bold uppercase tracking-[.16em] text-slate-500 dark:text-slate-400">
             {t.workspace}
           </p>
-
           <nav
             className="flex flex-col gap-1 text-[13px] font-medium"
             aria-label={t.primaryNav}
@@ -852,13 +932,13 @@ export function Dashboard() {
               <div className="flex flex-wrap items-center gap-4">
                 <span>{isCaseStudy ? t.footerRight : t.citySourceLiveGeo}</span>
                 <Link
-                  href={locale === "pl" ? "/polityka-prywatnosci" : "/privacy"}
+                  href={legalRoutes.privacy}
                   className="font-medium hover:text-teal-700 dark:hover:text-teal-300"
                 >
                   {t.privacyPolicy}
                 </Link>
                 <Link
-                  href={locale === "pl" ? "/regulamin" : "/terms"}
+                  href={legalRoutes.terms}
                   className="font-medium hover:text-teal-700 dark:hover:text-teal-300"
                 >
                   {t.termsOfService}

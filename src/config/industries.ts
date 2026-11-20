@@ -1,3 +1,5 @@
+import type { Locale } from "../locales";
+
 export type IndustryId = "upholstery" | "hvac" | "plumbing";
 
 export type CanonicalServiceKey =
@@ -17,10 +19,7 @@ export type ServiceKey = CanonicalServiceKey | (string & {});
 
 export type ServiceUnitType = "m2" | "piece" | "fixed";
 
-export interface ServiceLocaleLabels {
-  pl?: string;
-  en?: string;
-}
+export type ServiceLocaleLabels = Partial<Record<Locale, string>>;
 
 export interface IndustryServiceItem {
   serviceKey: ServiceKey;
@@ -85,7 +84,7 @@ function humanizeServiceKey(key: string): string {
 export function resolveServiceLabel(
   item: { serviceKey: string; labels?: ServiceLocaleLabels },
   dictionary: Record<string, unknown>,
-  locale: "pl" | "en",
+  locale: Locale,
 ): string {
   const localized = item.labels?.[locale]?.trim();
   if (localized) return localized;
@@ -95,9 +94,12 @@ export function resolveServiceLabel(
     return dictValue.trim();
   }
 
-  const fallbackLabel =
-    locale === "pl" ? item.labels?.en?.trim() : item.labels?.pl?.trim();
-  if (fallbackLabel) return fallbackLabel;
+  if (item.labels) {
+    for (const candidate of Object.values(item.labels)) {
+      const trimmed = candidate?.trim();
+      if (trimmed) return trimmed;
+    }
+  }
 
   return humanizeServiceKey(item.serviceKey);
 }

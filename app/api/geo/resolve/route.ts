@@ -11,6 +11,8 @@ import {
   type GeoPoint,
 } from "@/src/lib/geo-math";
 
+export const maxDuration = 30;
+
 interface NominatimItem {
   lat: string;
   lon: string;
@@ -43,6 +45,32 @@ const SKIP_SUPER_ADMIN_REGEX =
 
 const SKIP_DISTRICT_REGEX = /\bdistrict\b/i;
 
+async function readJsonSafe<T>(res: Response): Promise<T | null> {
+  try {
+    const raw = await res.text();
+    if (!raw.trim()) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === "TimeoutError" || error.name === "AbortError";
+  }
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    return (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      msg.includes("timed out") ||
+      msg.includes("timeout")
+    );
+  }
+  return false;
+}
+
 function parseWktPoint(locValue: string | undefined): GeoPoint | null {
   if (!locValue) return null;
   const match = locValue.match(
@@ -63,9 +91,12 @@ async function geocodeCity(
     headers: HEADERS,
     signal: AbortSignal.timeout(7000),
   });
+  if (res.status === 429 || res.status >= 500) {
+    throw new Error(`Geocoding provider HTTP ${res.status}`);
+  }
   if (!res.ok) return null;
-  const items = (await res.json()) as NominatimItem[];
-  if (!items.length) return null;
+  const items = await readJsonSafe<NominatimItem[]>(res);
+  if (!items || !items.length) return null;
 
   const settlementTypes = new Set([
     "city",
@@ -107,13 +138,14 @@ async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
     signal: AbortSignal.timeout(8500),
   });
   if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
-  const data = (await res.json()) as {
+  const data = await readJsonSafe<{
     elements?: Array<{
       lat?: number;
       lon?: number;
       tags?: { name?: string; place?: string; population?: string };
     }>;
-  };
+  }>(res);
+  if (!data) throw new Error("Overpass returned non-JSON payload");
   const places: RawPlace[] = [];
   for (const el of data.elements ?? []) {
     const name = el.tags?.name?.trim();
@@ -154,7 +186,7 @@ async function queryWikidataRadius(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`Wikidata HTTP ${res.status}`);
-  const json = (await res.json()) as {
+  const json = await readJsonSafe<{
     results?: {
       bindings?: Array<{
         placeLabel?: { value: string };
@@ -162,7 +194,8 @@ async function queryWikidataRadius(
         pop?: { value: string };
       }>;
     };
-  };
+  }>(res);
+  if (!json) throw new Error("Wikidata returned non-JSON payload");
   const out: RawPlace[] = [];
   for (const b of json.results?.bindings ?? []) {
     const name = b.placeLabel?.value?.trim();
@@ -429,7 +462,7 @@ export async function GET(request: Request) {
 
   if (!city) {
     return NextResponse.json(
-      { error: "Missing ?city= parameter" },
+      { code: "CITY_EMPTY", error: "Missing ?city= parameter" },
       { status: 400 },
     );
   }
@@ -446,7 +479,7 @@ export async function GET(request: Request) {
     const geocoded = await geocodeCity(city);
     if (!geocoded) {
       return NextResponse.json(
-        { error: `City not found: ${city}` },
+        { code: "CITY_NOT_FOUND", error: `City not found: ${city}` },
         { status: 404 },
       );
     }
@@ -465,7 +498,7 @@ export async function GET(request: Request) {
     const market: MarketProfile = {
       id: `geo-${geocoded.name.toLowerCase().replace(/\s+/g, "-")}`,
       centerName: geocoded.name,
-      northDirectionLabel: northernHub ? northernHub.name : "North",
+      northDirectionLabel: northernHub ? northernHub.name : geocoded.name,
       baseCompetitorsCount: 12,
       towns,
       benchmarks: RADOM_UPHOLSTERY_MARKET.benchmarks,
@@ -479,14 +512,27 @@ export async function GET(request: Request) {
     if (error instanceof AggregateError) {
       return NextResponse.json(
         {
+          code: "GEO_TIMEOUT",
           error:
             "OpenStreetMap and Wikidata timed out for this area. Please try again in a moment.",
         },
         { status: 503 },
       );
     }
+    if (isTimeoutError(error)) {
+      return NextResponse.json(
+        {
+          code: "GEO_TIMEOUT",
+          error: "Geocoding request timed out. Please try again in a moment.",
+        },
+        { status: 504 },
+      );
+    }
     const message =
       error instanceof Error ? error.message : "Geo lookup failed";
-    return NextResponse.json({ error: message }, { status: 502 });
+    return NextResponse.json(
+      { code: "GEO_FAILED", error: message },
+      { status: 502 },
+    );
   }
 }

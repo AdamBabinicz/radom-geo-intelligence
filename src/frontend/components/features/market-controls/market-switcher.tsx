@@ -25,14 +25,23 @@ import {
   type MarketDataSource,
   type MarketProfile,
 } from "@/src/config/markets";
-import type { AppDictionary } from "@/src/locales";
+import { formatTemplate, type AppDictionary } from "@/src/locales";
 
 export type IndustryControlMode = "preset" | "auto" | "custom";
+
+type GeoErrorCode =
+  | "CITY_EMPTY"
+  | "CITY_NOT_FOUND"
+  | "GEO_TIMEOUT"
+  | "GEO_FAILED";
+
+const GEO_RESOLVE_TIMEOUT_MS = 28_000;
 
 interface GeoResolvePayload {
   source?: MarketDataSource;
   market?: MarketProfile;
   centerGps?: { lat: number; lon: number };
+  code?: GeoErrorCode;
   error?: string;
 }
 
@@ -55,6 +64,57 @@ interface MarketSwitcherProps {
   syncError?: string | null;
   syncedCount?: number;
   scannedCompetitorsCount?: number;
+}
+
+async function readJsonSafe<T>(response: Response): Promise<T | null> {
+  try {
+    const raw = await response.text();
+    if (!raw.trim()) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isTimeoutFailure(error: unknown, status?: number): boolean {
+  if (status === 408 || status === 504) {
+    return true;
+  }
+  if (error instanceof DOMException) {
+    return error.name === "TimeoutError" || error.name === "AbortError";
+  }
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      message.includes("timed out") ||
+      message.includes("timeout")
+    );
+  }
+  return false;
+}
+
+function resolveGeoErrorMessage(
+  t: AppDictionary,
+  city: string,
+  status?: number,
+  payload?: GeoResolvePayload | null,
+  err?: unknown,
+): string {
+  if (payload?.code === "CITY_EMPTY") {
+    return t.cityEmptyError;
+  }
+  if (payload?.code === "CITY_NOT_FOUND" || status === 404) {
+    return formatTemplate(t.cityNotFoundError, { city });
+  }
+  if (payload?.code === "GEO_TIMEOUT" || isTimeoutFailure(err, status)) {
+    return t.cityTimeoutError;
+  }
+  if (typeof status === "number" && status >= 400) {
+    return formatTemplate(t.cityHttpError, { status });
+  }
+  return t.cityErrorFallback;
 }
 
 export function MarketSwitcher({
@@ -116,10 +176,11 @@ export function MarketSwitcher({
     try {
       const response = await fetch(
         `/api/geo/resolve?city=${encodeURIComponent(trimmed)}`,
+        { signal: AbortSignal.timeout(GEO_RESOLVE_TIMEOUT_MS) },
       );
-      const data = (await response.json()) as GeoResolvePayload;
-      if (!response.ok || !data.market) {
-        setErrorMsg(data.error ?? t.cityErrorFallback);
+      const data = await readJsonSafe<GeoResolvePayload>(response);
+      if (!response.ok || !data?.market) {
+        setErrorMsg(resolveGeoErrorMessage(t, trimmed, response.status, data));
         return;
       }
       onMarketChange({
@@ -127,8 +188,8 @@ export function MarketSwitcher({
         source: data.source === "case-study" ? "case-study" : "live-geo",
         centerGps: data.centerGps,
       });
-    } catch {
-      setErrorMsg(t.cityErrorFallback);
+    } catch (err) {
+      setErrorMsg(resolveGeoErrorMessage(t, trimmed, undefined, null, err));
     } finally {
       setIsLoading(false);
     }

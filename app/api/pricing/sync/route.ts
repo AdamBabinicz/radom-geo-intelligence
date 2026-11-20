@@ -8,9 +8,16 @@ import {
 import type { ServiceUnitType } from "@/src/config/industries";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const MAX_AI_CONTEXT_CHARS = 9_500;
 const SYNC_CACHE_TTL_MS = 15 * 60 * 1000;
+const FETCH_HTML_TIMEOUT_MS = 8_000;
+const FETCH_ASSET_TIMEOUT_MS = 6_000;
+const GEMINI_TIMEOUT_MS = 15_000;
+const GROQ_MODEL_TIMEOUT_MS = 10_000;
+const GROQ_TOTAL_BUDGET_MS = 20_000;
+
 const GROQ_CHAT_COMPLETIONS_URL =
   "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_FALLBACK_MODELS = [
@@ -1217,6 +1224,10 @@ async function extractWithGemini(
       model: GEMINI_TEXT_MODEL,
       contents: `Target website: ${websiteUrl}\n\nCompact site context:\n${contextText}`,
       config: {
+        abortSignal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+        httpOptions: {
+          timeout: GEMINI_TIMEOUT_MS,
+        },
         thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         systemInstruction: AI_SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
@@ -1318,7 +1329,12 @@ async function extractWithGroq(
     return { prices: null };
   }
 
+  const deadline = Date.now() + GROQ_TOTAL_BUDGET_MS;
+
   for (const model of GROQ_FALLBACK_MODELS) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 1_500) break;
+
     try {
       const response = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
         method: "POST",
@@ -1344,7 +1360,9 @@ async function extractWithGroq(
             },
           ],
         }),
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(
+          Math.min(GROQ_MODEL_TIMEOUT_MS, remainingMs),
+        ),
       });
 
       if (!response.ok) {
@@ -1376,6 +1394,7 @@ async function extractWithGroq(
       );
     }
   }
+
   return { prices: null };
 }
 
@@ -1384,7 +1403,6 @@ function findPricingSubpages(html: string, baseUrl: URL): string[] {
   const linkRe = /<a[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   const hintRe =
     /(cennik|pricing|oferta|ceny|us[łl]ug|services|rates|wynajem|atrakcj)/i;
-
   for (const match of html.matchAll(linkRe)) {
     const href = match[1].trim();
     const label = match[2].replace(/<[^>]+>/g, " ").trim();
@@ -1418,14 +1436,17 @@ function findSameOriginScripts(html: string, baseUrl: URL): string[] {
   return Array.from(scripts).slice(0, 4);
 }
 
-async function fetchTextSafe(targetUrl: string): Promise<string | null> {
+async function fetchTextSafe(
+  targetUrl: string,
+  timeoutMs = FETCH_HTML_TIMEOUT_MS,
+): Promise<string | null> {
   try {
     const response = await fetch(targetUrl, {
       headers: {
         "User-Agent": "NorthstarOps-PriceSync/3.1 (+https://northstar-ops.app)",
         Accept: "text/html,application/xhtml+xml,application/javascript,*/*",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(timeoutMs),
       cache: "no-store",
     });
     if (!response.ok) return null;
@@ -1483,7 +1504,7 @@ async function handleSync(rawUrl: string) {
     });
   }
 
-  const html = await fetchTextSafe(parsedUrl.toString());
+  const html = await fetchTextSafe(parsedUrl.toString(), FETCH_HTML_TIMEOUT_MS);
   if (!html) {
     return NextResponse.json(
       { error: "Failed to fetch target website" },
@@ -1497,10 +1518,14 @@ async function handleSync(rawUrl: string) {
   if (mainCleanText) contextLines.push(...mainCleanText.split("\n"));
 
   const subpages = findPricingSubpages(html, parsedUrl);
-  for (const subUrl of subpages) {
-    const subHtml = await fetchTextSafe(subUrl);
-    if (!subHtml) continue;
-    contextLines.push(...htmlToCleanText(subHtml).split("\n"));
+  if (subpages.length > 0) {
+    const subHtmlList = await Promise.all(
+      subpages.map((subUrl) => fetchTextSafe(subUrl, FETCH_ASSET_TIMEOUT_MS)),
+    );
+    for (const subHtml of subHtmlList) {
+      if (!subHtml) continue;
+      contextLines.push(...htmlToCleanText(subHtml).split("\n"));
+    }
   }
 
   const combinedSoFar = contextLines.join("\n");
@@ -1516,13 +1541,19 @@ async function handleSync(rawUrl: string) {
     contextLines.length < 20
   ) {
     const scripts = findSameOriginScripts(html, parsedUrl);
-    for (const scriptUrl of scripts) {
-      const jsText = await fetchTextSafe(scriptUrl);
-      if (!jsText) continue;
-      const bundleLines = decodeJsBundleLines(jsText);
-      if (bundleLines.length > 0) {
-        hasSpaBundle = true;
-        contextLines.push(...bundleLines);
+    if (scripts.length > 0) {
+      const jsTextList = await Promise.all(
+        scripts.map((scriptUrl) =>
+          fetchTextSafe(scriptUrl, FETCH_ASSET_TIMEOUT_MS),
+        ),
+      );
+      for (const jsText of jsTextList) {
+        if (!jsText) continue;
+        const bundleLines = decodeJsBundleLines(jsText);
+        if (bundleLines.length > 0) {
+          hasSpaBundle = true;
+          contextLines.push(...bundleLines);
+        }
       }
     }
   }
@@ -1534,7 +1565,6 @@ async function handleSync(rawUrl: string) {
     highSignalContext,
     metadata,
   );
-
   if (!aiResult.prices || aiResult.prices.length === 0) {
     const groqResult = await extractWithGroq(
       parsedUrl.toString(),

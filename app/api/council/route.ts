@@ -10,12 +10,29 @@ import {
 import { INDUSTRY_TEMPLATES, type IndustryId } from "@/src/config/industries";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const COUNCIL_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 100;
+
 const councilCache = new Map<
   string,
   { expiresAt: number; result: CouncilDebateResult }
 >();
+
+function pruneCouncilCache(now: number) {
+  for (const [key, entry] of councilCache.entries()) {
+    if (entry.expiresAt <= now) {
+      councilCache.delete(key);
+    }
+  }
+  if (councilCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = councilCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      councilCache.delete(oldestKey);
+    }
+  }
+}
 
 function parseIndustry(raw: unknown): IndustryId {
   if (typeof raw === "string" && raw in INDUSTRY_TEMPLATES) {
@@ -134,7 +151,6 @@ export async function POST(req: NextRequest) {
     const avgGapPct = Number.isFinite(parsedGap)
       ? Math.min(200, Math.max(-100, Math.round(parsedGap)))
       : 0;
-
     const townsInRadius = Array.isArray(body.townsInRadius)
       ? body.townsInRadius
           .filter(
@@ -143,12 +159,10 @@ export async function POST(req: NextRequest) {
           .map((t) => t.trim().slice(0, 60))
           .slice(0, 15)
       : [city];
-
     const humanNote =
       typeof body.humanNote === "string"
         ? body.humanNote.trim().slice(0, 240)
         : undefined;
-
     const lessonsLearned = Array.isArray(body.lessonsLearned)
       ? body.lessonsLearned
           .filter(
@@ -178,16 +192,19 @@ export async function POST(req: NextRequest) {
       input.radiusKm,
       input.locale,
       input.avgGapPct,
+      input.townsInRadius.slice(0, 8),
       input.services.map(
         (s) => `${s.serviceKey}:${s.ourPricePln}:${s.localPricePln}`,
       ),
-      input.competitors.length,
+      input.competitors.map((c) => c.name),
+      input.painPoints.map((p) => `${p.label}:${p.score}`),
       input.humanNote ?? "",
       input.lessonsLearned ?? [],
     ]);
 
+    const now = Date.now();
     const cached = councilCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (cached && cached.expiresAt > now) {
       return NextResponse.json({
         ...cached.result,
         cached: true,
@@ -196,6 +213,7 @@ export async function POST(req: NextRequest) {
 
     const result = await runAiCouncil(input);
     if (result.aiEnhanced) {
+      pruneCouncilCache(now);
       councilCache.set(cacheKey, {
         expiresAt: Date.now() + COUNCIL_CACHE_TTL_MS,
         result,

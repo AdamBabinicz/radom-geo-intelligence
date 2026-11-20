@@ -28,7 +28,7 @@ import {
 } from "@/src/config/industries";
 import type { MarketProfile } from "@/src/config/markets";
 import { formatPrice } from "@/src/lib/currency";
-import type { AppDictionary, Locale } from "@/src/locales";
+import { formatTemplate, type AppDictionary, type Locale } from "@/src/locales";
 import type {
   ConfluenceExportResult,
   JiraEpicResult,
@@ -36,6 +36,8 @@ import type {
 import type { LiveMarketScanResult } from "../competitor-table/competitor-table";
 
 const LESSONS_STORAGE_KEY = "northstar_council_lessons_v1";
+const COUNCIL_REQUEST_TIMEOUT_MS = 55_000;
+const PUBLISH_REQUEST_TIMEOUT_MS = 30_000;
 
 interface AiCouncilPanelProps {
   t: AppDictionary;
@@ -48,6 +50,16 @@ interface AiCouncilPanelProps {
   liveScan: (LiveMarketScanResult & { detectedIndustryLabel?: string }) | null;
 }
 
+interface McpJsonRpcResponse<T> {
+  result?: {
+    structuredContent?: T;
+  };
+  error?: {
+    code?: number;
+    message?: string;
+  };
+}
+
 function toSafeHttpUrl(raw?: string): string | null {
   if (!raw) return null;
   try {
@@ -58,6 +70,35 @@ function toSafeHttpUrl(raw?: string): string | null {
   } catch {
     return null;
   }
+}
+
+async function readJsonSafe<T>(response: Response): Promise<T | null> {
+  try {
+    const raw = await response.text();
+    if (!raw.trim()) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isTimeoutFailure(error: unknown, status?: number): boolean {
+  if (status === 408 || status === 504) {
+    return true;
+  }
+  if (error instanceof DOMException) {
+    return error.name === "TimeoutError" || error.name === "AbortError";
+  }
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      message.includes("timed out") ||
+      message.includes("timeout")
+    );
+  }
+  return false;
 }
 
 export function AiCouncilPanel({
@@ -142,6 +183,7 @@ export function AiCouncilPanel({
       const response = await fetch("/api/council", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(COUNCIL_REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           city: market.centerName,
           industryId,
@@ -162,17 +204,30 @@ export function AiCouncilPanel({
           lessonsLearned: lessons,
         }),
       });
-      const data = (await response.json()) as CouncilDebateResult & {
-        error?: string;
-      };
-      if (!response.ok || !data.round1Strategist) {
-        setDebateError(data.error ?? t.councilErrorGeneric);
+      const data = await readJsonSafe<CouncilDebateResult & { error?: string }>(
+        response,
+      );
+      if (!response.ok || !data?.round1Strategist) {
+        if (isTimeoutFailure(null, response.status)) {
+          setDebateError(t.councilTimeoutError);
+          return;
+        }
+        setDebateError(
+          data?.error ??
+            (response.ok
+              ? t.councilErrorGeneric
+              : formatTemplate(t.councilHttpError, {
+                  status: response.status,
+                })),
+        );
         return;
       }
       setDebate(data);
       setSelectedOptionId("safe");
-    } catch {
-      setDebateError(t.councilErrorGeneric);
+    } catch (err) {
+      setDebateError(
+        isTimeoutFailure(err) ? t.councilTimeoutError : t.councilErrorGeneric,
+      );
     } finally {
       setIsDebating(false);
     }
@@ -180,21 +235,16 @@ export function AiCouncilPanel({
 
   const handleApproveAndPublish = async () => {
     if (!debate) return;
-    const chosen: CouncilDecisionOption =
+    const chosen: CouncilDecisionOption | undefined =
       debate.round3Synthesis.options.find((o) => o.id === selectedOptionId) ??
       debate.round3Synthesis.options[0];
+    if (!chosen) {
+      setDebateError(t.councilErrorGeneric);
+      return;
+    }
 
     setIsPublishing(true);
     setDebateError(null);
-
-    const newLessonSummary = humanNote.trim()
-      ? `${market.centerName}: ${humanNote.trim()} (${chosen.title})`
-      : `${market.centerName} (${radiusKm} km): ${chosen.title}`;
-
-    const nextLessons = Array.from(
-      new Set([newLessonSummary, ...lessons]),
-    ).slice(0, 6);
-    persistLessons(nextLessons);
 
     const adjustedMap = new Map(
       chosen.priceAdjustments.map((a) => [a.serviceKey, a.finalPricePln]),
@@ -216,6 +266,7 @@ export function AiCouncilPanel({
       ? liveScan.detectedIndustryLabel.trim()
       : undefined;
 
+    const trimmedNote = humanNote.trim();
     const councilContext: CouncilExecutionContext = {
       selectedOptionTitle: chosen.title,
       selectedOptionSummary: chosen.summary,
@@ -223,7 +274,7 @@ export function AiCouncilPanel({
       criticModel: debate.models.critic,
       riskScore: debate.round2Critic.riskScore,
       criticObjections: debate.round2Critic.objections,
-      humanConstraint: humanNote.trim() || undefined,
+      humanConstraint: trimmedNote || undefined,
       actionItems: chosen.actionItems,
     };
 
@@ -232,6 +283,7 @@ export function AiCouncilPanel({
         fetch("/api/mcp", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(PUBLISH_REQUEST_TIMEOUT_MS),
           body: JSON.stringify({
             jsonrpc: "2.0",
             id: Date.now(),
@@ -257,6 +309,7 @@ export function AiCouncilPanel({
         fetch("/api/mcp", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(PUBLISH_REQUEST_TIMEOUT_MS),
           body: JSON.stringify({
             jsonrpc: "2.0",
             id: Date.now() + 1,
@@ -277,21 +330,72 @@ export function AiCouncilPanel({
         }),
       ]);
 
-      const confJson = (await confRes.json()) as {
-        result?: { structuredContent?: ConfluenceExportResult };
-      };
-      const jiraJson = (await jiraRes.json()) as {
-        result?: { structuredContent?: JiraEpicResult };
-      };
+      const [confJson, jiraJson] = await Promise.all([
+        readJsonSafe<McpJsonRpcResponse<ConfluenceExportResult>>(confRes),
+        readJsonSafe<McpJsonRpcResponse<JiraEpicResult>>(jiraRes),
+      ]);
 
-      if (confJson.result?.structuredContent) {
-        setPublishedConfluence(confJson.result.structuredContent);
+      if (!confRes.ok || !jiraRes.ok) {
+        const failedStatus = !confRes.ok ? confRes.status : jiraRes.status;
+        if (isTimeoutFailure(null, failedStatus)) {
+          setDebateError(t.councilPublishTimeoutError);
+          return;
+        }
+        const serverMessage =
+          confJson?.error?.message || jiraJson?.error?.message;
+        setDebateError(
+          serverMessage ??
+            formatTemplate(t.councilPublishHttpError, { status: failedStatus }),
+        );
+        return;
       }
-      if (jiraJson.result?.structuredContent) {
-        setPublishedJira(jiraJson.result.structuredContent);
+
+      if (confJson?.error?.message || jiraJson?.error?.message) {
+        setDebateError(
+          confJson?.error?.message ||
+            jiraJson?.error?.message ||
+            t.councilPublishErrorGeneric,
+        );
+        return;
       }
-    } catch {
-      setDebateError(t.councilErrorGeneric);
+
+      const confluenceResult = confJson?.result?.structuredContent ?? null;
+      const jiraResult = jiraJson?.result?.structuredContent ?? null;
+
+      if (!confluenceResult && !jiraResult) {
+        setDebateError(t.councilPublishErrorGeneric);
+        return;
+      }
+
+      if (confluenceResult) {
+        setPublishedConfluence(confluenceResult);
+      }
+      if (jiraResult) {
+        setPublishedJira(jiraResult);
+      }
+
+      const newLessonSummary = trimmedNote
+        ? formatTemplate(t.councilLessonWithNote, {
+            city: market.centerName,
+            note: trimmedNote,
+            option: chosen.title,
+          })
+        : formatTemplate(t.councilLessonRadiusOnly, {
+            city: market.centerName,
+            radiusKm,
+            option: chosen.title,
+          });
+
+      const nextLessons = Array.from(
+        new Set([newLessonSummary, ...lessons]),
+      ).slice(0, 6);
+      persistLessons(nextLessons);
+    } catch (err) {
+      setDebateError(
+        isTimeoutFailure(err)
+          ? t.councilPublishTimeoutError
+          : t.councilPublishErrorGeneric,
+      );
     } finally {
       setIsPublishing(false);
     }
@@ -405,7 +509,7 @@ export function AiCouncilPanel({
 
       {debate && (
         <div className="mt-5 space-y-4">
-          {!debate.aiEnhanced && debate.fallbackNotice && (
+          {!debate.aiEnhanced && (
             <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-[11px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
               <AlertTriangle size={14} className="shrink-0" />
               <span>{debate.fallbackNotice || t.councilFallbackNotice}</span>

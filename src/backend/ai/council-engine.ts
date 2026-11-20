@@ -6,6 +6,10 @@ import {
   parseJsonSafe,
 } from "./gemini-client";
 
+const GEMINI_ROUND_TIMEOUT_MS = 14_000;
+const EXTERNAL_MODEL_TIMEOUT_MS = 12_000;
+const EXTERNAL_ROUND_BUDGET_MS = 20_000;
+
 export interface CouncilServiceInput {
   serviceKey: string;
   label: string;
@@ -152,6 +156,20 @@ function isQuotaError(err: unknown): boolean {
   );
 }
 
+function isTransientGeminiFailure(err: unknown): boolean {
+  if (isQuotaError(err)) return true;
+  if (err instanceof DOMException) {
+    return err.name === "TimeoutError" || err.name === "AbortError";
+  }
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return (
+    msg.includes("503") ||
+    msg.includes("UNAVAILABLE") ||
+    msg.toLowerCase().includes("timeout") ||
+    msg.toLowerCase().includes("aborted")
+  );
+}
+
 function stripThinkBlocks(raw: string): string {
   return raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 }
@@ -164,9 +182,13 @@ async function callOpenAiCompatibleJson<T>(
 ): Promise<{ data: T | null; usedModel: string }> {
   const modelsToTry =
     orderedModels && orderedModels.length > 0 ? orderedModels : cfg.models;
+  const deadline = Date.now() + EXTERNAL_ROUND_BUDGET_MS;
   let lastError: Error | null = null;
 
   for (const model of modelsToTry) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 1_500) break;
+
     try {
       const res = await fetch(cfg.endpoint, {
         method: "POST",
@@ -184,7 +206,9 @@ async function callOpenAiCompatibleJson<T>(
             { role: "user", content: userPrompt },
           ],
         }),
-        signal: AbortSignal.timeout(18000),
+        signal: AbortSignal.timeout(
+          Math.min(EXTERNAL_MODEL_TIMEOUT_MS, remainingMs),
+        ),
       });
 
       if (!res.ok) {
@@ -201,13 +225,11 @@ async function callOpenAiCompatibleJson<T>(
       if (!rawContent) {
         throw new Error(`${cfg.provider} (${model}) returned empty content`);
       }
-
       const cleaned = stripThinkBlocks(rawContent);
       const parsed = parseJsonSafe<T | null>(cleaned, null);
       if (!parsed) {
         throw new Error(`${cfg.provider} (${model}) returned unparseable JSON`);
       }
-
       return { data: parsed, usedModel: model };
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
@@ -319,7 +341,6 @@ function buildGroundedFallbackCouncil(
         (b.localPricePln - b.ourPricePln) / b.localPricePln -
         (a.localPricePln - a.ourPricePln) / a.localPricePln,
     );
-
   const topTargets = (
     underpriced.length > 0 ? underpriced : input.services
   ).slice(0, 3);
@@ -524,6 +545,7 @@ export async function runAiCouncil(
   let strategistData: RawStrategistPayload | null = null;
   let strategistModelLabel = `Gemini (${GEMINI_TEXT_MODEL})`;
   let strategistUsedSecondaryModel: string | null = null;
+  let geminiUnavailable = false;
   let geminiQuotaExhausted = false;
 
   const strategistSystem =
@@ -537,6 +559,10 @@ export async function runAiCouncil(
         model: GEMINI_TEXT_MODEL,
         contents: `Analyze this live local market snapshot and return Round 1 JSON:\n\n${brief}`,
         config: {
+          abortSignal: AbortSignal.timeout(GEMINI_ROUND_TIMEOUT_MS),
+          httpOptions: {
+            timeout: GEMINI_ROUND_TIMEOUT_MS,
+          },
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction: strategistSystem,
           responseMimeType: "application/json",
@@ -578,6 +604,13 @@ export async function runAiCouncil(
   } catch (err) {
     if (isQuotaError(err)) {
       geminiQuotaExhausted = true;
+      geminiUnavailable = true;
+    } else if (isTransientGeminiFailure(err)) {
+      geminiUnavailable = true;
+      console.warn(
+        "[/api/council] Gemini Strategist unavailable/timed out:",
+        err,
+      );
     } else {
       console.error("[/api/council] Gemini Strategist error:", err);
     }
@@ -605,8 +638,8 @@ export async function runAiCouncil(
     return buildGroundedFallbackCouncil(
       input,
       input.locale === "pl"
-        ? "Limit zapytań AI (429) — wyświetlono naradę wyliczoną bezpośrednio z Twojego aktualnego cennika i firm z Google Maps."
-        : "AI quota reached (429) — showing structured debate computed directly from your live pricing & competitor scan.",
+        ? "Limit lub chwilowa niedostępność AI — wyświetlono naradę wyliczoną bezpośrednio z Twojego aktualnego cennika i firm z Google Maps."
+        : "AI temporarily unavailable or quota reached — showing structured debate computed directly from your live pricing & competitor scan.",
     );
   }
 
@@ -647,7 +680,6 @@ export async function runAiCouncil(
             strategistUsedSecondaryModel,
           ]
         : secondary.models;
-
       const res = await callOpenAiCompatibleJson<RawCriticPayload>(
         secondary,
         criticSystem,
@@ -673,12 +705,16 @@ export async function runAiCouncil(
     }
   }
 
-  if (!criticData && ai && !geminiQuotaExhausted) {
+  if (!criticData && ai && !geminiUnavailable) {
     try {
       const res2 = await ai.models.generateContent({
         model: GEMINI_TEXT_MODEL,
         contents: criticPrompt,
         config: {
+          abortSignal: AbortSignal.timeout(GEMINI_ROUND_TIMEOUT_MS),
+          httpOptions: {
+            timeout: GEMINI_ROUND_TIMEOUT_MS,
+          },
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction: criticSystem,
           responseMimeType: "application/json",
@@ -708,6 +744,13 @@ export async function runAiCouncil(
     } catch (err) {
       if (isQuotaError(err)) {
         geminiQuotaExhausted = true;
+        geminiUnavailable = true;
+      } else if (isTransientGeminiFailure(err)) {
+        geminiUnavailable = true;
+        console.warn(
+          "[/api/council] Isolated Gemini critic unavailable/timed out:",
+          err,
+        );
       } else {
         console.error("[/api/council] Isolated Gemini critic error:", err);
       }
@@ -720,7 +763,6 @@ export async function runAiCouncil(
     rawVerdict === "challenge" || rawVerdict === "caution"
       ? rawVerdict
       : "revise";
-
   const round2 =
     criticData &&
     Array.isArray(criticData.objections) &&
@@ -760,12 +802,16 @@ export async function runAiCouncil(
     .filter(Boolean)
     .join("\n\n");
 
-  if (ai && !geminiQuotaExhausted) {
+  if (ai && !geminiUnavailable) {
     try {
       const res3 = await ai.models.generateContent({
         model: GEMINI_TEXT_MODEL,
         contents: synthesisPrompt,
         config: {
+          abortSignal: AbortSignal.timeout(GEMINI_ROUND_TIMEOUT_MS),
+          httpOptions: {
+            timeout: GEMINI_ROUND_TIMEOUT_MS,
+          },
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction: synthesisSystem,
           responseMimeType: "application/json",
@@ -825,6 +871,13 @@ export async function runAiCouncil(
     } catch (err) {
       if (isQuotaError(err)) {
         geminiQuotaExhausted = true;
+        geminiUnavailable = true;
+      } else if (isTransientGeminiFailure(err)) {
+        geminiUnavailable = true;
+        console.warn(
+          "[/api/council] Gemini Synthesis unavailable/timed out:",
+          err,
+        );
       } else {
         console.error("[/api/council] Gemini Synthesis error:", err);
       }

@@ -12,6 +12,11 @@ import {
 } from "../../../../src/backend/ai/gemini-client";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
+
+const GEMINI_SCAN_TIMEOUT_MS = 15_000;
+const GROQ_MODEL_TIMEOUT_MS = 10_000;
+const GROQ_TOTAL_BUDGET_MS = 20_000;
 
 const GROQ_CHAT_COMPLETIONS_URL =
   "https://api.groq.com/openai/v1/chat/completions";
@@ -174,7 +179,6 @@ function isSafePublicUrl(rawUrl: string): URL | null {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return null;
     }
-
     const host = parsed.hostname.toLowerCase();
     if (
       host === "localhost" ||
@@ -290,7 +294,6 @@ function parseSiteProfileParam(raw: unknown): SiteProfileParam | undefined {
           .filter((item) => item.length >= 3 && item.length <= 90)
           .slice(0, 4)
       : [];
-
   const nichePl =
     typeof obj.nichePl === "string" ? obj.nichePl.trim().slice(0, 100) : "";
   const nicheEn =
@@ -305,7 +308,6 @@ function parseSiteProfileParam(raw: unknown): SiteProfileParam | undefined {
       : undefined;
   const searchQueriesPl = normalizeList(obj.searchQueriesPl);
   const searchQueriesEn = normalizeList(obj.searchQueriesEn);
-
   if (
     !nichePl &&
     !nicheEn &&
@@ -314,7 +316,6 @@ function parseSiteProfileParam(raw: unknown): SiteProfileParam | undefined {
   ) {
     return undefined;
   }
-
   return {
     businessName,
     nichePl: nichePl || nicheEn,
@@ -348,7 +349,6 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
       rawUrls.push(part);
     }
   }
-
   const competitorUrls = Array.from(
     new Set(
       rawUrls
@@ -407,7 +407,6 @@ function extractGroundingSources(
 function extractVisibleText(html: string): { title: string; text: string } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = (titleMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
-
   const stripped = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
@@ -422,7 +421,6 @@ function extractVisibleText(html: string): { title: string; text: string } {
     .replace(/[ \t\r\f\v]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
-
   return { title, text: stripped.slice(0, 10_000) };
 }
 
@@ -431,10 +429,8 @@ function compactSiteText(rawText: string, maxChars = 2400): string {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 1);
-
   const signalRe =
     /(z[łl]|pln|eur|usd|\$|€|,-|cennik|cena|od\s+\d+|from\s+\d+|m²|m2|szt|godz|hour|dzie[ńn]|day|imprez|event|wynajem|us[łl]ug|dojazd|gratis|opinie|price|pricing|rate)/i;
-
   const picked = new Set<number>();
   lines.forEach((line, idx) => {
     if (signalRe.test(line)) {
@@ -443,11 +439,9 @@ function compactSiteText(rawText: string, maxChars = 2400): string {
       if (idx + 1 < lines.length) picked.add(idx + 1);
     }
   });
-
   const selected = Array.from(picked)
     .sort((a, b) => a - b)
     .map((idx) => lines[idx]);
-
   const joined = (selected.length > 0 ? selected : lines).join("\n");
   return joined.slice(0, maxChars);
 }
@@ -480,21 +474,18 @@ function buildCompactGroqResearch(
 ): string {
   const sections: string[] = [];
   let remaining = maxChars;
-
   if (gbpContext) {
     const gbpCap = Math.min(2_600, Math.floor(maxChars * 0.35));
     const gbpSlice = gbpContext.slice(0, gbpCap).trim();
     sections.push(gbpSlice);
     remaining -= gbpSlice.length + 2;
   }
-
   if (fetchedSites.length > 0 && remaining > 400) {
     const sitesToInclude = fetchedSites.slice(0, 9);
     const perSiteBudget = Math.max(
       360,
       Math.floor(remaining / sitesToInclude.length) - 70,
     );
-
     for (const site of sitesToInclude) {
       if (remaining < 180) break;
       const header = `=== SITE: ${site.title.slice(0, 60)} (${site.url}) ===`;
@@ -511,7 +502,6 @@ function buildCompactGroqResearch(
       }
     }
   }
-
   return sections.join("\n\n").slice(0, maxChars);
 }
 
@@ -525,12 +515,10 @@ function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
     const label = (match[2] ?? "").replace(/<[^>]+>/g, " ").trim();
     const haystack = `${href} ${label}`.toLowerCase();
     if (/\.(jpg|jpeg|png|webp|avif|pdf|svg)$/i.test(href)) continue;
-
     const isDirectPricing =
       /(cennik|cena|pricing|price-list|prices|rates)/.test(haystack);
     const isSecondaryOffer = /(oferta|wynajem|atrakcj)/.test(haystack);
     if (!isDirectPricing && !isSecondaryOffer) continue;
-
     try {
       const resolved = new URL(href, baseUrl);
       if (
@@ -571,10 +559,8 @@ async function fetchSiteContext(
   if (!safeUrl) return null;
   const html = await fetchHtmlPage(safeUrl.toString());
   if (!html) return null;
-
   const { title, text } = extractVisibleText(html);
   let combined = text;
-
   const subpageUrl = findPricingSubpageUrl(html, safeUrl);
   if (subpageUrl) {
     const subHtml = await fetchHtmlPage(subpageUrl);
@@ -585,7 +571,6 @@ async function fetchSiteContext(
       }
     }
   }
-
   if (
     combined.length < 400 ||
     !/\d\s*(?:zł|pln|eur|usd|\$|€)/i.test(combined)
@@ -616,10 +601,8 @@ async function fetchSiteContext(
       }
     }
   }
-
   const compacted = compactSiteText(combined, 2400);
   if (!compacted) return null;
-
   return {
     url: safeUrl.toString(),
     title: title || safeUrl.hostname,
@@ -647,12 +630,10 @@ function buildDynamicQueriesFromServices(
     locale === "pl"
       ? (siteProfile?.searchQueriesPl ?? [])
       : (siteProfile?.searchQueriesEn ?? []);
-
   for (const stem of profileStems) {
     const cleaned = stem.trim();
     if (cleaned && !stems.includes(cleaned)) stems.push(cleaned);
   }
-
   if (stems.length < 3) {
     const niche = locale === "pl" ? siteProfile?.nichePl : siteProfile?.nicheEn;
     if (niche) {
@@ -662,7 +643,6 @@ function buildDynamicQueriesFromServices(
       }
     }
   }
-
   if (stems.length < 3) {
     for (const svc of services) {
       if (!svc.label) continue;
@@ -673,7 +653,6 @@ function buildDynamicQueriesFromServices(
       if (stems.length >= 4) break;
     }
   }
-
   const cityLower = city.toLowerCase();
   const localized = stems.slice(0, 4).map((stem, idx) => {
     const hasCity = stem.toLowerCase().includes(cityLower);
@@ -682,7 +661,6 @@ function buildDynamicQueriesFromServices(
       ? `${base} ${locale === "pl" ? "cennik" : "prices"}`
       : base;
   });
-
   return localized;
 }
 
@@ -788,7 +766,6 @@ async function discoverViaSerper(
   if (!serperKey) {
     return { urls: [], gbpContext: "", mapsSources: [], places: [] };
   }
-
   const gl = locale === "pl" ? "pl" : "us";
   const hl = locale === "pl" ? "pl" : "en";
   const collectedUrls: string[] = [];
@@ -853,7 +830,6 @@ async function discoverViaSerper(
     const title = place.title?.trim();
     if (!title) return;
     if (isExcludedCompetitorWebsite(place.website, excludeHost)) return;
-
     const cidStr = place.cid != null ? String(place.cid).trim() : "";
     const hostKey = getNormalizedHostFromUrl(place.website);
     const dedupeKeys = [
@@ -861,10 +837,8 @@ async function discoverViaSerper(
       hostKey ? `host:${hostKey}` : "",
       `name:${title.toLowerCase()}`,
     ].filter(Boolean);
-
     const alreadyRegistered = dedupeKeys.some((k) => seenKeys.has(k));
     dedupeKeys.forEach((k) => seenKeys.add(k));
-
     const mapUri = cidStr
       ? `https://www.google.com/maps?cid=${encodeURIComponent(cidStr)}`
       : undefined;
@@ -880,7 +854,6 @@ async function discoverViaSerper(
         Number.isFinite(countNum) && countNum > 0
           ? Math.round(countNum)
           : undefined;
-
       places.push({
         name: title,
         website: place.website?.trim() || mapUri,
@@ -890,7 +863,6 @@ async function discoverViaSerper(
         category: place.category?.trim() || undefined,
         mapUri,
       });
-
       const parts = [
         `Name: ${title}`,
         validRating ? `Rating: ${validRating}` : "",
@@ -984,7 +956,6 @@ async function searchDuckDuckGoSingle(
         : Array.from(
             html.matchAll(/href=['"]([^'"]*(?:uddg=|https?:\/\/)[^'"]+)['"]/gi),
           );
-
     const urls: string[] = [];
     for (const match of fallbackMatches) {
       const candidate = unwrapDuckDuckGoHref(match[1] ?? "");
@@ -1161,7 +1132,6 @@ function buildSynthesisPrompt(
         .join(" "),
     )
     .join(", ");
-
   const excludeInstruction = params.excludeHost
     ? `Do NOT include our own business (${params.excludeHost}) in the competitors list.`
     : "";
@@ -1206,6 +1176,10 @@ async function structureReportWithGemini(
     model: GEMINI_TEXT_MODEL,
     contents: extractionPrompt,
     config: {
+      abortSignal: AbortSignal.timeout(GEMINI_SCAN_TIMEOUT_MS),
+      httpOptions: {
+        timeout: GEMINI_SCAN_TIMEOUT_MS,
+      },
       thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
       responseMimeType: "application/json",
       responseSchema: {
@@ -1291,7 +1265,12 @@ async function structureReportWithGroq(
     MAX_GROQ_RESEARCH_CHARS,
   );
 
+  const deadline = Date.now() + GROQ_TOTAL_BUDGET_MS;
+
   for (const model of GROQ_FALLBACK_MODELS) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 1_500) break;
+
     try {
       const response = await fetch(GROQ_CHAT_COMPLETIONS_URL, {
         method: "POST",
@@ -1315,7 +1294,9 @@ async function structureReportWithGroq(
             },
           ],
         }),
-        signal: AbortSignal.timeout(14_000),
+        signal: AbortSignal.timeout(
+          Math.min(GROQ_MODEL_TIMEOUT_MS, remainingMs),
+        ),
       });
 
       if (!response.ok) {
@@ -1410,7 +1391,6 @@ function sanitizeStructuredPayload(
       ) {
         return false;
       }
-
       const ourPrice = ourPriceByKey.get(b.serviceKey);
       if (ourPrice && ourPrice > 0) {
         const samples = Math.max(1, Math.round(b.sampleCount || 1));
@@ -1471,7 +1451,6 @@ async function runMarketScan(params: ScanRequestParams) {
   const presetKeys = new Set(
     template.services.map((s: IndustryServiceItem) => s.serviceKey),
   );
-
   const activeServices: ActiveServiceDescriptor[] =
     params.services.length > 0
       ? params.services
@@ -1561,6 +1540,10 @@ async function runMarketScan(params: ScanRequestParams) {
         model: GEMINI_TEXT_MODEL,
         contents: searchPrompt,
         config: {
+          abortSignal: AbortSignal.timeout(GEMINI_SCAN_TIMEOUT_MS),
+          httpOptions: {
+            timeout: GEMINI_SCAN_TIMEOUT_MS,
+          },
           tools: [{ googleSearch: {} }],
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         },
@@ -1587,7 +1570,6 @@ async function runMarketScan(params: ScanRequestParams) {
           activeServices,
           params.excludeHost,
         );
-
         return NextResponse.json({
           source: "ai-web-grounding",
           aiEnhanced: true,
@@ -1673,7 +1655,6 @@ async function runMarketScan(params: ScanRequestParams) {
       .join("\n\n");
 
     let parsed: StructuredScanPayload | null = null;
-
     if (ai) {
       try {
         parsed = await structureReportWithGemini(
@@ -1728,7 +1709,6 @@ async function runMarketScan(params: ScanRequestParams) {
         activeServices,
         params.excludeHost,
       );
-
       return NextResponse.json({
         source: gbpContext ? "live-maps-and-sites" : "live-competitor-sites",
         aiEnhanced: true,
@@ -1750,7 +1730,6 @@ async function runMarketScan(params: ScanRequestParams) {
       params.locale,
       params.excludeHost,
     );
-
     const warningMsg = !ai
       ? params.locale === "pl"
         ? "Brak GEMINI_API_KEY na serwerze — wyświetlono surowe wizytówki Google Maps i znalezione strony bez analizy AI."

@@ -26,48 +26,105 @@ function listFilesRecursive(dirRel, extensions) {
   return results;
 }
 
-test("i18n dictionaries maintain 100% EN/PL key parity with non-empty values", () => {
-  const enDir = path.join(ROOT, "src", "locales", "en");
-  const plDir = path.join(ROOT, "src", "locales", "pl");
-  const enFiles = fs
-    .readdirSync(enDir)
+function extractPlaceholders(value) {
+  return Array.from(
+    new Set(Array.from(value.matchAll(/\{(\w+)\}/g), (match) => match[1])),
+  ).sort();
+}
+
+test("i18n dictionaries maintain 100% key and placeholder parity across all locales", () => {
+  const localesRoot = path.join(ROOT, "src", "locales");
+  const localeDirs = fs
+    .readdirSync(localesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+
+  assert.ok(
+    localeDirs.includes("en") && localeDirs.length >= 2,
+    "Expected 'en' baseline and at least one additional locale directory",
+  );
+
+  const localesIndex = readUtf8("src/locales/index.ts");
+  const supportedMatch = localesIndex.match(
+    /SUPPORTED_LOCALES\s*=\s*\[([^\]]+)\]/,
+  );
+  assert.ok(
+    supportedMatch,
+    "src/locales/index.ts must export SUPPORTED_LOCALES array",
+  );
+  const declaredLocales = Array.from(
+    supportedMatch[1].matchAll(/["']([^"']+)["']/g),
+    (match) => match[1],
+  ).sort();
+  assert.deepEqual(
+    declaredLocales,
+    localeDirs,
+    "SUPPORTED_LOCALES in src/locales/index.ts must match src/locales/* directories",
+  );
+
+  const baseDir = path.join(localesRoot, "en");
+  const baseFiles = fs
+    .readdirSync(baseDir)
     .filter((f) => f.endsWith(".json"))
     .sort();
-  const plFiles = fs
-    .readdirSync(plDir)
-    .filter((f) => f.endsWith(".json"))
-    .sort();
 
-  assert.deepEqual(enFiles, plFiles, "Locale file lists (en vs pl) must match");
-  assert.ok(enFiles.length >= 5, "Expected at least 5 locale namespaces");
+  assert.ok(baseFiles.length >= 5, "Expected at least 5 locale namespaces");
 
-  for (const file of enFiles) {
-    const enObj = JSON.parse(fs.readFileSync(path.join(enDir, file), "utf8"));
-    const plObj = JSON.parse(fs.readFileSync(path.join(plDir, file), "utf8"));
+  for (const locale of localeDirs) {
+    const dir = path.join(localesRoot, locale);
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .sort();
 
-    const enKeys = Object.keys(enObj).sort();
-    const plKeys = Object.keys(plObj).sort();
-    assert.deepEqual(enKeys, plKeys, `Key mismatch in locale file ${file}`);
+    assert.deepEqual(
+      files,
+      baseFiles,
+      `Locale file list (${locale} vs en) must match`,
+    );
 
-    for (const key of enKeys) {
-      assert.equal(
-        typeof enObj[key],
-        "string",
-        `en/${file}:${key} must be a string`,
+    if (locale === "en") continue;
+
+    for (const file of baseFiles) {
+      const enObj = JSON.parse(
+        fs.readFileSync(path.join(baseDir, file), "utf8"),
       );
-      assert.equal(
-        typeof plObj[key],
-        "string",
-        `pl/${file}:${key} must be a string`,
+      const locObj = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+
+      const enKeys = Object.keys(enObj).sort();
+      const locKeys = Object.keys(locObj).sort();
+      assert.deepEqual(
+        locKeys,
+        enKeys,
+        `Key mismatch in ${locale}/${file} vs en/${file}`,
       );
-      assert.ok(
-        enObj[key].trim().length > 0,
-        `en/${file}:${key} cannot be empty`,
-      );
-      assert.ok(
-        plObj[key].trim().length > 0,
-        `pl/${file}:${key} cannot be empty`,
-      );
+
+      for (const key of enKeys) {
+        assert.equal(
+          typeof enObj[key],
+          "string",
+          `en/${file}:${key} must be a string`,
+        );
+        assert.equal(
+          typeof locObj[key],
+          "string",
+          `${locale}/${file}:${key} must be a string`,
+        );
+        assert.ok(
+          enObj[key].trim().length > 0,
+          `en/${file}:${key} cannot be empty`,
+        );
+        assert.ok(
+          locObj[key].trim().length > 0,
+          `${locale}/${file}:${key} cannot be empty`,
+        );
+        assert.deepEqual(
+          extractPlaceholders(locObj[key]),
+          extractPlaceholders(enObj[key]),
+          `Placeholder mismatch in ${locale}/${file}:${key} vs en/${file}:${key}`,
+        );
+      }
     }
   }
 });

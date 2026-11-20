@@ -13,12 +13,14 @@ import {
 } from "lucide-react";
 import { resolveServiceLabel, type IndustryId } from "@/src/config/industries";
 import { getMarketMetrics, type MarketProfile } from "@/src/config/markets";
-import type { AppDictionary, Locale } from "@/src/locales";
+import { formatTemplate, type AppDictionary, type Locale } from "@/src/locales";
 import type {
   ConfluenceExportResult,
   JiraEpicResult,
 } from "@/src/types/market";
 import { RovoActionPreview } from "./rovo-action-preview";
+
+const MCP_REQUEST_TIMEOUT_MS = 30_000;
 
 interface RovoConsoleProps {
   t: AppDictionary;
@@ -33,13 +35,54 @@ interface RovoConsoleProps {
   topPainPoint?: string;
 }
 
+interface McpJsonRpcPayload<T> {
+  result?: {
+    structuredContent?: T;
+  };
+  error?: {
+    code?: number;
+    message?: string;
+  };
+}
+
+async function readJsonSafe<T>(response: Response): Promise<T | null> {
+  try {
+    const raw = await response.text();
+    if (!raw.trim()) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function isTimeoutFailure(error: unknown, status?: number): boolean {
+  if (status === 408 || status === 504) {
+    return true;
+  }
+  if (error instanceof DOMException) {
+    return error.name === "TimeoutError" || error.name === "AbortError";
+  }
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      message.includes("timed out") ||
+      message.includes("timeout")
+    );
+  }
+  return false;
+}
+
 async function invokeMcpTool<T>(
   name: string,
   args: Record<string, unknown>,
+  t: AppDictionary,
 ): Promise<T> {
   const response = await fetch("/api/mcp", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: Date.now(),
@@ -47,11 +90,22 @@ async function invokeMcpTool<T>(
       params: { name, arguments: args },
     }),
   });
-  if (!response.ok) throw new Error("MCP invocation failed");
-  const payload = (await response.json()) as {
-    result?: { structuredContent?: T };
-  };
-  if (!payload.result?.structuredContent) throw new Error("Empty MCP response");
+  const payload = await readJsonSafe<McpJsonRpcPayload<T>>(response);
+  if (!response.ok) {
+    if (isTimeoutFailure(null, response.status)) {
+      throw new Error(t.mcpTimeoutError);
+    }
+    throw new Error(
+      payload?.error?.message ??
+        formatTemplate(t.mcpHttpError, { status: response.status }),
+    );
+  }
+  if (payload?.error?.message) {
+    throw new Error(payload.error.message);
+  }
+  if (!payload?.result?.structuredContent) {
+    throw new Error(t.mcpEmptyError);
+  }
   return payload.result.structuredContent;
 }
 
@@ -117,12 +171,17 @@ export function RovoConsole({
           })),
           locale,
         },
+        t,
       );
       setJiraResult(null);
       setConfluenceResult(data);
     } catch (error) {
       setActionError(
-        error instanceof Error ? error.message : "Confluence export failed",
+        isTimeoutFailure(error)
+          ? t.mcpTimeoutError
+          : error instanceof Error && error.message.trim()
+            ? error.message
+            : t.confluenceExportError,
       );
     } finally {
       setBusyAction(null);
@@ -143,12 +202,17 @@ export function RovoConsole({
           competitorsTracked: effectiveCompetitorsCount,
           locale,
         },
+        t,
       );
       setConfluenceResult(null);
       setJiraResult(data);
     } catch (error) {
       setActionError(
-        error instanceof Error ? error.message : "Jira creation failed",
+        isTimeoutFailure(error)
+          ? t.mcpTimeoutError
+          : error instanceof Error && error.message.trim()
+            ? error.message
+            : t.jiraCreateError,
       );
     } finally {
       setBusyAction(null);

@@ -1,31 +1,50 @@
 import type { Locale } from "@/src/locales";
 
-const PLN_PER_USD = 4;
+interface LocaleCurrencyConfig {
+  intlLocale: string;
+  currency: string;
+  plnPerUnit: number;
+  allowSmallFractions: boolean;
+}
+
+const LOCALE_CURRENCY_CONFIG: Record<Locale, LocaleCurrencyConfig> = {
+  en: {
+    intlLocale: "en-US",
+    currency: "USD",
+    plnPerUnit: 4,
+    allowSmallFractions: true,
+  },
+  pl: {
+    intlLocale: "pl-PL",
+    currency: "PLN",
+    plnPerUnit: 1,
+    allowSmallFractions: false,
+  },
+};
 
 export function convertFromPln(amountPln: number, locale: Locale): number {
-  if (locale === "pl") return Math.round(amountPln);
-  const usd = amountPln / PLN_PER_USD;
-  if (usd < 5) return Number(usd.toFixed(2));
-  return Math.round(usd);
+  const { plnPerUnit, allowSmallFractions } = LOCALE_CURRENCY_CONFIG[locale];
+  const converted = amountPln / plnPerUnit;
+  if (allowSmallFractions && converted < 5) {
+    return Number(converted.toFixed(2));
+  }
+  return Math.round(converted);
 }
 
 export function formatCurrencyValue(amount: number, locale: Locale): string {
+  const { intlLocale, currency, allowSmallFractions } =
+    LOCALE_CURRENCY_CONFIG[locale];
   const hasFraction =
-    amount < 10 && Math.abs(amount - Math.round(amount)) > 0.01;
-  if (locale === "en") {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: hasFraction ? 2 : 0,
-      maximumFractionDigits: hasFraction ? 2 : 0,
-    }).format(amount);
-  }
+    allowSmallFractions &&
+    amount < 10 &&
+    Math.abs(amount - Math.round(amount)) > 0.01;
+  const fractionDigits = hasFraction ? 2 : 0;
 
-  return new Intl.NumberFormat("pl-PL", {
+  return new Intl.NumberFormat(intlLocale, {
     style: "currency",
-    currency: "PLN",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
+    currency,
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
   }).format(amount);
 }
 

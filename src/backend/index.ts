@@ -26,6 +26,8 @@ import type {
   ServiceFeeQuote,
 } from "../types/market";
 
+const ATLASSIAN_TIMEOUT_MS = 8000;
+
 const CAMPAIGN_KEYS: Record<
   IndustryId,
   {
@@ -111,6 +113,16 @@ interface JiraIssueTypeInfo {
   subtask: boolean;
 }
 
+async function readJsonSafe<T>(response: Response): Promise<T | null> {
+  try {
+    const raw = await response.text();
+    if (!raw.trim()) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 function getAtlassianConfig(): AtlassianConfig | null {
   const rawUrl = process.env.ATLASSIAN_BASE_URL?.trim();
   const email = process.env.ATLASSIAN_EMAIL?.trim();
@@ -153,39 +165,35 @@ function buildAdfDocument(paragraphs: string[]) {
 
 function buildConfluenceCouncilSection(
   ctx: CouncilExecutionContext,
-  locale: Locale,
+  t: AppDictionary,
 ): string {
-  const isPl = locale === "pl";
-  const heading = isPl
-    ? "Protokół Rady Strategicznej AI i decyzja operatora"
-    : "AI Strategy Council Protocol & Human Decision";
   const modelsText = [ctx.strategistModel, ctx.criticModel]
     .filter(Boolean)
     .join(" ↔ ");
 
   const metaLines: string[] = [
-    `<p><strong>${escapeHtml(isPl ? "Zatwierdzony wariant" : "Approved option")}:</strong> ${escapeHtml(ctx.selectedOptionTitle)}${ctx.selectedOptionSummary ? ` — ${escapeHtml(ctx.selectedOptionSummary)}` : ""}</p>`,
+    `<p><strong>${escapeHtml(t.councilApprovedOptionLabel)}:</strong> ${escapeHtml(ctx.selectedOptionTitle)}${ctx.selectedOptionSummary ? ` — ${escapeHtml(ctx.selectedOptionSummary)}` : ""}</p>`,
   ];
 
   if (modelsText) {
     const riskPart =
       typeof ctx.riskScore === "number"
-        ? ` · ${isPl ? "Wskaźnik ryzyka krytyka" : "Critic risk score"}: ${ctx.riskScore}%`
+        ? ` · ${t.councilCriticRiskScoreLabel}: ${ctx.riskScore}%`
         : "";
     metaLines.push(
-      `<p><strong>${escapeHtml(isPl ? "Debata modeli AI" : "AI debate models")}:</strong> ${escapeHtml(modelsText)}${escapeHtml(riskPart)}</p>`,
+      `<p><strong>${escapeHtml(t.councilDebateModelsLabel)}:</strong> ${escapeHtml(modelsText)}${escapeHtml(riskPart)}</p>`,
     );
   }
 
   if (ctx.humanConstraint?.trim()) {
     metaLines.push(
-      `<p><strong>${escapeHtml(isPl ? "Reguła / limit operatora" : "Human operator rule")}:</strong> ${escapeHtml(ctx.humanConstraint.trim())}</p>`,
+      `<p><strong>${escapeHtml(t.councilHumanRuleLabel)}:</strong> ${escapeHtml(ctx.humanConstraint.trim())}</p>`,
     );
   }
 
   const objectionsBlock =
     ctx.criticObjections && ctx.criticObjections.length > 0
-      ? `<h3>${escapeHtml(isPl ? "Kluczowe zastrzeżenia Krytyka" : "Key Critic objections")}</h3><ul>${ctx.criticObjections
+      ? `<h3>${escapeHtml(t.councilKeyCriticObjectionsHeading)}</h3><ul>${ctx.criticObjections
           .slice(0, 4)
           .map((item) => `<li>${escapeHtml(item)}</li>`)
           .join("")}</ul>`
@@ -193,13 +201,13 @@ function buildConfluenceCouncilSection(
 
   const actionsBlock =
     ctx.actionItems && ctx.actionItems.length > 0
-      ? `<h3>${escapeHtml(isPl ? "Plan wdrożenia zatwierdzony do Jira" : "Approved action plan for Jira")}</h3><ol>${ctx.actionItems
+      ? `<h3>${escapeHtml(t.councilApprovedActionPlanHeading)}</h3><ol>${ctx.actionItems
           .slice(0, 5)
           .map((item) => `<li>${escapeHtml(item)}</li>`)
           .join("")}</ol>`
       : "";
 
-  return `<h2>${escapeHtml(heading)}</h2>${metaLines.join("")}${objectionsBlock}${actionsBlock}`;
+  return `<h2>${escapeHtml(t.councilProtocolHeading)}</h2>${metaLines.join("")}${objectionsBlock}${actionsBlock}`;
 }
 
 async function resolveJiraProject(atlassian: AtlassianConfig): Promise<{
@@ -214,20 +222,22 @@ async function resolveJiraProject(atlassian: AtlassianConfig): Promise<{
           Authorization: atlassian.authHeader,
           Accept: "application/json",
         },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(ATLASSIAN_TIMEOUT_MS),
       },
     );
 
   const directRes = await fetchProject(atlassian.projectKey);
   if (directRes.ok) {
-    const project = (await directRes.json()) as {
+    const project = await readJsonSafe<{
       key?: string;
       issueTypes?: JiraIssueTypeInfo[];
-    };
-    return {
-      projectKey: project.key ?? atlassian.projectKey,
-      issueTypes: project.issueTypes ?? [],
-    };
+    }>(directRes);
+    if (project) {
+      return {
+        projectKey: project.key ?? atlassian.projectKey,
+        issueTypes: project.issueTypes ?? [],
+      };
+    }
   }
 
   const searchRes = await fetch(
@@ -237,23 +247,24 @@ async function resolveJiraProject(atlassian: AtlassianConfig): Promise<{
         Authorization: atlassian.authHeader,
         Accept: "application/json",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(ATLASSIAN_TIMEOUT_MS),
     },
   );
   if (!searchRes.ok) return null;
 
-  const searchData = (await searchRes.json()) as {
+  const searchData = await readJsonSafe<{
     values?: Array<{ key: string }>;
-  };
-  const fallbackKey = searchData.values?.[0]?.key;
+  }>(searchRes);
+  const fallbackKey = searchData?.values?.[0]?.key;
   if (!fallbackKey) return null;
 
   const fallbackRes = await fetchProject(fallbackKey);
   if (!fallbackRes.ok) return null;
-  const fallbackProject = (await fallbackRes.json()) as {
+  const fallbackProject = await readJsonSafe<{
     key?: string;
     issueTypes?: JiraIssueTypeInfo[];
-  };
+  }>(fallbackRes);
+  if (!fallbackProject) return null;
   return {
     projectKey: fallbackProject.key ?? fallbackKey,
     issueTypes: fallbackProject.issueTypes ?? [],
@@ -416,7 +427,6 @@ export async function exportStrategyToConfluence(input: {
   locale?: Locale;
 }): Promise<ConfluenceExportResult> {
   const locale = resolveLocale(input.locale);
-  const isPl = locale === "pl";
   const t = translations[locale];
   const industryId = input.industryId ?? "upholstery";
   const template = INDUSTRY_TEMPLATES[industryId];
@@ -466,17 +476,19 @@ export async function exportStrategyToConfluence(input: {
   const ctx = input.councilContext;
   const topTownsShort = analysis.townsInRadius.slice(0, 4).join(", ");
   const pageTitle = ctx
-    ? isPl
-      ? `Strategia Rady AI (${ctx.selectedOptionTitle}) — ${topTownsShort}`
-      : `AI Council Strategy (${ctx.selectedOptionTitle}) — ${topTownsShort}`
+    ? formatTemplate(t.councilConfluenceTitleTemplate, {
+        option: ctx.selectedOptionTitle,
+        towns: topTownsShort,
+      })
     : hasLiveCustomBenchmarks
-      ? isPl
-        ? `Strategia lokalna (${input.detectedIndustryLabel || analysis.center}) — ${topTownsShort}`
-        : `Local Strategy (${input.detectedIndustryLabel || analysis.center}) — ${topTownsShort}`
+      ? formatTemplate(t.councilLocalStrategyTitleTemplate, {
+          label: input.detectedIndustryLabel || analysis.center,
+          towns: topTownsShort,
+        })
       : campaign.confluencePageTitle;
 
   const pageHeadline = ctx
-    ? `${t.brand} — ${isPl ? "Rada Strategiczna AI" : "AI Strategy Council"}: ${ctx.selectedOptionTitle}`
+    ? `${t.brand} — ${t.councilTitle}: ${ctx.selectedOptionTitle}`
     : hasLiveCustomBenchmarks
       ? `${t.brand} — ${input.detectedIndustryLabel || analysis.center} (${analysis.radiusKm} ${t.kmUnit})`
       : `${t.brand} — ${campaign.headline}`;
@@ -485,18 +497,12 @@ export async function exportStrategyToConfluence(input: {
     input.topPainPoint?.trim() ||
     ctx?.criticObjections?.[0]?.trim() ||
     (hasLiveCustomBenchmarks
-      ? isPl
-        ? "przejrzystość stawek i szybkość wyceny online"
-        : "transparent online pricing and faster quoting"
+      ? t.councilCustomPainFallback
       : t[template.painPoints[0].topicKey]);
 
   const valueProposition =
     ctx?.selectedOptionSummary?.trim() ||
-    (hasLiveCustomBenchmarks
-      ? isPl
-        ? "Przejrzysty cennik online dopasowany do lokalnego rynku oraz jasne warunki dojazdu w strefie."
-        : "Transparent online pricing aligned with local benchmarks and clear zone travel terms."
-      : campaign.offer);
+    (hasLiveCustomBenchmarks ? t.councilCustomOfferFallback : campaign.offer);
 
   const gapText = `${avgGapPct > 0 ? "+" : ""}${avgGapPct}%`;
   const summary = formatTemplate(t.confluenceSummaryTemplate, {
@@ -521,14 +527,14 @@ export async function exportStrategyToConfluence(input: {
             Authorization: atlassian.authHeader,
             Accept: "application/json",
           },
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(ATLASSIAN_TIMEOUT_MS),
         },
       );
       if (byKeyRes.ok) {
-        const data = (await byKeyRes.json()) as {
+        const data = await readJsonSafe<{
           results?: Array<{ id: string; key: string }>;
-        };
-        if (data.results && data.results.length > 0) {
+        }>(byKeyRes);
+        if (data?.results && data.results.length > 0) {
           spaceId = String(data.results[0].id);
           resolvedSpaceKey = data.results[0].key;
         }
@@ -542,14 +548,14 @@ export async function exportStrategyToConfluence(input: {
               Authorization: atlassian.authHeader,
               Accept: "application/json",
             },
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(ATLASSIAN_TIMEOUT_MS),
           },
         );
         if (listRes.ok) {
-          const listData = (await listRes.json()) as {
+          const listData = await readJsonSafe<{
             results?: Array<{ id: string; key: string }>;
-          };
-          if (listData.results && listData.results.length > 0) {
+          }>(listRes);
+          if (listData?.results && listData.results.length > 0) {
             spaceId = String(listData.results[0].id);
             resolvedSpaceKey = listData.results[0].key;
           }
@@ -580,7 +586,7 @@ export async function exportStrategyToConfluence(input: {
           .join("");
 
         const councilSectionHtml = ctx
-          ? buildConfluenceCouncilSection(ctx, locale)
+          ? buildConfluenceCouncilSection(ctx, t)
           : "";
 
         const storageHtml = `
@@ -620,7 +626,7 @@ export async function exportStrategyToConfluence(input: {
               title,
               body: { representation: "storage", value: storageHtml },
             }),
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(ATLASSIAN_TIMEOUT_MS),
           });
 
         let finalTitle = pageTitle;
@@ -636,16 +642,16 @@ export async function exportStrategyToConfluence(input: {
         }
 
         if (createRes.ok) {
-          const created = (await createRes.json()) as {
+          const created = await readJsonSafe<{
             title?: string;
             _links?: { webui?: string };
-          };
-          const pageUrl = created._links?.webui
+          }>(createRes);
+          const pageUrl = created?._links?.webui
             ? `${atlassian.baseUrl}/wiki${created._links.webui}`
             : `${atlassian.baseUrl}/wiki/spaces/${resolvedSpaceKey}`;
 
           return {
-            pageTitle: created.title ?? finalTitle,
+            pageTitle: created?.title ?? finalTitle,
             spaceKey: resolvedSpaceKey,
             summary,
             targetTowns: analysis.townsInRadius,
@@ -680,7 +686,6 @@ export async function createJiraMarketingEpics(input: {
   locale?: Locale;
 }): Promise<JiraEpicResult> {
   const locale = resolveLocale(input.locale);
-  const isPl = locale === "pl";
   const t = translations[locale];
   const analysis = await analyzeCompetitors({
     center: input.center,
@@ -693,7 +698,7 @@ export async function createJiraMarketingEpics(input: {
 
   const ctx = input.councilContext;
   const epicTitle = ctx
-    ? `[${input.center} ${input.radiusKm} km] ${ctx.selectedOptionTitle}`.slice(
+    ? `[${input.center} ${input.radiusKm} ${t.kmUnit}] ${ctx.selectedOptionTitle}`.slice(
         0,
         220,
       )
@@ -707,8 +712,8 @@ export async function createJiraMarketingEpics(input: {
     .filter(Boolean)
     .slice(0, 3)
     .map((item) => ({
-      contextLabel: isPl ? "Akcja z Rady AI" : "AI Council Action",
-      summary: `${isPl ? "[Rada AI]" : "[AI Council]"} ${item}`.slice(0, 200),
+      contextLabel: t.councilJiraActionLabel,
+      summary: `${t.councilJiraActionPrefix} ${item}`.slice(0, 200),
     }));
 
   const townLimit = councilActionSubtasks.length > 0 ? 2 : 4;
@@ -739,21 +744,21 @@ export async function createJiraMarketingEpics(input: {
       .filter(Boolean)
       .join(" ↔ ");
     epicParagraphs.push(
-      `${isPl ? "Wybrany wariant Rady AI" : "Approved AI Council option"}: ${ctx.selectedOptionTitle}${ctx.selectedOptionSummary ? ` — ${ctx.selectedOptionSummary}` : ""}`,
+      `${t.councilApprovedOptionLabel}: ${ctx.selectedOptionTitle}${ctx.selectedOptionSummary ? ` — ${ctx.selectedOptionSummary}` : ""}`,
     );
     if (modelsText) {
       epicParagraphs.push(
-        `${isPl ? "Debata modeli" : "Debate models"}: ${modelsText}${typeof ctx.riskScore === "number" ? ` (${isPl ? "Ryzyko krytyka" : "Critic risk"}: ${ctx.riskScore}%)` : ""}`,
+        `${t.councilJiraDebateModelsLabel}: ${modelsText}${typeof ctx.riskScore === "number" ? ` (${t.councilJiraCriticRiskLabel}: ${ctx.riskScore}%)` : ""}`,
       );
     }
     if (ctx.humanConstraint?.trim()) {
       epicParagraphs.push(
-        `${isPl ? "Reguła operatora" : "Human rule"}: ${ctx.humanConstraint.trim()}`,
+        `${t.councilHumanRuleLabel}: ${ctx.humanConstraint.trim()}`,
       );
     }
     if (ctx.criticObjections && ctx.criticObjections.length > 0) {
       epicParagraphs.push(
-        `${isPl ? "Zastrzeżenie Krytyka" : "Critic objection"}: ${ctx.criticObjections[0]}`,
+        `${t.councilJiraCriticObjectionLabel}: ${ctx.criticObjections[0]}`,
       );
     }
   }
@@ -788,7 +793,7 @@ export async function createJiraMarketingEpics(input: {
                 "Content-Type": "application/json",
               },
               body: JSON.stringify({ fields }),
-              signal: AbortSignal.timeout(8000),
+              signal: AbortSignal.timeout(ATLASSIAN_TIMEOUT_MS),
             });
 
           const parentRes = await createIssue({
@@ -799,73 +804,84 @@ export async function createJiraMarketingEpics(input: {
           });
 
           if (parentRes.ok) {
-            const parentCreated = (await parentRes.json()) as { key: string };
-            const createdChildren: Array<{
-              key: string;
-              summary: string;
-              url?: string;
-            }> = [];
-            const childType =
-              epicType && taskType ? taskType : (subtaskType ?? taskType);
+            const parentCreated = await readJsonSafe<{ key?: string }>(
+              parentRes,
+            );
+            if (parentCreated?.key) {
+              const parentKey = parentCreated.key;
+              const childType =
+                epicType && taskType ? taskType : (subtaskType ?? taskType);
 
-            if (childType) {
-              for (const item of plannedSubtasks) {
-                const useParentLink =
-                  (epicType && childType.id === taskType?.id) ||
-                  childType.subtask;
-                const baseFields: Record<string, unknown> = {
-                  project: { key: resolved.projectKey },
-                  summary: item.summary,
-                  issuetype: { id: childType.id },
-                  description: buildAdfDocument([
-                    `${item.contextLabel} · ${formatTemplate(
-                      t.jiraEpicDescHub,
-                      {
-                        center: analysis.center,
-                        radius: analysis.radiusKm,
-                      },
-                    )}`,
-                    ...(ctx?.humanConstraint?.trim()
-                      ? [
-                          `${isPl ? "Reguła operatora" : "Operator rule"}: ${ctx.humanConstraint.trim()}`,
-                        ]
-                      : []),
-                    `${t.jiraEpicBadge}: ${parentCreated.key}`,
-                  ]),
-                };
+              const createdChildren = childType
+                ? (
+                    await Promise.all(
+                      plannedSubtasks.map(async (item) => {
+                        const useParentLink =
+                          (epicType && childType.id === taskType?.id) ||
+                          childType.subtask;
+                        const baseFields: Record<string, unknown> = {
+                          project: { key: resolved.projectKey },
+                          summary: item.summary,
+                          issuetype: { id: childType.id },
+                          description: buildAdfDocument([
+                            `${item.contextLabel} · ${formatTemplate(
+                              t.jiraEpicDescHub,
+                              {
+                                center: analysis.center,
+                                radius: analysis.radiusKm,
+                              },
+                            )}`,
+                            ...(ctx?.humanConstraint?.trim()
+                              ? [
+                                  `${t.councilHumanRuleLabel}: ${ctx.humanConstraint.trim()}`,
+                                ]
+                              : []),
+                            `${t.jiraEpicBadge}: ${parentKey}`,
+                          ]),
+                        };
 
-                let childRes = await createIssue(
-                  useParentLink
-                    ? { ...baseFields, parent: { key: parentCreated.key } }
-                    : baseFields,
-                );
-                if (!childRes.ok && useParentLink && taskType) {
-                  childRes = await createIssue({
-                    ...baseFields,
-                    issuetype: { id: taskType.id },
-                  });
-                }
+                        let childRes = await createIssue(
+                          useParentLink
+                            ? { ...baseFields, parent: { key: parentKey } }
+                            : baseFields,
+                        );
+                        if (!childRes.ok && useParentLink && taskType) {
+                          childRes = await createIssue({
+                            ...baseFields,
+                            issuetype: { id: taskType.id },
+                          });
+                        }
 
-                if (childRes.ok) {
-                  const childData = (await childRes.json()) as { key: string };
-                  createdChildren.push({
-                    key: childData.key,
-                    summary: item.summary,
-                    url: `${atlassian.baseUrl}/browse/${childData.key}`,
-                  });
-                }
-              }
+                        if (!childRes.ok) return null;
+                        const childData = await readJsonSafe<{ key?: string }>(
+                          childRes,
+                        );
+                        if (!childData?.key) return null;
+                        return {
+                          key: childData.key,
+                          summary: item.summary,
+                          url: `${atlassian.baseUrl}/browse/${childData.key}`,
+                        };
+                      }),
+                    )
+                  ).filter(
+                    (
+                      item,
+                    ): item is { key: string; summary: string; url: string } =>
+                      item !== null,
+                  )
+                : [];
+
+              return {
+                epicKey: parentKey,
+                projectKey: resolved.projectKey,
+                epicTitle,
+                subtasks: createdChildren,
+                radiusKm: analysis.radiusKm,
+                status: "created",
+                epicUrl: `${atlassian.baseUrl}/browse/${parentKey}`,
+              };
             }
-
-            return {
-              epicKey: parentCreated.key,
-              projectKey: resolved.projectKey,
-              epicTitle,
-              subtasks: createdChildren,
-              radiusKm: analysis.radiusKm,
-              status: "created",
-              epicUrl: `${atlassian.baseUrl}/browse/${parentCreated.key}`,
-            };
           }
         }
       }
@@ -942,19 +958,21 @@ export async function createCustomerQuote(
                   ]),
                 },
               }),
-              signal: AbortSignal.timeout(8000),
+              signal: AbortSignal.timeout(ATLASSIAN_TIMEOUT_MS),
             },
           );
 
           if (issueRes.ok) {
-            const created = (await issueRes.json()) as { key: string };
-            return {
-              issueKey: created.key,
-              projectKey: resolved.projectKey,
-              summary,
-              status: "created",
-              issueUrl: `${atlassian.baseUrl}/browse/${created.key}`,
-            };
+            const created = await readJsonSafe<{ key?: string }>(issueRes);
+            if (created?.key) {
+              return {
+                issueKey: created.key,
+                projectKey: resolved.projectKey,
+                summary,
+                status: "created",
+                issueUrl: `${atlassian.baseUrl}/browse/${created.key}`,
+              };
+            }
           }
         }
       }

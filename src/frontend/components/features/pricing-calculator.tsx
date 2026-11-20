@@ -23,6 +23,8 @@ import {
 } from "@/src/lib/currency";
 import type { AppDictionary, Locale } from "@/src/locales";
 
+const MCP_QUOTE_TIMEOUT_MS = 25_000;
+
 interface PricingCalculatorProps {
   t: AppDictionary;
   market: MarketProfile;
@@ -46,6 +48,28 @@ interface McpQuoteResponse {
     };
   };
   error?: { message?: string };
+}
+
+function toSafeHttpUrl(raw?: string): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "https:" || parsed.protocol === "http:"
+      ? parsed.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readJsonSafe<T>(response: Response): Promise<T | null> {
+  try {
+    const raw = await response.text();
+    if (!raw.trim()) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
 }
 
 export function PricingCalculator({
@@ -135,6 +159,7 @@ export function PricingCalculator({
       const response = await fetch("/api/mcp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(MCP_QUOTE_TIMEOUT_MS),
         body: JSON.stringify({
           jsonrpc: "2.0",
           id: Date.now(),
@@ -158,13 +183,13 @@ export function PricingCalculator({
         }),
       });
       if (response.ok) {
-        const data = (await response.json()) as McpQuoteResponse;
-        const created = data.result?.structuredContent;
+        const data = await readJsonSafe<McpQuoteResponse>(response);
+        const created = data?.result?.structuredContent;
         if (created?.status === "created" && created.issueKey) {
           setQuoteStatus({
             mode: "jira",
             issueKey: created.issueKey,
-            issueUrl: created.issueUrl,
+            issueUrl: toSafeHttpUrl(created.issueUrl) ?? undefined,
           });
           return;
         }
@@ -182,6 +207,8 @@ export function PricingCalculator({
     }
     setQuoteStatus({ mode: "clipboard" });
   };
+
+  const safeIssueUrl = toSafeHttpUrl(quoteStatus?.issueUrl);
 
   return (
     <section
@@ -341,9 +368,9 @@ export function PricingCalculator({
               <span>
                 {t.bookingLeadSentPrefix} <b>{quoteStatus.issueKey}</b>
               </span>
-              {quoteStatus.issueUrl && (
+              {safeIssueUrl && (
                 <a
-                  href={quoteStatus.issueUrl}
+                  href={safeIssueUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 font-semibold underline"
