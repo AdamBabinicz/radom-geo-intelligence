@@ -10,6 +10,7 @@ import {
   projectToLocalKm,
   type GeoPoint,
 } from "@/src/lib/geo-math";
+import { SUPPORTED_LOCALES, resolveLocale, type Locale } from "@/src/locales";
 
 export const maxDuration = 30;
 
@@ -40,10 +41,36 @@ const HEADERS = {
   Accept: "application/json",
 };
 
+const MAX_HUB_POPULATION = 4_500_000;
+
 const SKIP_SUPER_ADMIN_REGEX =
-  /powiat|gmina|województwo|diecezj|metropoli|obszar|konurbacj|rzeczpospolita|gubernator|dzielnica|hrabstwo|county|state|diocese|archdiocese|eparchy|exarchate|ordinariate|vicariate|region|parish|aglomeracj|agglomerat|agglomération|communauté|intercommunal|métropole|metropole|urban area|urban unit|built-up|greater |statistical area|landkreis|okres|republic|voivodeship|kingdom|empire|general government|borough|suburb|arrondissement|canton|département|departement|préfecture|prefecture|commune|comarca|bezirk|unterbezirk|circoscrizione|municipality|constituency|unitary authority|\bpark$|\//i;
+  /powiat|gmina|województwo|diecezj|metropoli|obszar|konurbacj|rzeczpospolita|gubernator|dzielnica|hrabstwo|county|state|diocese|archdiocese|eparchy|exarchate|ordinariate|vicariate|region|parish|aglomeracj|agglomerat|agglomération|communauté|intercommunal|métropole|metropole|urban area|urban unit|built-up|greater |statistical area|landkreis|okres|republic|voivodeship|kingdom|empire|commonwealth|principality|duchy|archduchy|electorate|margraviate|palatinate|federation|confederation|protectorate|dominion|viceroyalty|governorate|macroregion|subregion|nuts|historical|\bformer\b|oblast|krai|autonomous|bundesland|stadtkreis|regierungsbezirk|borough|suburb|arrondissement|canton|département|departement|préfecture|prefecture|commune|comarca|provincia|comunidad|regione|città metropolitana|bezirk|unterbezirk|circoscrizione|municipality|constituency|unitary authority|\bpark$|\//i;
 
 const SKIP_DISTRICT_REGEX = /\bdistrict\b/i;
+
+function buildLanguagePriorityList(preferredLocale: Locale): string {
+  const ordered = [
+    preferredLocale,
+    ...SUPPORTED_LOCALES.filter((loc) => loc !== preferredLocale),
+  ];
+  return ordered.join(",");
+}
+
+function resolveRequestLocale(
+  explicitLocale: string | null,
+  acceptLanguageHeader: string | null,
+): Locale {
+  if (explicitLocale) {
+    return resolveLocale(explicitLocale);
+  }
+  if (acceptLanguageHeader) {
+    const primary = acceptLanguageHeader.split(",")[0]?.split("-")[0]?.trim();
+    if (primary) {
+      return resolveLocale(primary);
+    }
+  }
+  return resolveLocale();
+}
 
 async function readJsonSafe<T>(res: Response): Promise<T | null> {
   try {
@@ -85,8 +112,9 @@ function parseWktPoint(locValue: string | undefined): GeoPoint | null {
 
 async function geocodeCity(
   city: string,
+  languageList: string,
 ): Promise<{ name: string; point: GeoPoint } | null> {
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=jsonv2&limit=5&accept-language=en`;
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=jsonv2&limit=5&accept-language=${encodeURIComponent(languageList)}`;
   const res = await fetch(url, {
     headers: HEADERS,
     signal: AbortSignal.timeout(7000),
@@ -181,8 +209,10 @@ async function queryWikidataRadius(
   maxPop: number,
   limit: number,
   timeoutMs: number,
+  languageList: string,
 ): Promise<RawPlace[]> {
-  const sparql = `SELECT ?placeLabel ?loc ?pop WHERE { SERVICE wikibase:around { ?place wdt:P625 ?loc . bd:serviceParam wikibase:center "Point(${center.lon.toFixed(4)} ${center.lat.toFixed(4)})"^^geo:wktLiteral . bd:serviceParam wikibase:radius "${radKm}" . } ?place wdt:P1082 ?pop . FILTER(?pop > ${minPop} && ?pop < ${maxPop}) SERVICE wikibase:label { bd:serviceParam wikibase:language "en,pl" . } } LIMIT ${limit}`;
+  // Exclude dissolved historical entities (wdt:P576) globally without hardcoding place names
+  const sparql = `SELECT ?placeLabel ?loc ?pop WHERE { SERVICE wikibase:around { ?place wdt:P625 ?loc . bd:serviceParam wikibase:center "Point(${center.lon.toFixed(4)} ${center.lat.toFixed(4)})"^^geo:wktLiteral . bd:serviceParam wikibase:radius "${radKm}" . } ?place wdt:P1082 ?pop . FILTER(?pop > ${minPop} && ?pop < ${maxPop}) FILTER NOT EXISTS { ?place wdt:P576 ?dissolved . } SERVICE wikibase:label { bd:serviceParam wikibase:language "${languageList}" . } } LIMIT ${limit}`;
   const url = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
   const res = await fetch(url, {
     headers: { ...HEADERS, Accept: "application/sparql-results+json" },
@@ -217,11 +247,29 @@ async function queryWikidataRadius(
   return out;
 }
 
-async function fetchViaWikidata(center: GeoPoint): Promise<RawPlace[]> {
-  // Symmetric concentric queries so one-sided provider drops cannot starve East or West
+async function fetchViaWikidata(
+  center: GeoPoint,
+  languageList: string,
+): Promise<RawPlace[]> {
   const [localRes, hubsRes] = await Promise.allSettled([
-    queryWikidataRadius(center, 38, 1200, 15000000, 200, 9000),
-    queryWikidataRadius(center, 95, 35000, 15000000, 120, 9000),
+    queryWikidataRadius(
+      center,
+      38,
+      1200,
+      MAX_HUB_POPULATION,
+      200,
+      9000,
+      languageList,
+    ),
+    queryWikidataRadius(
+      center,
+      95,
+      35000,
+      MAX_HUB_POPULATION,
+      120,
+      9000,
+      languageList,
+    ),
   ]);
 
   const local = localRes.status === "fulfilled" ? localRes.value : [];
@@ -239,9 +287,10 @@ async function fetchViaWikidata(center: GeoPoint): Promise<RawPlace[]> {
         center,
         45,
         500,
-        15000000,
+        MAX_HUB_POPULATION,
         120,
         7500,
+        languageList,
       );
     } catch {
       extraNear = [];
@@ -255,9 +304,10 @@ async function fetchViaWikidata(center: GeoPoint): Promise<RawPlace[]> {
     center,
     60,
     300,
-    15000000,
+    MAX_HUB_POPULATION,
     100,
     8000,
+    languageList,
   );
   if (fallback.length < 3) throw new Error("Wikidata returned too few places");
   return fallback;
@@ -313,7 +363,6 @@ function selectBalancedAcrossSectors(
     sectorCounts.set(s, (sectorCounts.get(s) ?? 0) + 1);
   }
 
-  // Pass 1: pick at most 1 best candidate in each compass sector
   for (
     let sector = 0;
     sector < sectorCount && selected.length < maxCount;
@@ -333,7 +382,6 @@ function selectBalancedAcrossSectors(
     }
   }
 
-  // Pass 2: allow at most 2 candidates per sector while preserving label separation
   for (const item of pool) {
     if (selected.length >= maxCount) break;
     if (usedNames.has(item.name)) continue;
@@ -346,7 +394,6 @@ function selectBalancedAcrossSectors(
     }
   }
 
-  // Pass 3: gentle fallback only if fewer than maxCount points exist (e.g. coastal/border cities)
   for (const item of pool) {
     if (selected.length >= maxCount) break;
     if (usedNames.has(item.name)) continue;
@@ -463,6 +510,11 @@ function buildDynamicTowns(
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const city = searchParams.get("city")?.trim() ?? "";
+  const requestLocale = resolveRequestLocale(
+    searchParams.get("locale"),
+    request.headers.get("accept-language"),
+  );
+  const languageList = buildLanguagePriorityList(requestLocale);
 
   if (!city) {
     return NextResponse.json(
@@ -480,7 +532,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const geocoded = await geocodeCity(city);
+    const geocoded = await geocodeCity(city, languageList);
     if (!geocoded) {
       return NextResponse.json(
         { code: "CITY_NOT_FOUND", error: `City not found: ${city}` },
@@ -490,15 +542,14 @@ export async function GET(request: Request) {
 
     const rawPlaces = await Promise.any([
       fetchViaOverpass(geocoded.point),
-      fetchViaWikidata(geocoded.point),
+      fetchViaWikidata(geocoded.point, languageList),
     ]);
 
     const towns = buildDynamicTowns(geocoded.name, geocoded.point, rawPlaces);
     const northernPool = towns.filter((t) => t.dyKm > 8);
+    // Preserve hubPool's highest-population sort order before falling back to northernmost point
     const northernHub =
-      northernPool
-        .filter((t) => t.isRegionalHub)
-        .sort((a, b) => b.dyKm - a.dyKm)[0] ??
+      northernPool.filter((t) => t.isRegionalHub)[0] ??
       northernPool.sort((a, b) => b.dyKm - a.dyKm)[0] ??
       towns.filter((t) => t.dyKm > 0).sort((a, b) => b.dyKm - a.dyKm)[0] ??
       towns[0];
