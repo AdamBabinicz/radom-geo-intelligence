@@ -25,7 +25,7 @@ const GROQ_FALLBACK_MODELS = [
   "qwen/qwen3.8-27b",
   "openai/gpt-oss-20b",
 ] as const;
-const MAX_GROQ_RESEARCH_CHARS = 8_500;
+const MAX_GROQ_RESEARCH_CHARS = 10_500;
 
 interface GroundingSource {
   title: string;
@@ -421,10 +421,10 @@ function extractVisibleText(html: string): { title: string; text: string } {
     .replace(/[ \t\r\f\v]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
-  return { title, text: stripped.slice(0, 10_000) };
+  return { title, text: stripped.slice(0, 12_000) };
 }
 
-function compactSiteText(rawText: string, maxChars = 2400): string {
+function compactSiteText(rawText: string, maxChars = 3_600): string {
   const lines = rawText
     .split("\n")
     .map((line) => line.trim())
@@ -453,9 +453,18 @@ function prioritizeCurrencyLines(rawText: string, maxChars: number): string {
     .filter((l) => l.length > 2);
   const currencyRe =
     /(?:\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])|(?:€|\$|pln|eur)\s*\d)/i;
-  const currencyLines = lines.filter((l) => currencyRe.test(l));
+  const namedCurrencyLines = lines.filter(
+    (l) =>
+      currencyRe.test(l) &&
+      /[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]{3,}/.test(
+        l.replace(/(?:pln|eur|usd|zł|od|from)/gi, ""),
+      ),
+  );
+  const currencyLines = lines.filter(
+    (l) => currencyRe.test(l) && !namedCurrencyLines.includes(l),
+  );
   const otherLines = lines.filter((l) => !currencyRe.test(l));
-  const ordered = [...currencyLines, ...otherLines];
+  const ordered = [...namedCurrencyLines, ...currencyLines, ...otherLines];
   const chunks: string[] = [];
   let len = 0;
   for (const line of ordered) {
@@ -475,7 +484,7 @@ function buildCompactGroqResearch(
   const sections: string[] = [];
   let remaining = maxChars;
   if (gbpContext) {
-    const gbpCap = Math.min(2_600, Math.floor(maxChars * 0.35));
+    const gbpCap = Math.min(2_600, Math.floor(maxChars * 0.3));
     const gbpSlice = gbpContext.slice(0, gbpCap).trim();
     sections.push(gbpSlice);
     remaining -= gbpSlice.length + 2;
@@ -483,7 +492,7 @@ function buildCompactGroqResearch(
   if (fetchedSites.length > 0 && remaining > 400) {
     const sitesToInclude = fetchedSites.slice(0, 9);
     const perSiteBudget = Math.max(
-      360,
+      420,
       Math.floor(remaining / sitesToInclude.length) - 70,
     );
     for (const site of sitesToInclude) {
@@ -505,11 +514,14 @@ function buildCompactGroqResearch(
   return sections.join("\n\n").slice(0, maxChars);
 }
 
-function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
+function findPricingSubpageUrls(html: string, baseUrl: URL): string[] {
   const anchorMatches = Array.from(
     html.matchAll(/<a[^>]+href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi),
   );
-  let fallbackOfferUrl: string | null = null;
+  const directPricing: string[] = [];
+  const secondaryOffer: string[] = [];
+  const seen = new Set<string>();
+
   for (const match of anchorMatches) {
     const href = (match[1] ?? "").trim();
     const label = (match[2] ?? "").replace(/<[^>]+>/g, " ").trim();
@@ -517,7 +529,7 @@ function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
     if (/\.(jpg|jpeg|png|webp|avif|pdf|svg)$/i.test(href)) continue;
     const isDirectPricing =
       /(cennik|cena|pricing|price-list|prices|rates)/.test(haystack);
-    const isSecondaryOffer = /(oferta|wynajem|atrakcj)/.test(haystack);
+    const isSecondaryOffer = /(oferta|wynajem|atrakcj|uslug)/.test(haystack);
     if (!isDirectPricing && !isSecondaryOffer) continue;
     try {
       const resolved = new URL(href, baseUrl);
@@ -525,14 +537,20 @@ function findPricingSubpageUrl(html: string, baseUrl: URL): string | null {
         resolved.origin === baseUrl.origin &&
         resolved.pathname !== baseUrl.pathname
       ) {
-        if (isDirectPricing) return resolved.toString();
-        if (!fallbackOfferUrl) fallbackOfferUrl = resolved.toString();
+        const urlStr = resolved.toString();
+        if (seen.has(urlStr)) continue;
+        seen.add(urlStr);
+        if (isDirectPricing) {
+          directPricing.push(urlStr);
+        } else {
+          secondaryOffer.push(urlStr);
+        }
       }
     } catch {
       continue;
     }
   }
-  return fallbackOfferUrl;
+  return [...directPricing, ...secondaryOffer].slice(0, 2);
 }
 
 async function fetchHtmlPage(url: string): Promise<string | null> {
@@ -561,15 +579,18 @@ async function fetchSiteContext(
   if (!html) return null;
   const { title, text } = extractVisibleText(html);
   let combined = text;
-  const subpageUrl = findPricingSubpageUrl(html, safeUrl);
-  if (subpageUrl) {
-    const subHtml = await fetchHtmlPage(subpageUrl);
-    if (subHtml) {
+  const subpageUrls = findPricingSubpageUrls(html, safeUrl);
+  if (subpageUrls.length > 0) {
+    const subHtmlList = await Promise.all(
+      subpageUrls.map((subUrl) => fetchHtmlPage(subUrl)),
+    );
+    subHtmlList.forEach((subHtml, idx) => {
+      if (!subHtml) return;
       const subVisible = extractVisibleText(subHtml);
       if (subVisible.text) {
-        combined = `${combined}\n[SUBPAGE ${subpageUrl}]\n${subVisible.text}`;
+        combined = `${combined}\n[SUBPAGE ${subpageUrls[idx]}]\n${subVisible.text}`;
       }
-    }
+    });
   }
   if (
     combined.length < 400 ||
@@ -601,7 +622,7 @@ async function fetchSiteContext(
       }
     }
   }
-  const compacted = compactSiteText(combined, 2400);
+  const compacted = compactSiteText(combined, 3_600);
   if (!compacted) return null;
   return {
     url: safeUrl.toString(),
@@ -1145,8 +1166,9 @@ function buildSynthesisPrompt(
     `Do NOT invent companies, numbers, ratings, or prices not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
     `Active tracked services to benchmark (use these EXACT serviceKey values): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
-    `CRITICAL UNIT RULE: Match local competitor prices into marketBenchmarks ONLY when BOTH the service scope AND billing unit match (e.g., NEVER match an hourly rate like "50 zł/h", a per-hour surcharge, a security deposit/zadatek, or a delivery fee against a full-day/full-event package price like 800 PLN). If a competitor only lists an incompatible unit (such as zł/h vs full-day rental), mention it in competitors[].priceSummary and OMIT that service from marketBenchmarks.`,
-    `Compute avgPricePln, minPricePln, maxPricePln across found local companies only for serviceKey entries with real, unit-compatible price evidence.`,
+    `CRITICAL SCOPE & UNIT RULE: Match each service strictly by its human label and billing unit — never rely on internal serviceKey naming alone. NEVER map prices between different item sizes, furniture types, or service tiers (for example: NEVER assign a small chair/pouf/cushion price like 15-25 PLN to an armchair/fotel, NEVER assign a 2-seat sofa price to a corner sofa/narożnik, NEVER assign a doormat price to a full carpet, NEVER assign a 1-seat mattress price to a double mattress, and NEVER compare hourly/add-on/deposit/travel fees against full-service or full-day prices).`,
+    `If a competitor only lists an incompatible item or unit, mention it in competitors[].priceSummary and OMIT that service from marketBenchmarks.`,
+    `Compute avgPricePln, minPricePln, maxPricePln across found local companies only for serviceKey entries with exact item-and-unit-compatible price evidence, and briefly cite the matched competitor items/prices in "note".`,
     `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, maxResearchChars)}`,
   ]
     .filter(Boolean)
@@ -1169,7 +1191,7 @@ async function structureReportWithGemini(
     validServiceKeys,
     activeServices,
     nicheContextLabel,
-    22_000,
+    24_000,
   );
 
   const structuredResponse = await ai.models.generateContent({
@@ -1281,12 +1303,13 @@ async function structureReportWithGroq(
         body: JSON.stringify({
           model,
           temperature: 0.1,
+          max_tokens: 4000,
           response_format: { type: "json_object" },
           messages: [
             {
               role: "system",
               content:
-                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Only cite companies and numbers supported by input, and never compare hourly/add-on rates against full-day/package prices.',
+                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Only cite companies and numbers supported by input, and never mix different furniture sizes, item categories, or billing units.',
             },
             {
               role: "user",
@@ -1380,11 +1403,13 @@ function sanitizeStructuredPayload(
           : undefined,
     }));
 
+  const seenBenchmarkKeys = new Set<string>();
   const marketBenchmarks = (parsed?.marketBenchmarks ?? [])
     .filter((b: BenchmarkFinding) => {
       if (
         typeof b?.serviceKey !== "string" ||
         !validServiceKeys.has(b.serviceKey) ||
+        seenBenchmarkKeys.has(b.serviceKey) ||
         typeof b.avgPricePln !== "number" ||
         !Number.isFinite(b.avgPricePln) ||
         b.avgPricePln <= 0
@@ -1395,14 +1420,15 @@ function sanitizeStructuredPayload(
       if (ourPrice && ourPrice > 0) {
         const samples = Math.max(1, Math.round(b.sampleCount || 1));
         const ratio = b.avgPricePln / ourPrice;
-        // Guard against unit mismatches (e.g. 50 PLN/h matched against 800 PLN/day)
-        if (samples <= 2 && (ratio < 0.2 || ratio > 6)) {
+        // Guard against unit or item-size mismatches (e.g. chair 20 PLN vs armchair 70 PLN, or 50 PLN/h vs 800 PLN/day)
+        if (samples <= 2 && (ratio < 0.35 || ratio > 3.5)) {
           return false;
         }
-        if (ratio < 0.12 || ratio > 8) {
+        if (ratio < 0.25 || ratio > 4.5) {
           return false;
         }
       }
+      seenBenchmarkKeys.add(b.serviceKey);
       return true;
     })
     .map((b: BenchmarkFinding) => ({

@@ -111,6 +111,8 @@ const UPHOLSTERY_DETECTION_KEYS = new Set<string>([
   "cornerSofa",
   "twoSeatCouch",
   "live:armchair-cleaning",
+  "live:fotel",
+  "live:krzeslo",
   "live:mattress-cleaning",
   "live:paver-cleaning",
 ]);
@@ -296,6 +298,101 @@ const FALLBACK_SERVICE_RULES: FallbackKeywordRule[] = [
     patterns: [/udra[żz]nianie/gi, /drain\s+unclog/gi],
   },
 ];
+
+const CHAIR_LABEL_RE =
+  /(?:^|[^a-ząćęłńóśźż])(krzes[łl][a-ząćęłńóśźż]*|chair[a-z]*|taboret[a-ząćęłńóśźż]*|stool[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+const ARMCHAIR_OR_SMALL_SEAT_RE =
+  /(?:^|[^a-ząćęłńóśźż])(fotel[a-ząćęłńóśźż]*|armchair[a-z]*|recliner[a-z]*|uszak[a-ząćęłńóśźż]*|puf[a-ząćęłńóśźż]*|pouf[a-z]*|ottoman[a-z]*|poduch[a-ząćęłńóśźż]*|cushion[a-z]*|kanap[a-ząćęłńóśźż]*|sof[a-ząćęłńóśźż]*|naro[żz]nik[a-ząćęłńóśźż]*|corner|materac[a-ząćęłńóśźż]*|mattress[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+const CARPET_LABEL_RE =
+  /(?:^|[^a-ząćęłńóśźż])(dywan[a-ząćęłńóśźż]*|carpet[a-z]*|rug[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+const FLOORING_LABEL_RE =
+  /(?:^|[^a-ząćęłńóśźż])(wyk[łl]adzin[a-ząćęłńóśźż]*|fitted\s+carpet[a-z]*|flooring)(?=$|[^a-ząćęłńóśźż])/i;
+const CORNER_SOFA_LABEL_RE =
+  /(?:^|[^a-ząćęłńóśźż])(naro[żz]nik[a-ząćęłńóśźż]*|corner\s*sofa[a-z]*|l[\s-]?shape[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+const COUCH_LABEL_RE =
+  /(?:^|[^a-ząćęłńóśźż])(sof[a-ząćęłńóśźż]*|kanap[a-ząćęłńóśźż]*|couch[a-z]*|loveseat[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+
+function isCanonicalKeyCompatibleWithLabel(
+  canonicalKey: string,
+  labelPl: string,
+  labelEn: string,
+): boolean {
+  const text = `${labelPl} ${labelEn}`.toLowerCase();
+  switch (canonicalKey) {
+    case "upholsteryChair":
+      return CHAIR_LABEL_RE.test(text) && !ARMCHAIR_OR_SMALL_SEAT_RE.test(text);
+    case "carpetArea":
+      return (
+        CARPET_LABEL_RE.test(text) &&
+        !FLOORING_LABEL_RE.test(text) &&
+        !/(?:oriental|jedwab|silk|kostk|paver|p[łl]yt|tile|fotel|krzes[łl]|sof|naro[żz]nik|materac)/i.test(
+          text,
+        )
+      );
+    case "carpetFlooring":
+      return (
+        FLOORING_LABEL_RE.test(text) &&
+        !/(?:oriental|kostk|paver|p[łl]yt|tile|fotel|krzes[łl]|sof|naro[żz]nik)/i.test(
+          text,
+        )
+      );
+    case "cornerSofa":
+      return CORNER_SOFA_LABEL_RE.test(text);
+    case "twoSeatCouch":
+      return (
+        COUCH_LABEL_RE.test(text) &&
+        !CORNER_SOFA_LABEL_RE.test(text) &&
+        !/(?:3[\s-]*(?:os|seat)|trzyosobow|wersalk|tapczan|fotel|armchair|krzes[łl]|chair)/i.test(
+          text,
+        )
+      );
+    case "acService":
+      return (
+        /(?:klimatyzac|air[\s-]*cond|\bac\b|split)/i.test(text) &&
+        !/(?:pomp|heat\s*pump|wentylac|duct)/i.test(text)
+      );
+    case "heatPumpCheck":
+      return /(?:pomp[a-ząćęłńóśźż]*\s+ciep[łl]|heat\s*pump)/i.test(text);
+    case "ductCleaning":
+      return /(?:wentylac|rekuperac|duct)/i.test(text);
+    case "leakRepair":
+      return /(?:wyciek|leak|awari|rur|pipe)/i.test(text);
+    case "boilerService":
+      return /(?:kot[łl]|kocio[łl]|piec|boiler|furnace)/i.test(text);
+    case "drainUnclog":
+      return /(?:udra[żz]nian|kanalizac|odp[łl]yw|drain|sewer|unclog)/i.test(
+        text,
+      );
+    default:
+      return true;
+  }
+}
+
+function resolveCanonicalPromotionKey(
+  labelPl: string,
+  labelEn: string,
+): string | null {
+  const text = `${labelPl} ${labelEn}`.toLowerCase();
+  if (CHAIR_LABEL_RE.test(text) && !ARMCHAIR_OR_SMALL_SEAT_RE.test(text)) {
+    return "upholsteryChair";
+  }
+  if (CORNER_SOFA_LABEL_RE.test(text)) {
+    return "cornerSofa";
+  }
+  if (isCanonicalKeyCompatibleWithLabel("twoSeatCouch", labelPl, labelEn)) {
+    return "twoSeatCouch";
+  }
+  if (isCanonicalKeyCompatibleWithLabel("carpetArea", labelPl, labelEn)) {
+    return "carpetArea";
+  }
+  if (
+    isCanonicalKeyCompatibleWithLabel("carpetFlooring", labelPl, labelEn) &&
+    !/(?:do|up\s*to|<=)\s*50\b/i.test(text)
+  ) {
+    return "carpetFlooring";
+  }
+  return null;
+}
 
 function isBlockedHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
@@ -724,7 +821,6 @@ function extractJsxChildrenExpr(elementSlice: string): string {
     return elementSlice.slice(i);
   }
 
-  // Fallback for React.createElement("td", props, ...children)
   let commaCount = 0;
   let depth = 0;
   let inStr: string | null = null;
@@ -866,7 +962,6 @@ function decodeJsBundles(rawBundles: string[]): string[] {
     out.push(clean);
   };
 
-  // 1. Generic unquoted JS price objects: { ... base|price|cost|amount|rate|fee: <num> ... }
   const objPriceRe =
     /\b(?:base|price|cost|amount|rate|fee|minPrice|startingPrice)\s*:\s*(\d{1,6}(?:[.,]\d{1,2})?)\b/g;
   const catalogEntries: Array<{
@@ -980,7 +1075,6 @@ function decodeJsBundles(rawBundles: string[]): string[] {
     catalogCount += 1;
   }
 
-  // 2. Compiled React/JSX table rows (<tr><td>service</td><td>price</td></tr>) with shared i18n lookup
   for (const js of jsTexts) {
     const trRe = /(?:\.jsxs?|\.createElement)\(\s*["']tr["']\s*,/g;
     for (const trMatch of js.matchAll(trRe)) {
@@ -1043,12 +1137,10 @@ function decodeJsBundles(rawBundles: string[]): string[] {
     }
   }
 
-  // 3. Generic key -> price string pairs (i18n bundles)
   const priceTextRe =
     /(?:\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])|(?:€|\$|pln|eur)\s*\d)/i;
   for (const [key, value] of dict.flat.entries()) {
     if (value.length > 180 || !priceTextRe.test(value)) continue;
-    // When full catalog rows already exist, suppress generic *PriceTag card teaser badges
     if (catalogCount >= 4 && /PriceTag$/i.test(key)) continue;
     if (
       /^(?:€|\$|usd|eur)?\s*\d+(?:[.,]\d+)?\s*(?:z[łl]|pln)?$/i.test(value) &&
@@ -1067,7 +1159,6 @@ function decodeJsBundles(rawBundles: string[]): string[] {
     pushLine(`KEY_PAIR: ${prefix}${basePrefix}${value}`);
   }
 
-  // 4. Standalone quoted strings containing explicit currency/price
   const literalRe = /(?:"((?:[^"\\]|\\.){4,220})"|'((?:[^'\\]|\\.){4,220})')/g;
   for (const js of jsTexts) {
     for (const match of js.matchAll(literalRe)) {
@@ -1271,7 +1362,6 @@ function extractDeterministicFallback(
 ): ExtractedPrice[] {
   const byService = extractFromJsonLd(html);
 
-  // 1. Parse pre-extracted CATALOG_ITEM lines deterministically (industry-agnostic)
   for (const catalogItem of parseCatalogItemsFromContext(
     contextLines,
     hasSpaBundle,
@@ -1281,7 +1371,6 @@ function extractDeterministicFallback(
     }
   }
 
-  // 2. Match canonical & common service rules on KEY_PAIR + visible text lines
   interface CleanSegment {
     searchTarget: string;
     priceTarget: string;
@@ -1501,6 +1590,22 @@ function normalizeSiteProfile(
   };
 }
 
+function buildUniqueLiveKey(
+  labelPl: string,
+  labelEn: string,
+  takenKeys: Set<string>,
+): string {
+  const baseSlug = toAsciiSlug(labelPl || labelEn);
+  if (!baseSlug) return "";
+  let candidate = `live:${baseSlug}`;
+  let suffix = 2;
+  while (takenKeys.has(candidate)) {
+    candidate = `live:${baseSlug.slice(0, 44)}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
 function normalizeAiPayload(
   parsed: RawAiResponsePayload,
   metadata: HtmlMetadata,
@@ -1509,6 +1614,8 @@ function normalizeAiPayload(
   if (!Array.isArray(parsed.prices)) return null;
 
   const deduped = new Map<string, ExtractedPrice>();
+  const takenKeys = new Set<string>();
+
   for (const item of parsed.prices) {
     const labelEn = String(item.labelEn ?? item.labelPl ?? "").trim();
     const labelPl = String(item.labelPl ?? item.labelEn ?? "").trim();
@@ -1521,8 +1628,15 @@ function normalizeAiPayload(
     let key = normalizeExtractedServiceKey(item.serviceKey, labelEn || labelPl);
     if (!key) continue;
 
-    // Disambiguate distinct variants (e.g. Oriental Carpet vs Standard Carpet, <=50 m2 vs >50 m2, 2-seat vs 3-seat)
-    // instead of dropping them if the model reuses a canonical key.
+    if (
+      CANONICAL_SERVICE_KEYS.has(key) &&
+      !isCanonicalKeyCompatibleWithLabel(key, labelPl, labelEn)
+    ) {
+      const fallbackLive = buildUniqueLiveKey(labelPl, labelEn, takenKeys);
+      if (!fallbackLive) continue;
+      key = fallbackLive;
+    }
+
     const existing = deduped.get(key);
     if (existing) {
       const newSlug = toAsciiSlug(labelPl || labelEn);
@@ -1533,15 +1647,12 @@ function normalizeAiPayload(
       ) {
         continue;
       }
-      let candidateKey = `live:${newSlug}`;
-      let suffix = 2;
-      while (deduped.has(candidateKey)) {
-        candidateKey = `live:${newSlug.slice(0, 44)}-${suffix}`;
-        suffix += 1;
-      }
+      const candidateKey = buildUniqueLiveKey(labelPl, labelEn, takenKeys);
+      if (!candidateKey) continue;
       key = candidateKey;
     }
 
+    takenKeys.add(key);
     deduped.set(key, {
       serviceKey: key,
       labelPl: labelPl.slice(0, 80),
@@ -1559,6 +1670,17 @@ function normalizeAiPayload(
 
   const list = Array.from(deduped.values()).slice(0, MAX_EXTRACTED_ITEMS);
   if (list.length === 0) return null;
+
+  const activeKeys = new Set(list.map((entry) => entry.serviceKey));
+  for (const entry of list) {
+    if (!entry.serviceKey.startsWith("live:")) continue;
+    const promoted = resolveCanonicalPromotionKey(entry.labelPl, entry.labelEn);
+    if (promoted && !activeKeys.has(promoted)) {
+      activeKeys.delete(entry.serviceKey);
+      activeKeys.add(promoted);
+      entry.serviceKey = promoted;
+    }
+  }
 
   return {
     prices: list,
@@ -1622,7 +1744,14 @@ const AI_SYSTEM_INSTRUCTION =
   "Given a compact site summary (SITE_TITLE/DESC/HEADINGS, CATALOG_PRICE_ITEMS, KEYED_PRICES, PAGE_PRICE_LINES), return strictly valid JSON:\n" +
   "1) Populate 'siteProfile': company 'businessName', concise 'nichePl' (Polish, 2-6 words), concise 'nicheEn' (English, 2-6 words), 'matchedIndustryId' ('upholstery' | 'hvac' | 'plumbing' | 'custom' — choose 'custom' unless the business is genuinely carpet/upholstery cleaning, HVAC, or plumbing), and 3-4 short local search query stems WITHOUT city names in 'searchQueriesPl' and 'searchQueriesEn'.\n" +
   "2) Extract EVERY distinct customer service, attraction, tier, or rental option into 'prices' (up to 35 items). CRITICAL: Preserve EVERY item listed under CATALOG_PRICE_ITEMS without merging separate tiers, sizes, or variants (for example keep standard vs oriental carpet, <=50 m2 vs >50 m2 flooring, 2-seat vs 3-seat sofa separate even when prices match). Never emit generic category badge teasers if detailed rows are present.\n" +
-  "Reuse canonical keys ONLY for the single closest primary match: [carpetArea, carpetFlooring, upholsteryChair, twoSeatCouch, cornerSofa, acService, heatPumpCheck, ductCleaning, leakRepair, boilerService, drainUnclog]. For all additional services, sizes, or tiers generate unique descriptive 'live:<slug>' keys (never assign the same serviceKey twice).\n" +
+  "Reuse canonical keys ONLY for the exact matching service scope:\n" +
+  "- carpetArea: standard carpet/rug washing per m2 (NOT oriental/silk rugs and NOT fitted carpet flooring)\n" +
+  "- carpetFlooring: fitted wall-to-wall/office carpet flooring per m2 (prefer the standard >50 m2 base tier if multiple tiers exist)\n" +
+  "- upholsteryChair: ONLY small dining/office chair (krzeslo/chair) — NEVER armchair (fotel), pouf (pufa), or cushions (armchair/fotel MUST use 'live:fotel')\n" +
+  "- twoSeatCouch: ONLY 2-seat sofa / standard couch (sofa 2-osobowa/kanapa) — NEVER 3-seat sofa or corner sofa\n" +
+  "- cornerSofa: ONLY corner / L-shaped sofa (naroznik/corner sofa)\n" +
+  "- acService, heatPumpCheck, ductCleaning, leakRepair, boilerService, drainUnclog: exact HVAC/plumbing equivalents.\n" +
+  "For all other services, sizes, or variants (including armchair/fotel, 3-seat sofa, oriental carpet, mattress, pouf, daybed), generate unique descriptive 'live:<slug>' keys (never assign the same serviceKey twice).\n" +
   "For ranges like '20 - 50 zł' or '15 - 30 zł', use the starting price as 'detectedAmount'. Strictly exclude travel/distance fees (dojazd, PLN/km), security deposits (zadatek, kaucja), and 0 PLN freebies.";
 
 async function extractWithGemini(

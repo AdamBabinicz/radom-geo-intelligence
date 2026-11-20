@@ -332,9 +332,8 @@ export function Dashboard() {
 
   const workspaceProfile = resolveWorkspaceProfile(websiteUrl, t.accountName);
   const baseIndustryMarket = applyIndustryToMarket(baseMarket, industryId);
-  const baselineByKey = new Map(
-    baseIndustryMarket.benchmarks.map((row) => [row.serviceKey, row]),
-  );
+  const isCaseStudy =
+    (baseIndustryMarket.source ?? "case-study") === "case-study";
 
   const activeBenchmarksSource =
     syncedCatalog && syncedCatalog.length > 0
@@ -343,12 +342,22 @@ export function Dashboard() {
         ? []
         : baseIndustryMarket.benchmarks;
 
+  const hasLiveAiScan = Boolean(liveScan?.aiEnhanced);
   const market: MarketProfile = {
     ...baseIndustryMarket,
-    benchmarks: activeBenchmarksSource.map((row) => ({
-      ...row,
-      localPricePln: scannedBenchmarks[row.serviceKey] ?? row.localPricePln,
-    })),
+    benchmarks: activeBenchmarksSource.map((row) => {
+      const scanned = scannedBenchmarks[row.serviceKey];
+      const resolvedLocalPrice =
+        typeof scanned === "number" && scanned > 0
+          ? scanned
+          : hasLiveAiScan && (row.isLiveDiscovered || !isCaseStudy)
+            ? 0
+            : row.localPricePln;
+      return {
+        ...row,
+        localPricePln: resolvedLocalPrice,
+      };
+    }),
   };
 
   const metrics = getMarketMetrics(market, radiusKm);
@@ -359,7 +368,6 @@ export function Dashboard() {
       .map((town) => town.name),
   ];
 
-  const isCaseStudy = (market.source ?? "case-study") === "case-study";
   const currentYear = new Date().getFullYear();
   const copyrightRange = currentYear >= 2027 ? `2026 - ${currentYear}` : "2026";
   const liveCompetitorsCount = liveScan?.competitors.length ?? 0;
@@ -411,13 +419,25 @@ export function Dashboard() {
       }
 
       const detectedPreset = data.siteProfile?.matchedIndustryId;
-      if (
+      const effectiveIndustryId: IndustryId =
         detectedPreset === "upholstery" ||
         detectedPreset === "hvac" ||
         detectedPreset === "plumbing"
-      ) {
-        setIndustryId(detectedPreset);
+          ? detectedPreset
+          : industryId;
+      if (effectiveIndustryId !== industryId) {
+        setIndustryId(effectiveIndustryId);
       }
+
+      const effectiveBaselineByKey = new Map(
+        INDUSTRY_TEMPLATES[effectiveIndustryId].services.map((row) => [
+          row.serviceKey,
+          row,
+        ]),
+      );
+      const canUseCaseStudyBaseline =
+        baseMarket.id === RADOM_UPHOLSTERY_MARKET.id &&
+        (baseMarket.source ?? "case-study") === "case-study";
 
       const nextCatalog: IndustryServiceItem[] = [];
       const seenKeys = new Set<string>();
@@ -435,7 +455,7 @@ export function Dashboard() {
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
 
-        const preset = baselineByKey.get(key);
+        const preset = effectiveBaselineByKey.get(key);
         const unitType: ServiceUnitType =
           item.unitType === "m2" ||
           item.unitType === "piece" ||
@@ -445,10 +465,25 @@ export function Dashboard() {
               ? resolveUnitType(preset)
               : "fixed";
 
+        const presetUnit = preset ? resolveUnitType(preset) : null;
+        const isUnitCompatible =
+          presetUnit === null || (unitType === "m2") === (presetUnit === "m2");
+        const isPriceScaleCompatible =
+          !preset ||
+          preset.ourPricePln <= 0 ||
+          (item.pricePln / preset.ourPricePln >= 0.4 &&
+            item.pricePln / preset.ourPricePln <= 2.5);
+
         nextCatalog.push({
           serviceKey: key,
           ourPricePln: Math.round(item.pricePln),
-          localPricePln: preset?.localPricePln ?? 0,
+          localPricePln:
+            canUseCaseStudyBaseline &&
+            preset &&
+            isUnitCompatible &&
+            isPriceScaleCompatible
+              ? preset.localPricePln
+              : 0,
           isPerUnit: unitType !== "fixed",
           unitType,
           labels:
