@@ -83,6 +83,7 @@ interface SiteProfileParam {
 interface ScanRequestParams {
   city: string;
   country: string;
+  countryCode?: string;
   industryId: IndustryId;
   radiusKm: number;
   locale: "pl" | "en";
@@ -156,6 +157,25 @@ const AGGREGATOR_HOSTS = [
   "fresha.com",
   "yelp.com",
   "tripadvisor.com",
+  "angi.com",
+  "homeadvisor.com",
+  "thumbtack.com",
+  "bbb.org",
+  "yellowpages.com",
+  "houzz.com",
+  "expertise.com",
+  "nextdoor.com",
+  "porch.com",
+  "bark.com",
+  "checkatrade.com",
+  "mybuilder.com",
+  "trustpilot.com",
+  "mapquest.com",
+  "superpages.com",
+  "manta.com",
+  "birdeye.com",
+  "chamberofcommerce.com",
+  "threebestrated.com",
   "wikipedia.org",
   "duckduckgo.com",
   "google.com",
@@ -163,10 +183,18 @@ const AGGREGATOR_HOSTS = [
 ];
 
 const CURRENCY_LINE_RE =
-  /(?:\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])|(?:€|\$|pln|eur)\s*\d)/i;
+  /(?:\d\s*(?:z[łl]|pln|eur|usd|gbp|chf|cad|aud|\$|€|£|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])|(?:€|\$|£|pln|eur|usd|gbp|chf|cad|aud)\s*\d)/i;
 
 const ZERO_PRICE_ONLY_RE =
-  /^\s*0+(?:[.,]0+)?\s*(?:z[łl]|pln|eur|usd|\$|€)\s*$/i;
+  /^\s*(?:0+(?:[.,]0+)?\s*(?:z[łl]|pln|eur|usd|gbp|chf|cad|aud|\$|€|£)|(?:€|\$|£)\s*0+(?:[.,]0+)?)\s*$/i;
+
+const BOT_BLOCK_RE =
+  /(bot verification|just a moment|attention required|verify you are human|access denied|checking your browser|enable javascript and cookies|security check|captcha)/i;
+
+function isBotChallengePage(title: string, visibleText: string): boolean {
+  if (BOT_BLOCK_RE.test(title)) return true;
+  return visibleText.length < 1_000 && BOT_BLOCK_RE.test(visibleText);
+}
 
 const VENDOR_SCRIPT_RE =
   /^(?:react|react-dom|radix|lucide|icons|motion|framer-motion|query|tanstack|vendor|polyfill|chunk-vendors|gtag|gtm|analytics|swiper|jquery|bootstrap|cookie|front\.min|comment-reply)/i;
@@ -348,6 +376,13 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
   const rawCountry =
     typeof input.country === "string" ? input.country.trim() : "";
   const country = rawCountry.slice(0, 80) || "Poland";
+  const rawCountryCode =
+    typeof input.countryCode === "string"
+      ? input.countryCode.trim().toLowerCase()
+      : "";
+  const countryCode = /^[a-z]{2}$/.test(rawCountryCode)
+    ? rawCountryCode
+    : undefined;
   const industryId = resolveIndustryId(input.industry ?? input.industryId);
   const parsedRadius = Number(input.radiusKm);
   const radiusKm = Number.isFinite(parsedRadius)
@@ -383,6 +418,7 @@ function parseScanParams(input: Record<string, unknown>): ScanRequestParams {
   return {
     city,
     country,
+    countryCode,
     industryId,
     radiusKm,
     locale,
@@ -558,7 +594,7 @@ function extractSpaPricingLines(jsTexts: string[]): string {
         right.match(/\b(?:unit|per|period)\s*:\s*["']([^"']{1,24})["']/) ??
         left.match(/\b(?:unit|per|period)\s*:\s*["']([^"']{1,24})["']/);
       const currencyMatch = right.match(
-        /\bcurrency\s*:\s*["'](PLN|USD|EUR|zł|\$|€)["']/i,
+        /\bcurrency\s*:\s*["'](PLN|USD|EUR|GBP|CHF|CAD|AUD|zł|\$|€|£)["']/i,
       );
       const currency = currencyMatch?.[1] ?? "PLN";
       const unitSuffix = unitMatch?.[1] ? ` / ${unitMatch[1]}` : "";
@@ -673,7 +709,7 @@ function compactSiteText(rawText: string, maxChars = 4_000): string {
     .map((line) => line.trim())
     .filter((line) => line.length > 1 && !ZERO_PRICE_ONLY_RE.test(line));
   const signalRe =
-    /(z[łl]|pln|eur|usd|\$|€|,-|cennik|cena|od\s+\d+|from\s+\d+|m²|m2|szt|godz|hour|dzie[ńn]|day|imprez|event|wynajem|us[łl]ug|dojazd|gratis|opinie|price|pricing|rate|SCHEMA_OFFER|SPA_ITEM)/i;
+    /(z[łl]|pln|eur|usd|gbp|chf|cad|aud|\$|€|£|,-|cennik|cena|od\s+\d+|from\s+\d+|m²|m2|szt|godz|hour|dzie[ńn]|day|imprez|event|wynajem|us[łl]ug|dojazd|gratis|opinie|price|pricing|rate|specials|coupon|tune-up|tune up|SCHEMA_OFFER|SPA_ITEM)/i;
   const picked = new Set<number>();
   lines.forEach((line, idx) => {
     if (signalRe.test(line)) {
@@ -801,7 +837,9 @@ function findPricingSubpageUrls(html: string, baseUrl: URL): string[] {
       continue;
     }
     const isDirectPricing =
-      /(cennik|cena|ceny|pricing|price-list|prices|rates|tarif)/.test(haystack);
+      /(cennik|cena|ceny|pricing|price-list|prices|rates|tarif|specials|coupons|deals|promo|estimate|tune-up|cost|fee|financing)/.test(
+        haystack,
+      );
     const isSecondaryOffer =
       /(oferta|us[łl]ug|pranie-|czyszczen|wynajem|atrakcj|services)/.test(
         haystack,
@@ -870,6 +908,7 @@ async function fetchSiteContext(
   if (!html) return null;
 
   const { title, text } = extractVisibleText(html);
+  if (isBotChallengePage(title, text)) return null;
   const schemaOffers = extractJsonLdPricingText(html);
   const parts: string[] = [text];
   if (schemaOffers) parts.push(schemaOffers);
@@ -882,7 +921,10 @@ async function fetchSiteContext(
     subHtmlList.forEach((subHtml, idx) => {
       if (!subHtml) return;
       const subVisible = extractVisibleText(subHtml);
-      if (subVisible.text) {
+      if (
+        subVisible.text &&
+        !isBotChallengePage(subVisible.title, subVisible.text)
+      ) {
         parts.push(`[SUBPAGE ${subpageUrls[idx]}]\n${subVisible.text}`);
       }
       const subSchema = extractJsonLdPricingText(subHtml);
@@ -993,18 +1035,22 @@ function buildSearchQueries(
   isCustomSiteNiche: boolean,
   services: ActiveServiceDescriptor[],
   siteProfile?: SiteProfileParam,
+  countryCode?: string,
 ): string[] {
+  const queryLocale: "pl" | "en" =
+    countryCode === "pl" || (!countryCode && locale === "pl") ? "pl" : "en";
+
   if (isCustomSiteNiche) {
     const dynamic = buildDynamicQueriesFromServices(
       city,
       services,
       siteProfile,
-      locale,
+      queryLocale,
     );
     if (dynamic.length > 0) return dynamic;
   }
 
-  if (locale === "pl") {
+  if (queryLocale === "pl") {
     const map: Record<IndustryId, string[]> = {
       upholstery: [
         `pranie dywanów ${city}`,
@@ -1034,9 +1080,10 @@ function buildSearchQueries(
       `rug mattress cleaning ${city}`,
     ],
     hvac: [
-      `air conditioning installation ${city}`,
-      `hvac service ${city}`,
-      `heat pump repair ${city} prices`,
+      `ac tune up inspection ${city} prices`,
+      `hvac service repair ${city}`,
+      `heat pump service ${city} cost`,
+      `air duct cleaning ${city} prices`,
     ],
     plumbing: [
       `plumber ${city}`,
@@ -1086,7 +1133,9 @@ interface SerperOrganicResult {
 
 async function discoverViaSerper(
   queries: string[],
+  city: string,
   country: string,
+  countryCode: string | undefined,
   locale: "pl" | "en",
   excludeHost?: string,
 ): Promise<SerperDiscoveryResult> {
@@ -1094,8 +1143,9 @@ async function discoverViaSerper(
   if (!serperKey) {
     return { urls: [], gbpContext: "", mapsSources: [], places: [] };
   }
-  const gl = locale === "pl" ? "pl" : "us";
-  const hl = locale === "pl" ? "pl" : "en";
+  const gl = countryCode || (locale === "pl" ? "pl" : "us");
+  const hl = countryCode === "pl" ? "pl" : countryCode ? "en" : locale;
+  const searchLocation = city && country ? `${city}, ${country}` : country;
   const collectedUrls: string[] = [];
   const gbpLines: string[] = [];
   const organicSnippets: string[] = [];
@@ -1136,7 +1186,7 @@ async function discoverViaSerper(
           q,
           gl,
           hl,
-          location: country,
+          location: searchLocation,
           num: 10,
         }),
         signal: AbortSignal.timeout(6500),
@@ -1252,7 +1302,7 @@ async function discoverViaSerper(
   }
   if (organicSnippets.length > 0) {
     contextSections.push(
-      `=== SEARCH PRICE SNIPPETS ===\n${organicSnippets.slice(0, 4).join("\n")}`,
+      `=== SEARCH PRICE SNIPPETS ===\n${organicSnippets.slice(0, 8).join("\n")}`,
     );
   }
 
@@ -1411,6 +1461,8 @@ function buildFallbackCompetitors(
   const out: CompetitorFinding[] = [];
   const seenNames = new Set<string>();
   const seenHosts = new Set<string>();
+  const fallbackPriceRe =
+    /([^\n]{0,45}(?:(?:\$|€|£)\s*\d{1,4}(?:[.,]\d{1,2})?|\d{1,4}(?:[.,]\d{1,2})?\s*(?:zł|pln|eur|usd|gbp|chf|cad|aud|\$|€|£))[^\n]{0,45})/i;
 
   for (const place of places) {
     if (isExcludedCompetitorWebsite(place.website, excludeHost)) continue;
@@ -1422,9 +1474,7 @@ function buildFallbackCompetitors(
     if (host) seenHosts.add(host);
 
     const matchedSite = host ? siteByHost.get(host) : undefined;
-    const priceMatch = matchedSite?.text.match(
-      /([^\n]{0,45}\d{1,4}(?:[.,]\d{1,2})?\s*(?:zł|pln|eur|usd|\$|€)[^\n]{0,45})/i,
-    );
+    const priceMatch = matchedSite?.text.match(fallbackPriceRe);
     const summary = priceMatch
       ? priceMatch[1].replace(/\s+/g, " ").trim()
       : place.category
@@ -1451,9 +1501,7 @@ function buildFallbackCompetitors(
     const host = getNormalizedHostFromUrl(site.url);
     if (host && seenHosts.has(host)) continue;
     if (host) seenHosts.add(host);
-    const priceMatch = site.text.match(
-      /([^\n]{0,45}\d{1,4}(?:[.,]\d{1,2})?\s*(?:zł|pln|eur|usd|\$|€)[^\n]{0,45})/i,
-    );
+    const priceMatch = site.text.match(fallbackPriceRe);
     out.push({
       name: site.title.slice(0, 75),
       website: site.url,
@@ -1483,7 +1531,9 @@ function buildSynthesisPrompt(
         `"${s.serviceKey}"`,
         s.label ? `(${s.label})` : "",
         s.unitType ? `[${s.unitType}]` : "",
-        s.ourPricePln ? `[our price: ${s.ourPricePln} PLN]` : "",
+        s.ourPricePln
+          ? `[our price: ${s.ourPricePln} PLN (~$${Math.round(s.ourPricePln / 4)} USD)]`
+          : "",
       ]
         .filter(Boolean)
         .join(" "),
@@ -1502,7 +1552,8 @@ function buildSynthesisPrompt(
     `Do NOT invent companies, numbers, ratings, or prices not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
     `Active tracked services to benchmark (use these EXACT serviceKey values, including "live:*" keys): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
-    `CRITICAL SCOPE & UNIT RULE: Match each service strictly by its human label and billing unit — never rely on internal serviceKey naming alone. NEVER map prices between different item sizes, furniture types, or service tiers (for example: NEVER assign a small chair/pouf/cushion price like 15-25 PLN to an armchair/fotel, NEVER assign a 2-seat sofa price to a corner sofa/narożnik, NEVER assign a doormat price to a full carpet, NEVER assign a 1-seat mattress price to a double mattress, and NEVER compare hourly/add-on/deposit/travel fees against full-service or full-day prices).`,
+    `CURRENCY NORMALIZATION RULE: Output ALL marketBenchmarks prices (avgPricePln, minPricePln, maxPricePln) as integer PLN values. Convert foreign currencies to PLN using: 1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN, 1 CHF = 4.5 PLN, 1 CAD = 2.9 PLN, 1 AUD = 2.6 PLN (e.g. $99 = 396 PLN, $125 = 500 PLN). Keep the original local currency in competitors[].priceSummary and cite both original local currency and converted PLN in marketBenchmarks[].note.`,
+    `CRITICAL SCOPE & UNIT RULE: Match each service strictly by its human label and billing unit — never rely on internal serviceKey naming alone. NEVER map prices between different item sizes, furniture types, or service tiers (for example: NEVER assign a small chair/pouf/cushion price like 15-25 PLN to an armchair/fotel, NEVER assign a 2-seat sofa price to a corner sofa/narożnik, NEVER assign a doormat price to a full carpet, NEVER assign a 1-seat mattress price to a double mattress, and NEVER compare hourly/add-on/deposit/travel fees against full-service or full-day prices). For HVAC: a standard residential AC tune-up / AC inspection / diagnostic fee is valid for "acService", and a heat pump tune-up / maintenance is valid for "heatPumpCheck"; never map a gas furnace-only tune-up to AC split service, and never map a whole-house flat duct-cleaning package to a per-m2 rate.`,
     `If a competitor only lists an incompatible item or unit, mention it in competitors[].priceSummary and OMIT that service from marketBenchmarks.`,
     `Compute avgPricePln, minPricePln, maxPricePln across found local companies for every tracked serviceKey (including "live:*" keys) with exact item-and-unit-compatible price evidence, and briefly cite the matched competitor items/prices in "note".`,
     `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, maxResearchChars)}`,
@@ -1645,7 +1696,7 @@ async function structureReportWithGroq(
             {
               role: "system",
               content:
-                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Include up to 12 competitors present in input, benchmark every tracked serviceKey with exact item-and-unit match, and never mix furniture sizes, item categories, or billing units.',
+                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Include up to 12 competitors present in input, convert foreign currencies to integer PLN (1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN), benchmark every tracked serviceKey with exact item-and-unit match, and never mix furniture sizes, item categories, or billing units.',
             },
             {
               role: "user",
@@ -1872,6 +1923,7 @@ async function runMarketScan(params: ScanRequestParams) {
     isCustomSiteNiche,
     activeServices,
     params.siteProfile,
+    params.countryCode,
   );
 
   const ai = getGeminiClient();
@@ -1963,7 +2015,9 @@ async function runMarketScan(params: ScanRequestParams) {
   if (targetUrls.length === 0) {
     const serperResult = await discoverViaSerper(
       queries,
+      params.city,
       params.country,
+      params.countryCode,
       params.locale,
       params.excludeHost,
     );
@@ -2157,6 +2211,7 @@ export async function GET(req: NextRequest) {
     const params = parseScanParams({
       city: sp.get("city") ?? undefined,
       country: sp.get("country") ?? undefined,
+      countryCode: sp.get("countryCode") ?? undefined,
       industry: sp.get("industry") ?? sp.get("industryId") ?? undefined,
       radiusKm: sp.get("radiusKm") ?? undefined,
       locale: sp.get("locale") ?? undefined,

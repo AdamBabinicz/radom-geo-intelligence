@@ -34,11 +34,26 @@ function getLabelPlacement(posX: number, posY: number, town: TownGeo) {
   let placeBelow = town.dyKm <= 0;
   if (posY < 58) {
     placeBelow = true;
-  } else if (posY > 730) {
+  } else if (posY > 695) {
     placeBelow = false;
   }
 
-  const offsetY = placeBelow ? 20 : -13;
+  // Keep labels clear of corner HUD overlays (north pill, legend pill, scale bar)
+  if (posY < 96 && posX < 360) {
+    anchor = "start";
+    offsetX = 14;
+    placeBelow = true;
+  } else if (posY > 690 && posX < 380) {
+    anchor = "start";
+    offsetX = 14;
+    placeBelow = false;
+  } else if (posY > 690 && posX > 560) {
+    anchor = "end";
+    offsetX = -14;
+    placeBelow = false;
+  }
+
+  const offsetY = placeBelow ? 20 : posY > 755 ? -20 : -14;
   const subOffsetY = placeBelow ? 16 : -16;
 
   return { anchor, offsetX, offsetY, subOffsetY };
@@ -133,6 +148,7 @@ export function CoverageSvg({
         const posX = CX + town.dxKm * pxPerKm;
         const posY = CY - town.dyKm * pxPerKm;
         if (posX < -60 || posX > 860 || posY < -60 || posY > 860) return null;
+
         const inRange = town.distKm <= radiusKm;
 
         return (

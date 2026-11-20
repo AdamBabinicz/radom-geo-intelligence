@@ -22,6 +22,8 @@ export type MarketDataSource = "case-study" | "live-geo";
 export interface MarketProfile {
   id: string;
   centerName: string;
+  country?: string;
+  countryCode?: string;
   northDirectionLabel: string;
   baseCompetitorsCount: number;
   towns: TownGeo[];
@@ -33,6 +35,8 @@ export interface MarketProfile {
 export const RADOM_UPHOLSTERY_MARKET: MarketProfile = {
   id: "radom-upholstery",
   centerName: "Radom",
+  country: "Poland",
+  countryCode: "pl",
   northDirectionLabel: "Warszawa",
   baseCompetitorsCount: 11,
   source: "case-study",

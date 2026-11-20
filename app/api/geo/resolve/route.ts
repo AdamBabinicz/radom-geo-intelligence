@@ -21,6 +21,11 @@ interface NominatimItem {
   display_name?: string;
   importance?: number;
   addresstype?: string;
+  address?: {
+    country?: string;
+    country_code?: string;
+    state?: string;
+  };
 }
 
 interface RawPlace {
@@ -72,6 +77,23 @@ function resolveRequestLocale(
   return resolveLocale();
 }
 
+function resolveCanonicalCountryName(
+  countryCode?: string,
+  fallbackCountry?: string,
+): string | undefined {
+  if (countryCode && /^[a-z]{2}$/i.test(countryCode)) {
+    try {
+      const display = new Intl.DisplayNames(["en"], { type: "region" }).of(
+        countryCode.toUpperCase(),
+      );
+      if (display && display.trim()) return display.trim();
+    } catch {
+      // Fallback to Nominatim country label
+    }
+  }
+  return fallbackCountry?.trim() || undefined;
+}
+
 async function readJsonSafe<T>(res: Response): Promise<T | null> {
   try {
     const raw = await res.text();
@@ -113,8 +135,13 @@ function parseWktPoint(locValue: string | undefined): GeoPoint | null {
 async function geocodeCity(
   city: string,
   languageList: string,
-): Promise<{ name: string; point: GeoPoint } | null> {
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=jsonv2&limit=5&accept-language=${encodeURIComponent(languageList)}`;
+): Promise<{
+  name: string;
+  country?: string;
+  countryCode?: string;
+  point: GeoPoint;
+} | null> {
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=jsonv2&addressdetails=1&limit=5&accept-language=${encodeURIComponent(languageList)}`;
   const res = await fetch(url, {
     headers: HEADERS,
     signal: AbortSignal.timeout(7000),
@@ -151,7 +178,13 @@ async function geocodeCity(
     best.name?.trim() ||
     best.display_name?.split(",")[0]?.trim() ||
     city.trim();
-  return { name: cleanName, point: { lat, lon } };
+  const countryCode =
+    best.address?.country_code?.trim().toLowerCase() || undefined;
+  const country = resolveCanonicalCountryName(
+    countryCode,
+    best.address?.country,
+  );
+  return { name: cleanName, country, countryCode, point: { lat, lon } };
 }
 
 async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
@@ -420,11 +453,17 @@ function buildDynamicTowns(
   const centerKey = centerName.toLowerCase();
   for (const item of raw) {
     if (SKIP_SUPER_ADMIN_REGEX.test(item.name)) continue;
-    const key = item.name.toLowerCase();
+    const cleanPlaceName = item.name.includes(",")
+      ? item.name.split(",")[0].trim()
+      : item.name.trim();
+    if (!cleanPlaceName || SKIP_SUPER_ADMIN_REGEX.test(cleanPlaceName))
+      continue;
+    const key = cleanPlaceName.toLowerCase();
     if (key === centerKey) continue;
+    const normalizedItem: RawPlace = { ...item, name: cleanPlaceName };
     const existing = byName.get(key);
-    if (!existing || item.pop > existing.pop) {
-      byName.set(key, item);
+    if (!existing || normalizedItem.pop > existing.pop) {
+      byName.set(key, normalizedItem);
     }
   }
 
@@ -557,6 +596,8 @@ export async function GET(request: Request) {
     const market: MarketProfile = {
       id: `geo-${geocoded.name.toLowerCase().replace(/\s+/g, "-")}`,
       centerName: geocoded.name,
+      country: geocoded.country,
+      countryCode: geocoded.countryCode,
       northDirectionLabel: northernHub ? northernHub.name : geocoded.name,
       baseCompetitorsCount: 12,
       towns,

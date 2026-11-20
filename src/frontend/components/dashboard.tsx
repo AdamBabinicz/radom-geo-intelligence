@@ -538,6 +538,8 @@ export function Dashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           city: market.centerName,
+          country: market.country,
+          countryCode: market.countryCode,
           industryId,
           radiusKm,
           locale,
