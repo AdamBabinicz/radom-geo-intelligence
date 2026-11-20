@@ -1126,6 +1126,13 @@ export function Dashboard() {
                 industryId={industryId}
                 syncedCount={syncedCount}
                 liveScan={liveScan}
+                detectedIndustryLabel={
+                  isWebsiteAutoNiche || hasManualCustomNiche
+                    ? activeIndustryLabel
+                    : undefined
+                }
+                onScanMarket={handleScanMarket}
+                isScanningMarket={isScanningMarket}
               />
             </div>
 

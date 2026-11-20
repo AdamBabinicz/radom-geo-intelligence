@@ -4,6 +4,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   ExternalLink,
+  Loader2,
   Sparkles,
   Star,
   Store,
@@ -67,6 +68,9 @@ interface CompetitorTableProps {
   industryId?: IndustryId;
   syncedCount?: number;
   liveScan?: LiveMarketScanResult | null;
+  detectedIndustryLabel?: string;
+  onScanMarket?: () => void;
+  isScanningMarket?: boolean;
 }
 
 function getSafeHref(rawUrl?: string): string | null {
@@ -95,6 +99,9 @@ export function CompetitorTable({
   industryId = "upholstery",
   syncedCount = 0,
   liveScan = null,
+  detectedIndustryLabel,
+  onScanMarket,
+  isScanningMarket = false,
 }: CompetitorTableProps) {
   const activeIndustry = INDUSTRY_TEMPLATES[industryId];
   const presetKeys = new Set(activeIndustry.services.map((s) => s.serviceKey));
@@ -104,12 +111,14 @@ export function CompetitorTable({
   const hasLiveServices = market.benchmarks.some((row) =>
     row.serviceKey.startsWith("live:"),
   );
-  const isCustomLiveNiche =
-    Boolean(liveScan?.detectedIndustryLabel) ||
-    (hasLiveServices && !hasPresetOverlap);
 
-  const industryBadgeLabel = liveScan?.detectedIndustryLabel
-    ? cleanDisplayText(liveScan.detectedIndustryLabel)
+  const resolvedDetectedLabel =
+    liveScan?.detectedIndustryLabel || detectedIndustryLabel;
+  const isCustomLiveNiche =
+    Boolean(resolvedDetectedLabel) || (hasLiveServices && !hasPresetOverlap);
+
+  const industryBadgeLabel = resolvedDetectedLabel
+    ? cleanDisplayText(resolvedDetectedLabel)
     : !isCustomLiveNiche
       ? t[activeIndustry.labelKey]
       : null;
@@ -120,6 +129,7 @@ export function CompetitorTable({
   const hasLivePainPoints = Boolean(
     liveScan?.aiEnhanced && liveScan.painPoints.length > 0,
   );
+  const showBenchmarksTable = market.benchmarks.length > 0;
   const showPainPointsBlock = hasLivePainPoints || !isCustomLiveNiche;
 
   const uniqueSources = liveScan
@@ -172,78 +182,103 @@ export function CompetitorTable({
         </p>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[460px] border-collapse text-left">
-          <thead>
-            <tr className="border-y border-slate-100 text-[9px] uppercase tracking-[.1em] text-slate-600 dark:border-slate-800 dark:text-slate-400">
-              <th className="px-5 py-2.5 font-semibold">{t.serviceType}</th>
-              <th className="px-3 py-2.5 font-semibold">{t.localAvg}</th>
-              <th className="px-3 py-2.5 font-semibold">{t.ourPrice}</th>
-              <th className="px-5 py-2.5 text-right font-semibold">
-                {t.marketGap}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {market.benchmarks.map((row, idx) => {
-              const hasLocalAvg = row.localPricePln > 0;
-              const gapPct = hasLocalAvg
-                ? Math.round(
-                    ((row.ourPricePln - row.localPricePln) /
-                      row.localPricePln) *
-                      100,
-                  )
-                : 0;
-              const isCheaperOrEqual = gapPct <= 0;
-              const label = resolveServiceLabel(row, t, locale);
-              return (
-                <tr
-                  key={`${row.serviceKey}-${idx}`}
-                  className="border-b border-slate-100 last:border-0 dark:border-slate-800"
-                >
-                  <td className="px-5 py-3.5 text-xs font-medium text-slate-800 dark:text-slate-100">
-                    {label}
-                  </td>
-                  <td className="px-3 py-3.5 text-xs text-slate-600 dark:text-slate-400">
-                    {hasLocalAvg ? (
-                      formatPrice(row.localPricePln, locale)
-                    ) : (
-                      <span className="text-slate-600 dark:text-slate-400">
-                        —
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-3.5 text-xs font-semibold text-slate-900 dark:text-white">
-                    {formatPrice(row.ourPricePln, locale)}
-                  </td>
-                  <td className="px-5 py-3.5 text-right">
-                    {hasLocalAvg ? (
-                      <span
-                        className={`inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-[10px] font-semibold ${
-                          isCheaperOrEqual
-                            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                            : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
-                        }`}
-                      >
-                        {isCheaperOrEqual ? (
-                          <ArrowDownRight size={11} />
-                        ) : (
-                          <ArrowUpRight size={11} />
-                        )}
-                        {gapPct < 0 ? `−${Math.abs(gapPct)}%` : `+${gapPct}%`}
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                        {t.noLocalBenchmark}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {showBenchmarksTable && (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[460px] border-collapse text-left">
+            <thead>
+              <tr className="border-y border-slate-100 text-[9px] uppercase tracking-[.1em] text-slate-600 dark:border-slate-800 dark:text-slate-400">
+                <th className="px-5 py-2.5 font-semibold">{t.serviceType}</th>
+                <th className="px-3 py-2.5 font-semibold">{t.localAvg}</th>
+                <th className="px-3 py-2.5 font-semibold">{t.ourPrice}</th>
+                <th className="px-5 py-2.5 text-right font-semibold">
+                  {t.marketGap}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {market.benchmarks.map((row, idx) => {
+                const hasLocalAvg = row.localPricePln > 0;
+                const gapPct = hasLocalAvg
+                  ? Math.round(
+                      ((row.ourPricePln - row.localPricePln) /
+                        row.localPricePln) *
+                        100,
+                    )
+                  : 0;
+                const isCheaperOrEqual = gapPct <= 0;
+                const label = resolveServiceLabel(row, t, locale);
+                return (
+                  <tr
+                    key={`${row.serviceKey}-${idx}`}
+                    className="border-b border-slate-100 last:border-0 dark:border-slate-800"
+                  >
+                    <td className="px-5 py-3.5 text-xs font-medium text-slate-800 dark:text-slate-100">
+                      {label}
+                    </td>
+                    <td className="px-3 py-3.5 text-xs text-slate-600 dark:text-slate-400">
+                      {hasLocalAvg ? (
+                        formatPrice(row.localPricePln, locale)
+                      ) : (
+                        <span className="text-slate-600 dark:text-slate-400">
+                          —
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3.5 text-xs font-semibold text-slate-900 dark:text-white">
+                      {formatPrice(row.ourPricePln, locale)}
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      {hasLocalAvg ? (
+                        <span
+                          className={`inline-flex items-center gap-0.5 rounded-full px-2 py-1 text-[10px] font-semibold ${
+                            isCheaperOrEqual
+                              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                              : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                          }`}
+                        >
+                          {isCheaperOrEqual ? (
+                            <ArrowDownRight size={11} />
+                          ) : (
+                            <ArrowUpRight size={11} />
+                          )}
+                          {gapPct < 0 ? `−${Math.abs(gapPct)}%` : `+${gapPct}%`}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                          {t.noLocalBenchmark}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!showBenchmarksTable && !showPainPointsBlock && !hasLiveCompetitors && (
+        <div className="mx-5 mb-5 flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-slate-200 bg-slate-50/70 px-4 py-6 text-center dark:border-slate-800 dark:bg-slate-900/40">
+          <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+            {t.noLocalBenchmark}
+          </p>
+          {onScanMarket && (
+            <button
+              type="button"
+              onClick={onScanMarket}
+              disabled={isScanningMarket}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60 dark:bg-teal-700 dark:hover:bg-teal-600"
+            >
+              {isScanningMarket ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Sparkles size={13} />
+              )}
+              {isScanningMarket ? t.scanningMarketButton : t.scanMarketButton}
+            </button>
+          )}
+        </div>
+      )}
 
       {showPainPointsBlock && (
         <div className="mx-5 mb-4 mt-3 rounded-lg bg-amber-50/80 p-3 dark:bg-amber-950/30">
