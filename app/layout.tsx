@@ -1,11 +1,14 @@
 import { Analytics } from "@vercel/analytics/next";
 import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 
 const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
   "https://nsops.vercel.app";
+
+const GTM_ID = process.env.NEXT_PUBLIC_GTM_ID?.trim() || "GTM-N5JRS6FH";
 
 const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin", "latin-ext"],
@@ -119,6 +122,20 @@ const softwareApplicationJsonLd = {
   ],
 };
 
+const gtmInitScript = `
+window.dataLayer = window.dataLayer || [];
+window.gtag = window.gtag || function gtag(){window.dataLayer.push(arguments);};
+window.gtag('consent', 'default', {
+  analytics_storage: 'denied',
+  ad_storage: 'denied',
+  ad_user_data: 'denied',
+  ad_personalization: 'denied',
+  wait_for_update: 500
+});
+window.gtag('js', new Date());
+window.dataLayer.push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -131,6 +148,25 @@ export default function RootLayout({
       className={`${plusJakarta.variable} ${jetbrainsMono.variable}`}
     >
       <body className="font-sans antialiased">
+        <noscript>
+          <iframe
+            src={`https://www.googletagmanager.com/ns.html?id=${GTM_ID}`}
+            height="0"
+            width="0"
+            title="Google Tag Manager"
+            className="hidden"
+          />
+        </noscript>
+        <Script
+          id="gtm-consent-init"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: gtmInitScript }}
+        />
+        <Script
+          id="gtm-loader"
+          src={`https://www.googletagmanager.com/gtm.js?id=${GTM_ID}`}
+          strategy="afterInteractive"
+        />
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
