@@ -1519,12 +1519,13 @@ function buildFallbackCompetitors(
 function buildSynthesisPrompt(
   researchText: string,
   params: ScanRequestParams,
-  validServiceKeys: Set<string>,
+  _validServiceKeys: Set<string>,
   activeServices: ActiveServiceDescriptor[],
   nicheContextLabel: string,
   maxResearchChars = 22_000,
 ): string {
   const languageLabel = params.locale === "pl" ? "Polish" : "English";
+  const summaryCurrency = params.locale === "en" ? "USD ($)" : "PLN (zł)";
   const trackedServicesList = activeServices
     .map((s) =>
       [
@@ -1543,6 +1544,18 @@ function buildSynthesisPrompt(
     ? `Do NOT include our own business (${params.excludeHost}) in the competitors list.`
     : "";
 
+  const benchmarkInstruction = trackedServicesList
+    ? [
+        `Active tracked services to benchmark (use these EXACT serviceKey values, including "live:*" keys): ${trackedServicesList}.`,
+        `CURRENCY NORMALIZATION RULE: Output ALL marketBenchmarks prices (avgPricePln, minPricePln, maxPricePln) as integer PLN values. Convert foreign currencies to PLN using: 1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN, 1 CHF = 4.5 PLN, 1 CAD = 2.9 PLN, 1 AUD = 2.6 PLN (e.g. $99 = 396 PLN, $125 = 500 PLN). Keep the original local currency in competitors[].priceSummary and cite both original local currency and converted PLN in marketBenchmarks[].note.`,
+        `CRITICAL SCOPE & UNIT RULE: Match each service strictly by its human label and billing unit — never rely on internal serviceKey naming alone. NEVER map prices between different item sizes, furniture types, or service tiers (for example: NEVER assign a small chair/pouf/cushion price like 15-25 PLN to an armchair/fotel, NEVER assign a 2-seat sofa price to a corner sofa/narożnik, NEVER assign a doormat price to a full carpet, NEVER assign a 1-seat mattress price to a double mattress, and NEVER compare hourly/add-on/deposit/travel fees against full-service or full-day prices). For HVAC: a standard residential AC tune-up / AC inspection / diagnostic fee is valid for "acService", and a heat pump tune-up / maintenance is valid for "heatPumpCheck"; never map a gas furnace-only tune-up to AC split service, and never map a whole-house flat duct-cleaning package to a per-m2 rate.`,
+        `If a competitor only lists an incompatible item or unit, mention it in competitors[].priceSummary and OMIT that service from marketBenchmarks.`,
+        `Compute avgPricePln, minPricePln, maxPricePln across found local companies for every tracked serviceKey (including "live:*" keys) with exact item-and-unit-compatible price evidence, and briefly cite the matched competitor items/prices in "note".`,
+      ]
+    : [
+        `No fixed price-list rows were provided for the client (custom or individual-quote B2B niche); leave "marketBenchmarks" as an empty array [] and focus on discovering local competitors, summarizing their service range, quote/pricing models in competitors[].priceSummary, and real customer painPoints.`,
+      ];
+
   return [
     `Extract structured market intelligence strictly from the verified competitor data below.`,
     `Target business niche: ${nicheContextLabel}.`,
@@ -1551,11 +1564,8 @@ function buildSynthesisPrompt(
     `Populate "rating" and "reviewCount" whenever verified Google review numbers appear in the source text.`,
     `Do NOT invent companies, numbers, ratings, or prices not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
-    `Active tracked services to benchmark (use these EXACT serviceKey values, including "live:*" keys): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
-    `CURRENCY NORMALIZATION RULE: Output ALL marketBenchmarks prices (avgPricePln, minPricePln, maxPricePln) as integer PLN values. Convert foreign currencies to PLN using: 1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN, 1 CHF = 4.5 PLN, 1 CAD = 2.9 PLN, 1 AUD = 2.6 PLN (e.g. $99 = 396 PLN, $125 = 500 PLN). Keep the original local currency in competitors[].priceSummary and cite both original local currency and converted PLN in marketBenchmarks[].note.`,
-    `CRITICAL SCOPE & UNIT RULE: Match each service strictly by its human label and billing unit — never rely on internal serviceKey naming alone. NEVER map prices between different item sizes, furniture types, or service tiers (for example: NEVER assign a small chair/pouf/cushion price like 15-25 PLN to an armchair/fotel, NEVER assign a 2-seat sofa price to a corner sofa/narożnik, NEVER assign a doormat price to a full carpet, NEVER assign a 1-seat mattress price to a double mattress, and NEVER compare hourly/add-on/deposit/travel fees against full-service or full-day prices). For HVAC: a standard residential AC tune-up / AC inspection / diagnostic fee is valid for "acService", and a heat pump tune-up / maintenance is valid for "heatPumpCheck"; never map a gas furnace-only tune-up to AC split service, and never map a whole-house flat duct-cleaning package to a per-m2 rate.`,
-    `If a competitor only lists an incompatible item or unit, mention it in competitors[].priceSummary and OMIT that service from marketBenchmarks.`,
-    `Compute avgPricePln, minPricePln, maxPricePln across found local companies for every tracked serviceKey (including "live:*" keys) with exact item-and-unit-compatible price evidence, and briefly cite the matched competitor items/prices in "note".`,
+    `In the narrative "summary", express monetary figures in ${summaryCurrency} matching the active UI currency.`,
+    ...benchmarkInstruction,
     `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, maxResearchChars)}`,
   ]
     .filter(Boolean)
@@ -1696,7 +1706,7 @@ async function structureReportWithGroq(
             {
               role: "system",
               content:
-                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Include up to 12 competitors present in input, convert foreign currencies to integer PLN (1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN), benchmark every tracked serviceKey with exact item-and-unit match, and never mix furniture sizes, item categories, or billing units.',
+                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Include up to 12 competitors present in input, convert foreign currencies to integer PLN (1 USD = 4.0 PLN, 1 EUR = 4.3 PLN, 1 GBP = 5.1 PLN), benchmark every tracked serviceKey with exact item-and-unit match (or [] when none provided), and never mix furniture sizes, item categories, or billing units.',
             },
             {
               role: "user",
@@ -1863,14 +1873,27 @@ async function runMarketScan(params: ScanRequestParams) {
   const presetKeys = new Set(
     template.services.map((s: IndustryServiceItem) => s.serviceKey),
   );
+
+  const isExplicitCustomProfile =
+    params.siteProfile?.matchedIndustryId === "custom" ||
+    (Boolean(
+      params.siteProfile?.searchQueriesPl?.length ||
+      params.siteProfile?.searchQueriesEn?.length ||
+      params.siteProfile?.nichePl ||
+      params.siteProfile?.nicheEn,
+    ) &&
+      params.siteProfile?.matchedIndustryId !== params.industryId);
+
   const activeServices: ActiveServiceDescriptor[] =
     params.services.length > 0
       ? params.services
-      : template.services.map((s: IndustryServiceItem) => ({
-          serviceKey: s.serviceKey,
-          unitType: s.unitType,
-          ourPricePln: s.ourPricePln,
-        }));
+      : isExplicitCustomProfile
+        ? []
+        : template.services.map((s: IndustryServiceItem) => ({
+            serviceKey: s.serviceKey,
+            unitType: s.unitType,
+            ourPricePln: s.ourPricePln,
+          }));
 
   const hasPresetOverlap = activeServices.some((s) =>
     presetKeys.has(s.serviceKey),
@@ -1879,15 +1902,16 @@ async function runMarketScan(params: ScanRequestParams) {
     s.serviceKey.startsWith("live:"),
   );
   const isCustomSiteNiche =
-    params.siteProfile?.matchedIndustryId === "custom" ||
-    (Boolean(params.siteProfile?.searchQueriesPl?.length) &&
-      params.siteProfile?.matchedIndustryId !== params.industryId) ||
-    (hasLiveServices && !hasPresetOverlap);
+    isExplicitCustomProfile || (hasLiveServices && !hasPresetOverlap);
 
-  const validServiceKeys = new Set<string>([
-    ...template.services.map((s: IndustryServiceItem) => s.serviceKey),
-    ...activeServices.map((s) => s.serviceKey),
-  ]);
+  const validServiceKeys = new Set<string>(
+    isCustomSiteNiche
+      ? activeServices.map((s) => s.serviceKey)
+      : [
+          ...template.services.map((s: IndustryServiceItem) => s.serviceKey),
+          ...activeServices.map((s) => s.serviceKey),
+        ],
+  );
 
   const serviceHints = activeServices
     .map((s) => `${s.label || s.serviceKey} [${s.serviceKey}]`)
@@ -1938,12 +1962,14 @@ async function runMarketScan(params: ScanRequestParams) {
     try {
       const searchPrompt = [
         `Find 8-12 real local service providers in ${params.city}, ${params.country} (radius ~${params.radiusKm} km) for: ${nicheContextLabel}.`,
-        `Search BOTH Google Business Profiles / Google Maps listings (company name, star rating, review count, travel zone, customer complaints) AND company websites with published price lists.`,
+        `Search BOTH Google Business Profiles / Google Maps listings (company name, star rating, review count, travel zone, customer complaints) AND company websites with published service info or price lists.`,
         `Cover distinct local search intents such as: ${queries.join("; ")}.`,
         params.excludeHost
           ? `Exclude ${params.excludeHost} (that is our own website).`
           : "",
-        `Research local prices for ${serviceHints} and real customer review complaints.`,
+        serviceHints
+          ? `Research local prices for ${serviceHints} and real customer review complaints.`
+          : `Research local competitors, service offerings, pricing or quote models, and real customer review complaints.`,
         `Only cite real companies, facts, ratings, and numbers found via Google Search.`,
       ]
         .filter(Boolean)

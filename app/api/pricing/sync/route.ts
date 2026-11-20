@@ -34,6 +34,15 @@ export type DetectedIndustryMatch =
   | "plumbing"
   | "custom";
 
+export type PricingSyncCode =
+  | "MISSING_URL"
+  | "INVALID_URL"
+  | "INVALID_PROTOCOL"
+  | "PRIVATE_HOST_BLOCKED"
+  | "SITE_UNREACHABLE"
+  | "NO_PUBLIC_PRICES"
+  | "AI_FALLBACK_USED";
+
 export interface SiteProfile {
   businessName?: string;
   nichePl: string;
@@ -62,6 +71,7 @@ interface ExtractedPrice {
 }
 
 interface AiExtractResult {
+  aiSucceeded: boolean;
   prices: ExtractedPrice[] | null;
   siteProfile?: SiteProfile;
   aiProvider?: "gemini" | "groq";
@@ -312,6 +322,9 @@ const CORNER_SOFA_LABEL_RE =
 const COUCH_LABEL_RE =
   /(?:^|[^a-ząćęłńóśźż])(sof[a-ząćęłńóśźż]*|kanap[a-ząćęłńóśźż]*|couch[a-z]*|loveseat[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
 
+const BOT_CHALLENGE_RE =
+  /(bot verification|just a moment|attention required|verify you are human|access denied|checking your browser|enable javascript and cookies|security check|captcha)/i;
+
 function isCanonicalKeyCompatibleWithLabel(
   canonicalKey: string,
   labelPl: string,
@@ -415,6 +428,14 @@ function isBlockedHost(hostname: string): boolean {
     if (second >= 16 && second <= 31) return true;
   }
   return false;
+}
+
+function isBotChallengeHtml(html: string): boolean {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = decodeHtmlEntities(titleMatch?.[1] ?? "");
+  if (BOT_CHALLENGE_RE.test(title)) return true;
+  const visible = htmlToCleanText(html);
+  return visible.length < 900 && BOT_CHALLENGE_RE.test(visible);
 }
 
 function writeSuccessCache(key: string, payload: CachedSyncPayload) {
@@ -651,7 +672,7 @@ function htmlToCleanText(html: string): string {
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
     .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
-    .replace(/<\/(p|div|li|tr|td|th|h[1-6]|section|article)>/gi, " \n ")
+    .replace(/<\/(p|div|li|tr|td|th|h[1-6]|section|article|option)>/gi, " \n ")
     .replace(/<br\s*\/?>/gi, " \n ")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
@@ -1550,11 +1571,14 @@ function normalizeSiteProfile(
           .slice(0, 4)
       : [];
 
+  const titleSummary = metadata.title
+    .split(/[–—|-]/)
+    .slice(0, 2)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" — ");
   const fallbackNiche =
-    metadata.title ||
-    metadata.headings[0] ||
-    prices[0]?.labelPl ||
-    "Lokalna firma usługowa";
+    titleSummary || metadata.headings[0] || prices[0]?.labelPl || "";
 
   const nichePl = String(raw?.nichePl ?? "").trim() || fallbackNiche;
   const nicheEn = String(raw?.nicheEn ?? "").trim() || fallbackNiche;
@@ -1611,12 +1635,17 @@ function normalizeAiPayload(
   metadata: HtmlMetadata,
   method: "gemini-ai" | "groq-ai",
 ): { prices: ExtractedPrice[]; siteProfile: SiteProfile } | null {
-  if (!Array.isArray(parsed.prices)) return null;
+  const hasPricesArray = Array.isArray(parsed.prices);
+  const hasProfileNiche =
+    typeof parsed.siteProfile?.nichePl === "string" &&
+    parsed.siteProfile.nichePl.trim().length > 0;
+  if (!hasPricesArray && !hasProfileNiche) return null;
 
+  const rawRows = hasPricesArray && parsed.prices ? parsed.prices : [];
   const deduped = new Map<string, ExtractedPrice>();
   const takenKeys = new Set<string>();
 
-  for (const item of parsed.prices) {
+  for (const item of rawRows) {
     const labelEn = String(item.labelEn ?? item.labelPl ?? "").trim();
     const labelPl = String(item.labelPl ?? item.labelEn ?? "").trim();
     if (!labelPl && !labelEn) continue;
@@ -1669,7 +1698,6 @@ function normalizeAiPayload(
   }
 
   const list = Array.from(deduped.values()).slice(0, MAX_EXTRACTED_ITEMS);
-  if (list.length === 0) return null;
 
   const activeKeys = new Set(list.map((entry) => entry.serviceKey));
   for (const entry of list) {
@@ -1744,6 +1772,7 @@ const AI_SYSTEM_INSTRUCTION =
   "Given a compact site summary (SITE_TITLE/DESC/HEADINGS, CATALOG_PRICE_ITEMS, KEYED_PRICES, PAGE_PRICE_LINES), return strictly valid JSON:\n" +
   "1) Populate 'siteProfile': company 'businessName', concise 'nichePl' (Polish, 2-6 words), concise 'nicheEn' (English, 2-6 words), 'matchedIndustryId' ('upholstery' | 'hvac' | 'plumbing' | 'custom' — choose 'custom' unless the business is genuinely carpet/upholstery cleaning, HVAC, or plumbing), and 3-4 short local search query stems WITHOUT city names in 'searchQueriesPl' and 'searchQueriesEn'.\n" +
   "2) Extract EVERY distinct customer service, attraction, tier, or rental option into 'prices' (up to 35 items). CRITICAL: Preserve EVERY item listed under CATALOG_PRICE_ITEMS without merging separate tiers, sizes, or variants (for example keep standard vs oriental carpet, <=50 m2 vs >50 m2 flooring, 2-seat vs 3-seat sofa separate even when prices match). Never emit generic category badge teasers if detailed rows are present.\n" +
+  "3) If the website operates on custom B2B quotes or has NO public service prices (for example a printing house, packaging manufacturer, custom workshop, or inquiry-only website), still populate 'siteProfile' accurately from SITE_TITLE/DESC/HEADINGS and page text, and return an empty array 'prices': [] (never invent, guess, or fabricate prices).\n" +
   "Reuse canonical keys ONLY for the exact matching service scope:\n" +
   "- carpetArea: standard carpet/rug washing per m2 (NOT oriental/silk rugs and NOT fitted carpet flooring)\n" +
   "- carpetFlooring: fitted wall-to-wall/office carpet flooring per m2 (prefer the standard >50 m2 base tier if multiple tiers exist)\n" +
@@ -1762,6 +1791,7 @@ async function extractWithGemini(
   const ai = getGeminiClient();
   if (!ai) {
     return {
+      aiSucceeded: false,
       prices: null,
       warning: "GEMINI_API_KEY is not configured.",
     };
@@ -1769,6 +1799,7 @@ async function extractWithGemini(
 
   if (!contextText.trim()) {
     return {
+      aiSucceeded: false,
       prices: null,
       warning: "No high-signal pricing text was extracted from target site.",
     };
@@ -1850,12 +1881,14 @@ async function extractWithGemini(
         "[/api/pricing/sync] Gemini returned empty or malformed pricing JSON.",
       );
       return {
+        aiSucceeded: false,
         prices: null,
-        warning: "Gemini did not return valid pricing rows.",
+        warning: "Gemini did not return valid structured JSON.",
       };
     }
 
     return {
+      aiSucceeded: true,
       prices: normalized.prices,
       siteProfile: normalized.siteProfile,
       aiProvider: "gemini",
@@ -1868,6 +1901,7 @@ async function extractWithGemini(
       rawMsg.slice(0, 220),
     );
     return {
+      aiSucceeded: false,
       prices: null,
       warning: "Gemini temporary unavailability.",
     };
@@ -1881,7 +1915,7 @@ async function extractWithGroq(
 ): Promise<AiExtractResult> {
   const groqKey = process.env.GROQ_API_KEY?.trim();
   if (!groqKey || !contextText.trim()) {
-    return { prices: null };
+    return { aiSucceeded: false, prices: null };
   }
 
   const deadline = Date.now() + GROQ_TOTAL_BUDGET_MS;
@@ -1936,6 +1970,7 @@ async function extractWithGroq(
       const normalized = normalizeAiPayload(parsed, metadata, "groq-ai");
       if (normalized) {
         return {
+          aiSucceeded: true,
           prices: normalized.prices,
           siteProfile: normalized.siteProfile,
           aiProvider: "groq",
@@ -1951,7 +1986,7 @@ async function extractWithGroq(
     }
   }
 
-  return { prices: null };
+  return { aiSucceeded: false, prices: null };
 }
 
 function findPricingSubpages(html: string, baseUrl: URL): string[] {
@@ -2118,23 +2153,46 @@ async function handleSync(rawUrl: string, forceRefresh = false) {
       : `https://${rawUrl}`;
     parsedUrl = new URL(withProtocol);
   } catch {
-    return NextResponse.json({ error: "Invalid URL format" }, { status: 400 });
+    return NextResponse.json(
+      {
+        error: "Invalid URL format",
+        code: "INVALID_URL" satisfies PricingSyncCode,
+      },
+      { status: 400 },
+    );
   }
 
   if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
     return NextResponse.json(
-      { error: "Only HTTP/HTTPS URLs are allowed" },
+      {
+        error: "Only HTTP/HTTPS URLs are allowed",
+        code: "INVALID_PROTOCOL" satisfies PricingSyncCode,
+      },
       { status: 400 },
     );
   }
 
   if (isBlockedHost(parsedUrl.hostname)) {
     return NextResponse.json(
-      { error: "Private or local network hosts are blocked" },
+      {
+        error: "Private or local network hosts are blocked",
+        code: "PRIVATE_HOST_BLOCKED" satisfies PricingSyncCode,
+      },
       { status: 400 },
     );
   }
 
+  if (!parsedUrl.hostname || !parsedUrl.hostname.includes(".")) {
+    return NextResponse.json(
+      {
+        error: "Invalid URL format",
+        code: "INVALID_URL" satisfies PricingSyncCode,
+      },
+      { status: 400 },
+    );
+  }
+
+  const cleanHost = parsedUrl.hostname.replace(/^www\./i, "");
   const normalizedKey = parsedUrl.toString().toLowerCase();
   const cached = !forceRefresh
     ? syncSuccessCache.get(normalizedKey)
@@ -2144,6 +2202,7 @@ async function handleSync(rawUrl: string, forceRefresh = false) {
       source: "live-website",
       aiEnhanced: true,
       aiProvider: cached.aiProvider,
+      hasPublicPrices: cached.prices.length > 0,
       cached: true,
       url: cached.url,
       fetchedAt: cached.fetchedAt,
@@ -2154,9 +2213,13 @@ async function handleSync(rawUrl: string, forceRefresh = false) {
   }
 
   const html = await fetchTextSafe(parsedUrl.toString(), FETCH_HTML_TIMEOUT_MS);
-  if (!html) {
+  if (!html || isBotChallengeHtml(html)) {
     return NextResponse.json(
-      { error: "Failed to fetch target website" },
+      {
+        error: "Failed to fetch target website",
+        code: "SITE_UNREACHABLE" satisfies PricingSyncCode,
+        host: cleanHost,
+      },
       { status: 502 },
     );
   }
@@ -2172,7 +2235,7 @@ async function handleSync(rawUrl: string, forceRefresh = false) {
       subpages.map((subUrl) => fetchTextSafe(subUrl, FETCH_ASSET_TIMEOUT_MS)),
     );
     for (const subHtml of subHtmlList) {
-      if (!subHtml) continue;
+      if (!subHtml || isBotChallengeHtml(subHtml)) continue;
       contextLines.push(...htmlToCleanText(subHtml).split("\n"));
     }
   }
@@ -2238,18 +2301,24 @@ async function handleSync(rawUrl: string, forceRefresh = false) {
     highSignalContext,
     metadata,
   );
-  if (!aiResult.prices || aiResult.prices.length === 0) {
+  if (
+    !aiResult.aiSucceeded ||
+    ((aiResult.prices?.length ?? 0) === 0 && catalogPrices.length > 0)
+  ) {
     const groqResult = await extractWithGroq(
       parsedUrl.toString(),
       highSignalContext,
       metadata,
     );
-    if (groqResult.prices && groqResult.prices.length > 0) {
+    if (
+      groqResult.aiSucceeded &&
+      (!aiResult.aiSucceeded || (groqResult.prices?.length ?? 0) > 0)
+    ) {
       aiResult = groqResult;
     }
   }
 
-  if (aiResult.prices && aiResult.prices.length > 0) {
+  if (aiResult.aiSucceeded && aiResult.prices && aiResult.prices.length > 0) {
     const finalPrices = mergeMissingCatalogRows(aiResult.prices, catalogPrices);
     const fetchedAt = new Date().toISOString();
     writeSuccessCache(normalizedKey, {
@@ -2265,6 +2334,7 @@ async function handleSync(rawUrl: string, forceRefresh = false) {
       source: "live-website",
       aiEnhanced: true,
       aiProvider: aiResult.aiProvider,
+      hasPublicPrices: true,
       url: parsedUrl.toString(),
       fetchedAt,
       extractedCount: finalPrices.length,
@@ -2279,18 +2349,44 @@ async function handleSync(rawUrl: string, forceRefresh = false) {
     subpages.length > 0,
     hasSpaBundle,
   );
-  const fallbackProfile = buildFallbackSiteProfile(metadata, extracted);
+
+  if (extracted.length > 0) {
+    const resolvedProfile =
+      aiResult.siteProfile ?? buildFallbackSiteProfile(metadata, extracted);
+
+    return NextResponse.json({
+      source: "live-website",
+      aiEnhanced: aiResult.aiSucceeded,
+      aiProvider: aiResult.aiProvider,
+      hasPublicPrices: true,
+      code: aiResult.aiSucceeded
+        ? undefined
+        : ("AI_FALLBACK_USED" satisfies PricingSyncCode),
+      warning: aiResult.aiSucceeded
+        ? undefined
+        : "AI extraction temporarily unavailable; used structured parser & JSON-LD fallback.",
+      url: parsedUrl.toString(),
+      fetchedAt: new Date().toISOString(),
+      extractedCount: extracted.length,
+      siteProfile: resolvedProfile,
+      prices: extracted,
+    });
+  }
+
+  const noPriceProfile =
+    aiResult.siteProfile ?? buildFallbackSiteProfile(metadata, []);
 
   return NextResponse.json({
     source: "live-website",
-    aiEnhanced: false,
-    warning:
-      "AI extraction temporarily unavailable; used structured parser & JSON-LD fallback.",
+    aiEnhanced: aiResult.aiSucceeded,
+    aiProvider: aiResult.aiProvider,
+    hasPublicPrices: false,
+    code: "NO_PUBLIC_PRICES" satisfies PricingSyncCode,
     url: parsedUrl.toString(),
     fetchedAt: new Date().toISOString(),
-    extractedCount: extracted.length,
-    siteProfile: fallbackProfile,
-    prices: extracted,
+    extractedCount: 0,
+    siteProfile: noPriceProfile,
+    prices: [],
   });
 }
 
@@ -2300,14 +2396,23 @@ export async function GET(request: NextRequest) {
     const forceRefresh = request.nextUrl.searchParams.get("refresh") === "1";
     if (!url) {
       return NextResponse.json(
-        { error: "Missing ?url= parameter" },
+        {
+          error: "Missing ?url= parameter",
+          code: "MISSING_URL" satisfies PricingSyncCode,
+        },
         { status: 400 },
       );
     }
     return await handleSync(url, forceRefresh);
   } catch (err) {
     console.error("[/api/pricing/sync GET] error:", err);
-    return NextResponse.json({ error: "Pricing sync failed" }, { status: 502 });
+    return NextResponse.json(
+      {
+        error: "Pricing sync failed",
+        code: "SITE_UNREACHABLE" satisfies PricingSyncCode,
+      },
+      { status: 502 },
+    );
   }
 }
 
@@ -2320,13 +2425,22 @@ export async function POST(request: NextRequest) {
     const url = typeof body.url === "string" ? body.url.trim() : "";
     if (!url) {
       return NextResponse.json(
-        { error: "Missing url in request body" },
+        {
+          error: "Missing url in request body",
+          code: "MISSING_URL" satisfies PricingSyncCode,
+        },
         { status: 400 },
       );
     }
     return await handleSync(url, body.refresh === true);
   } catch (err) {
     console.error("[/api/pricing/sync POST] error:", err);
-    return NextResponse.json({ error: "Pricing sync failed" }, { status: 502 });
+    return NextResponse.json(
+      {
+        error: "Pricing sync failed",
+        code: "SITE_UNREACHABLE" satisfies PricingSyncCode,
+      },
+      { status: 502 },
+    );
   }
 }
