@@ -127,7 +127,7 @@ async function geocodeCity(
 }
 
 async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
-  const q = `[out:json][timeout:8];(node["place"="town"](around:38000,${center.lat},${center.lon});node["place"="city"](around:90000,${center.lat},${center.lon}););out body 220;`;
+  const q = `[out:json][timeout:8];node["place"="town"](around:40000,${center.lat},${center.lon});out body;node["place"="city"](around:95000,${center.lat},${center.lon});out body;node["place"="village"]["population"](around:34000,${center.lat},${center.lon});out body 120;`;
   const res = await fetch("https://overpass-api.de/api/interpreter", {
     method: "POST",
     headers: {
@@ -151,14 +151,17 @@ async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
     const name = el.tags?.name?.trim();
     if (!name || typeof el.lat !== "number" || typeof el.lon !== "number")
       continue;
-    const isCity = el.tags?.place === "city";
+    const placeType = el.tags?.place;
+    const isCity = placeType === "city";
     const parsedPop = Number((el.tags?.population ?? "").replace(/[^\d]/g, ""));
     const pop =
       Number.isFinite(parsedPop) && parsedPop > 0
         ? parsedPop
         : isCity
           ? 120000
-          : 18000;
+          : placeType === "town"
+            ? 18000
+            : 2500;
     places.push({
       name,
       lat: el.lat,
@@ -215,57 +218,45 @@ async function queryWikidataRadius(
 }
 
 async function fetchViaWikidata(center: GeoPoint): Promise<RawPlace[]> {
-  const lonOffsetDeg =
-    0.2 / Math.max(0.25, Math.cos((center.lat * Math.PI) / 180));
-  const westCenter: GeoPoint = {
-    lat: center.lat,
-    lon: center.lon - lonOffsetDeg,
-  };
-  const eastNorthCenter: GeoPoint = {
-    lat: center.lat + 0.11,
-    lon: center.lon + lonOffsetDeg,
-  };
-
-  const [westRes, eastRes, hubsRes] = await Promise.allSettled([
-    queryWikidataRadius(westCenter, 26, 1500, 380000, 80, 9000),
-    queryWikidataRadius(eastNorthCenter, 27, 1500, 380000, 80, 9000),
-    queryWikidataRadius(center, 95, 40000, 600000, 100, 9000),
+  // Symmetric concentric queries so one-sided provider drops cannot starve East or West
+  const [localRes, hubsRes] = await Promise.allSettled([
+    queryWikidataRadius(center, 38, 1200, 15000000, 200, 9000),
+    queryWikidataRadius(center, 95, 35000, 15000000, 120, 9000),
   ]);
 
-  const west = westRes.status === "fulfilled" ? westRes.value : [];
-  const east = eastRes.status === "fulfilled" ? eastRes.value : [];
+  const local = localRes.status === "fulfilled" ? localRes.value : [];
   const hubs = hubsRes.status === "fulfilled" ? hubsRes.value : [];
 
-  const nonDistrictNearCount = [...west, ...east].filter(
+  const nonDistrictNearCount = local.filter(
     (p) =>
       !SKIP_SUPER_ADMIN_REGEX.test(p.name) && !SKIP_DISTRICT_REGEX.test(p.name),
   ).length;
 
-  let extraDistricts: RawPlace[] = [];
-  if (nonDistrictNearCount < 5) {
+  let extraNear: RawPlace[] = [];
+  if (nonDistrictNearCount < 6) {
     try {
-      extraDistricts = await queryWikidataRadius(
+      extraNear = await queryWikidataRadius(
         center,
-        42,
-        1000,
-        2500000,
-        75,
+        45,
+        500,
+        15000000,
+        120,
         7500,
       );
     } catch {
-      extraDistricts = [];
+      extraNear = [];
     }
   }
 
-  const merged = [...west, ...east, ...extraDistricts, ...hubs];
+  const merged = [...local, ...extraNear, ...hubs];
   if (merged.length >= 3) return merged;
 
   const fallback = await queryWikidataRadius(
     center,
-    55,
+    60,
     300,
-    1800000,
-    80,
+    15000000,
+    100,
     8000,
   );
   if (fallback.length < 3) throw new Error("Wikidata returned too few places");
@@ -316,18 +307,19 @@ function selectBalancedAcrossSectors(
 ): CandidateTown[] {
   const selected: CandidateTown[] = [...initialSelected];
   const usedNames = new Set<string>(initialSelected.map((item) => item.name));
-  const usedSectors = new Set<number>(
-    initialSelected.map((item) =>
-      getSectorIndex(item.dxKm, item.dyKm, sectorCount),
-    ),
-  );
+  const sectorCounts = new Map<number, number>();
+  for (const item of initialSelected) {
+    const s = getSectorIndex(item.dxKm, item.dyKm, sectorCount);
+    sectorCounts.set(s, (sectorCounts.get(s) ?? 0) + 1);
+  }
 
+  // Pass 1: pick at most 1 best candidate in each compass sector
   for (
     let sector = 0;
     sector < sectorCount && selected.length < maxCount;
     sector++
   ) {
-    if (usedSectors.has(sector)) continue;
+    if ((sectorCounts.get(sector) ?? 0) > 0) continue;
     const match = pool.find(
       (item) =>
         !usedNames.has(item.name) &&
@@ -337,29 +329,35 @@ function selectBalancedAcrossSectors(
     if (match) {
       selected.push(match);
       usedNames.add(match.name);
-      usedSectors.add(sector);
+      sectorCounts.set(sector, 1);
     }
   }
 
+  // Pass 2: allow at most 2 candidates per sector while preserving label separation
   for (const item of pool) {
     if (selected.length >= maxCount) break;
     if (usedNames.has(item.name)) continue;
     const sector = getSectorIndex(item.dxKm, item.dyKm, sectorCount);
-    if (usedSectors.size < sectorCount && usedSectors.has(sector)) continue;
-    if (!isTooCloseOrDuplicateRoot(item, selected, minGapKm)) {
+    if ((sectorCounts.get(sector) ?? 0) >= 2) continue;
+    if (!isTooCloseOrDuplicateRoot(item, selected, Math.max(5.5, minGapKm))) {
       selected.push(item);
       usedNames.add(item.name);
+      sectorCounts.set(sector, (sectorCounts.get(sector) ?? 0) + 1);
     }
   }
 
+  // Pass 3: gentle fallback only if fewer than maxCount points exist (e.g. coastal/border cities)
   for (const item of pool) {
     if (selected.length >= maxCount) break;
     if (usedNames.has(item.name)) continue;
+    const sector = getSectorIndex(item.dxKm, item.dyKm, sectorCount);
+    if ((sectorCounts.get(sector) ?? 0) >= 3) continue;
     if (
-      !isTooCloseOrDuplicateRoot(item, selected, Math.max(2, minGapKm * 0.45))
+      !isTooCloseOrDuplicateRoot(item, selected, Math.max(4, minGapKm * 0.75))
     ) {
       selected.push(item);
       usedNames.add(item.name);
+      sectorCounts.set(sector, (sectorCounts.get(sector) ?? 0) + 1);
     }
   }
 
@@ -371,22 +369,28 @@ function buildDynamicTowns(
   center: GeoPoint,
   raw: RawPlace[],
 ): TownGeo[] {
-  const seen = new Set<string>([centerName.toLowerCase()]);
-  const strictCandidates: CandidateTown[] = [];
-  const districtCandidates: CandidateTown[] = [];
-
+  const byName = new Map<string, RawPlace>();
+  const centerKey = centerName.toLowerCase();
   for (const item of raw) {
     if (SKIP_SUPER_ADMIN_REGEX.test(item.name)) continue;
     const key = item.name.toLowerCase();
-    if (seen.has(key)) continue;
+    if (key === centerKey) continue;
+    const existing = byName.get(key);
+    if (!existing || item.pop > existing.pop) {
+      byName.set(key, item);
+    }
+  }
 
+  const strictCandidates: CandidateTown[] = [];
+  const districtCandidates: CandidateTown[] = [];
+
+  for (const item of byName.values()) {
     const { dxKm, dyKm, distKm } = projectToLocalKm(center, {
       lat: item.lat,
       lon: item.lon,
     });
-    if (distKm < 8 || distKm > 100) continue;
+    if (distKm < 5 || distKm > 100) continue;
 
-    seen.add(key);
     const isHub = distKm > 40;
     const candidate: CandidateTown = {
       name: item.isCity && isHub ? item.name.toUpperCase() : item.name,
@@ -412,8 +416,8 @@ function buildDynamicTowns(
     arr
       .filter((t) => !t.isRegionalHub)
       .sort((a, b) => {
-        const aSweetSpot = a.distKm >= 10 && a.distKm <= 34 ? 0 : 1;
-        const bSweetSpot = b.distKm >= 10 && b.distKm <= 34 ? 0 : 1;
+        const aSweetSpot = a.distKm >= 8 && a.distKm <= 34 ? 0 : 1;
+        const bSweetSpot = b.distKm >= 8 && b.distKm <= 34 ? 0 : 1;
         if (aSweetSpot !== bSweetSpot) return aSweetSpot - bSweetSpot;
         if (b.pop !== a.pop) return b.pop - a.pop;
         return a.distKm - b.distKm;
@@ -423,7 +427,7 @@ function buildDynamicTowns(
     sortLocal(strictCandidates),
     8,
     8,
-    5,
+    6,
   );
 
   const localTowns = (
@@ -433,7 +437,7 @@ function buildDynamicTowns(
           sortLocal(districtCandidates),
           8,
           8,
-          5,
+          6,
           strictLocal,
         )
   ).sort((a, b) => a.distKm - b.distKm);
@@ -490,8 +494,12 @@ export async function GET(request: Request) {
     ]);
 
     const towns = buildDynamicTowns(geocoded.name, geocoded.point, rawPlaces);
+    const northernPool = towns.filter((t) => t.dyKm > 8);
     const northernHub =
-      towns.filter((t) => t.dyKm > 8).sort((a, b) => b.dyKm - a.dyKm)[0] ??
+      northernPool
+        .filter((t) => t.isRegionalHub)
+        .sort((a, b) => b.dyKm - a.dyKm)[0] ??
+      northernPool.sort((a, b) => b.dyKm - a.dyKm)[0] ??
       towns.filter((t) => t.dyKm > 0).sort((a, b) => b.dyKm - a.dyKm)[0] ??
       towns[0];
 
