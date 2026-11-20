@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
+  AlertCircle,
+  AlertTriangle,
   Building2,
   Check,
   CheckCircle2,
@@ -28,6 +30,13 @@ import {
 import { formatTemplate, type AppDictionary } from "@/src/locales";
 
 export type IndustryControlMode = "preset" | "auto" | "custom";
+
+export type SyncNoticeTone = "info" | "warning" | "error";
+
+export interface SyncNotice {
+  tone: SyncNoticeTone;
+  message: string;
+}
 
 type GeoErrorCode =
   | "CITY_EMPTY"
@@ -62,6 +71,7 @@ interface MarketSwitcherProps {
   isSyncingPrices?: boolean;
   isScanningMarket?: boolean;
   syncError?: string | null;
+  syncNotice?: SyncNotice | null;
   syncedCount?: number;
   scannedCompetitorsCount?: number;
 }
@@ -134,6 +144,7 @@ export function MarketSwitcher({
   isSyncingPrices = false,
   isScanningMarket = false,
   syncError = null,
+  syncNotice = null,
   syncedCount = 0,
   scannedCompetitorsCount = 0,
 }: MarketSwitcherProps) {
@@ -228,6 +239,18 @@ export function MarketSwitcher({
       : industryMode === "custom"
         ? "bg-sky-50 text-sky-700 dark:bg-sky-950/70 dark:text-sky-300"
         : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
+
+  const activeNotice: SyncNotice | null = errorMsg
+    ? { tone: "error", message: errorMsg }
+    : (syncNotice ??
+      (syncError ? { tone: "error", message: syncError } : null));
+
+  const noticeClass =
+    activeNotice?.tone === "info"
+      ? "border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-200"
+      : activeNotice?.tone === "warning"
+        ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200"
+        : "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300";
 
   return (
     <section
@@ -479,11 +502,24 @@ export function MarketSwitcher({
               <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
                 <input
                   id="website-url-input"
-                  type="url"
+                  type="text"
+                  inputMode="url"
                   value={websiteUrl}
                   onChange={(e) => onWebsiteUrlChange?.(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (
+                      e.key === "Enter" &&
+                      onSyncPrices &&
+                      !isSyncingPrices &&
+                      !isScanningMarket &&
+                      websiteUrl.trim()
+                    ) {
+                      e.preventDefault();
+                      onSyncPrices();
+                    }
+                  }}
                   placeholder={t.websiteUrlPlaceholder}
-                  disabled={isSyncingPrices}
+                  disabled={isSyncingPrices || isScanningMarket}
                   className="h-9 min-w-[200px] flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:ring-2 focus:ring-teal-600 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                 />
 
@@ -491,7 +527,9 @@ export function MarketSwitcher({
                   <button
                     type="button"
                     onClick={onSyncPrices}
-                    disabled={isSyncingPrices || !websiteUrl.trim()}
+                    disabled={
+                      isSyncingPrices || isScanningMarket || !websiteUrl.trim()
+                    }
                     className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                   >
                     <RefreshCw
@@ -508,7 +546,7 @@ export function MarketSwitcher({
                   <button
                     type="button"
                     onClick={onScanMarket}
-                    disabled={isScanningMarket}
+                    disabled={isScanningMarket || isSyncingPrices}
                     className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60 dark:bg-teal-700 dark:hover:bg-teal-600"
                   >
                     {isScanningMarket ? (
@@ -527,12 +565,19 @@ export function MarketSwitcher({
         </div>
       )}
 
-      {(errorMsg || syncError) && (
+      {activeNotice && (
         <p
-          role="alert"
-          className="mt-2.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300"
+          role={activeNotice.tone === "error" ? "alert" : "status"}
+          className={`mt-2.5 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${noticeClass}`}
         >
-          {errorMsg ?? syncError}
+          {activeNotice.tone === "info" ? (
+            <Sparkles size={14} className="mt-0.5 shrink-0" />
+          ) : activeNotice.tone === "warning" ? (
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          ) : (
+            <AlertCircle size={14} className="mt-0.5 shrink-0" />
+          )}
+          <span>{activeNotice.message}</span>
         </p>
       )}
     </section>

@@ -38,6 +38,7 @@ import {
   formatTemplate,
   SUPPORTED_LOCALES,
   translations,
+  type AppDictionary,
   type Locale,
 } from "@/src/locales";
 import { AiCouncilPanel } from "./features/ai-council/ai-council-panel";
@@ -50,6 +51,7 @@ import { ScrollToTop } from "./features/legal/scroll-to-top";
 import {
   MarketSwitcher,
   type IndustryControlMode,
+  type SyncNotice,
 } from "./features/market-controls/market-switcher";
 import { PricingCalculator } from "./features/pricing-calculator";
 import { CoverageMap } from "./features/radius-map/coverage-map";
@@ -68,6 +70,15 @@ const LEGAL_ROUTE_OVERRIDES: Partial<
     terms: "/regulamin",
   },
 };
+
+type PricingSyncCode =
+  | "MISSING_URL"
+  | "INVALID_URL"
+  | "INVALID_PROTOCOL"
+  | "PRIVATE_HOST_BLOCKED"
+  | "SITE_UNREACHABLE"
+  | "NO_PUBLIC_PRICES"
+  | "AI_FALLBACK_USED";
 
 interface PricingSyncItem {
   serviceKey: string;
@@ -88,6 +99,9 @@ interface SiteProfile {
 
 interface PricingSyncResponse {
   aiEnhanced?: boolean;
+  hasPublicPrices?: boolean;
+  code?: PricingSyncCode;
+  host?: string;
   warning?: string;
   extractedCount?: number;
   siteProfile?: SiteProfile;
@@ -120,6 +134,98 @@ function isTimeoutFailure(err: unknown, status?: number): boolean {
     return err.name === "TimeoutError" || err.name === "AbortError";
   }
   return false;
+}
+
+function isBlockedLocalHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal")
+  ) {
+    return true;
+  }
+  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)) {
+    return true;
+  }
+  if (/^169\.254\./.test(host)) return true;
+  const match172 = host.match(/^172\.(\d+)\./);
+  if (match172) {
+    const second = Number(match172[1]);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+function validateClientWebsiteUrl(
+  rawUrl: string,
+  t: AppDictionary,
+): { valid: true; host: string } | { valid: false; message: string } {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || /\s/.test(trimmed)) {
+    return { valid: false, message: t.syncInvalidUrlError };
+  }
+
+  let parsed: URL;
+  try {
+    const withProtocol = /^[a-z][a-z0-9+.-]*:/i.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+    parsed = new URL(withProtocol);
+  } catch {
+    return { valid: false, message: t.syncInvalidUrlError };
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { valid: false, message: t.syncInvalidUrlError };
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  if (isBlockedLocalHostname(host)) {
+    return { valid: false, message: t.syncPrivateHostError };
+  }
+
+  if (
+    !host ||
+    !host.includes(".") ||
+    host.startsWith(".") ||
+    host.endsWith(".") ||
+    host.includes("..")
+  ) {
+    return { valid: false, message: t.syncInvalidUrlError };
+  }
+
+  return { valid: true, host };
+}
+
+function resolveSyncErrorMessage(
+  data: PricingSyncResponse | null,
+  status: number,
+  fallbackHost: string,
+  t: AppDictionary,
+): string {
+  const targetHost = data?.host || fallbackHost;
+  switch (data?.code) {
+    case "MISSING_URL":
+    case "INVALID_URL":
+    case "INVALID_PROTOCOL":
+      return t.syncInvalidUrlError;
+    case "PRIVATE_HOST_BLOCKED":
+      return t.syncPrivateHostError;
+    case "SITE_UNREACHABLE":
+      return formatTemplate(t.syncSiteUnreachableError, { host: targetHost });
+    default:
+      break;
+  }
+  if (!data) {
+    return isTimeoutFailure(null, status)
+      ? t.syncWebsiteTimeoutError
+      : formatTemplate(t.syncWebsiteHttpError, { status });
+  }
+  return data.error ?? data.warning ?? t.syncWebsiteError;
 }
 
 function resolveWorkspaceProfile(
@@ -192,7 +298,7 @@ export function Dashboard() {
     Record<string, number>
   >({});
   const [isScanningMarket, setIsScanningMarket] = useState<boolean>(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncNotice, setSyncNotice] = useState<SyncNotice | null>(null);
 
   const focusCitySearch = () => {
     const input = document.getElementById(
@@ -248,7 +354,7 @@ export function Dashboard() {
     setSiteProfile(null);
     setLiveScan(null);
     setScannedBenchmarks({});
-    setSyncError(null);
+    setSyncNotice(null);
   };
 
   const handleMarketChange = (nextMarket: MarketProfile) => {
@@ -282,7 +388,7 @@ export function Dashboard() {
 
   const handleCustomNicheChange = (nextNiche: string | null) => {
     setCustomNiche(nextNiche);
-    if (syncError) setSyncError(null);
+    if (syncNotice) setSyncNotice(null);
     if (nextNiche !== null) {
       setLiveScan(null);
       setScannedBenchmarks({});
@@ -335,10 +441,11 @@ export function Dashboard() {
   const isCaseStudy =
     (baseIndustryMarket.source ?? "case-study") === "case-study";
 
-  const activeBenchmarksSource =
-    syncedCatalog && syncedCatalog.length > 0
+  const activeBenchmarksSource = hasManualCustomNiche
+    ? []
+    : syncedCatalog !== null
       ? syncedCatalog
-      : hasManualCustomNiche
+      : isWebsiteAutoNiche
         ? []
         : baseIndustryMarket.benchmarks;
 
@@ -384,8 +491,20 @@ export function Dashboard() {
   const handleSyncPrices = async () => {
     const trimmed = websiteUrl.trim();
     if (!trimmed) return;
+
+    const validation = validateClientWebsiteUrl(trimmed, t);
+    if (!validation.valid) {
+      setSiteProfile(null);
+      setSyncedCatalog(null);
+      setSyncedCount(0);
+      setLiveScan(null);
+      setScannedBenchmarks({});
+      setSyncNotice({ tone: "error", message: validation.message });
+      return;
+    }
+
     setIsSyncingPrices(true);
-    setSyncError(null);
+    setSyncNotice(null);
     setLiveScan(null);
     setScannedBenchmarks({});
 
@@ -398,23 +517,70 @@ export function Dashboard() {
       );
       const data = await readJsonSafe<PricingSyncResponse>(response);
 
-      if (!data) {
-        setSyncError(
-          isTimeoutFailure(null, response.status)
-            ? t.syncWebsiteTimeoutError
-            : formatTemplate(t.syncWebsiteHttpError, {
-                status: response.status,
-              }),
-        );
+      if (!data || !response.ok) {
+        setSiteProfile(null);
+        setSyncedCatalog(null);
+        setSyncedCount(0);
+        setSyncNotice({
+          tone: "error",
+          message: resolveSyncErrorMessage(
+            data,
+            response.status,
+            validation.host,
+            t,
+          ),
+        });
         return;
       }
 
+      const resolvedHost = data.host || validation.host;
+      const detectedNiche = (
+        (locale === "pl"
+          ? data.siteProfile?.nichePl
+          : data.siteProfile?.nicheEn) ||
+        data.siteProfile?.nichePl ||
+        data.siteProfile?.nicheEn ||
+        ""
+      ).trim();
+
       if (
-        !response.ok ||
+        data.hasPublicPrices === false ||
+        data.code === "NO_PUBLIC_PRICES" ||
         !Array.isArray(data.prices) ||
         data.prices.length === 0
       ) {
-        setSyncError(data.error ?? data.warning ?? t.syncWebsiteError);
+        if (detectedNiche && data.siteProfile) {
+          setCustomNiche(null);
+          const detectedPreset = data.siteProfile.matchedIndustryId;
+          if (
+            detectedPreset === "upholstery" ||
+            detectedPreset === "hvac" ||
+            detectedPreset === "plumbing"
+          ) {
+            setIndustryId(detectedPreset);
+          }
+          setSiteProfile(data.siteProfile);
+          setSyncedCatalog([]);
+          setSyncedCount(0);
+          setSyncNotice({
+            tone: "info",
+            message: formatTemplate(t.syncNoPublicPricesInfo, {
+              niche: detectedNiche,
+              host: resolvedHost,
+            }),
+          });
+          return;
+        }
+
+        setSiteProfile(null);
+        setSyncedCatalog(null);
+        setSyncedCount(0);
+        setSyncNotice({
+          tone: "error",
+          message: formatTemplate(t.syncNoPublicPricesNoNicheError, {
+            host: resolvedHost,
+          }),
+        });
         return;
       }
 
@@ -498,7 +664,24 @@ export function Dashboard() {
       }
 
       if (nextCatalog.length === 0) {
-        setSyncError(t.syncWebsiteError);
+        if (detectedNiche && data.siteProfile) {
+          setCustomNiche(null);
+          setSiteProfile(data.siteProfile);
+          setSyncedCatalog([]);
+          setSyncedCount(0);
+          setSyncNotice({
+            tone: "info",
+            message: formatTemplate(t.syncNoPublicPricesInfo, {
+              niche: detectedNiche,
+              host: resolvedHost,
+            }),
+          });
+        } else {
+          setSiteProfile(null);
+          setSyncedCatalog(null);
+          setSyncedCount(0);
+          setSyncNotice({ tone: "error", message: t.syncWebsiteError });
+        }
         return;
       }
 
@@ -506,13 +689,24 @@ export function Dashboard() {
       setSiteProfile(data.siteProfile ?? null);
       setSyncedCatalog(nextCatalog);
       setSyncedCount(nextCatalog.length);
-      if (data.aiEnhanced === false && data.warning) {
-        setSyncError(data.warning);
+      if (data.code === "AI_FALLBACK_USED") {
+        setSyncNotice({
+          tone: "warning",
+          message: t.syncFallbackParserNotice,
+        });
+      } else if (data.aiEnhanced === false && data.warning) {
+        setSyncNotice({
+          tone: "warning",
+          message: data.warning,
+        });
       }
     } catch (err) {
-      setSyncError(
-        isTimeoutFailure(err) ? t.syncWebsiteTimeoutError : t.syncWebsiteError,
-      );
+      setSyncNotice({
+        tone: "error",
+        message: isTimeoutFailure(err)
+          ? t.syncWebsiteTimeoutError
+          : t.syncWebsiteError,
+      });
     } finally {
       setIsSyncingPrices(false);
     }
@@ -520,7 +714,7 @@ export function Dashboard() {
 
   const handleScanMarket = async () => {
     setIsScanningMarket(true);
-    setSyncError(null);
+    setSyncNotice(null);
     const effectiveSiteProfile: SiteProfile | undefined = hasManualCustomNiche
       ? {
           businessName: siteProfile?.businessName,
@@ -562,18 +756,22 @@ export function Dashboard() {
       >(response);
 
       if (!data) {
-        setSyncError(
-          isTimeoutFailure(null, response.status)
+        setSyncNotice({
+          tone: "error",
+          message: isTimeoutFailure(null, response.status)
             ? t.scanMarketTimeoutError
             : formatTemplate(t.scanMarketHttpError, {
                 status: response.status,
               }),
-        );
+        });
         return;
       }
 
       if (!response.ok) {
-        setSyncError(data.error ?? data.warning ?? t.scanMarketError);
+        setSyncNotice({
+          tone: "error",
+          message: data.error ?? data.warning ?? t.scanMarketError,
+        });
         return;
       }
 
@@ -591,12 +789,18 @@ export function Dashboard() {
       }
       setScannedBenchmarks(nextBenchmarks);
       if (!data.aiEnhanced && data.warning) {
-        setSyncError(data.warning);
+        setSyncNotice({
+          tone: "warning",
+          message: data.warning,
+        });
       }
     } catch (err) {
-      setSyncError(
-        isTimeoutFailure(err) ? t.scanMarketTimeoutError : t.scanMarketError,
-      );
+      setSyncNotice({
+        tone: "error",
+        message: isTimeoutFailure(err)
+          ? t.scanMarketTimeoutError
+          : t.scanMarketError,
+      });
     } finally {
       setIsScanningMarket(false);
     }
@@ -851,13 +1055,13 @@ export function Dashboard() {
                   setScannedBenchmarks({});
                 }
                 setWebsiteUrl(next);
-                if (syncError) setSyncError(null);
+                if (syncNotice) setSyncNotice(null);
               }}
               onSyncPrices={handleSyncPrices}
               onScanMarket={handleScanMarket}
               isSyncingPrices={isSyncingPrices}
               isScanningMarket={isScanningMarket}
-              syncError={syncError}
+              syncNotice={syncNotice}
               syncedCount={syncedCount}
               scannedCompetitorsCount={liveCompetitorsCount}
             />
