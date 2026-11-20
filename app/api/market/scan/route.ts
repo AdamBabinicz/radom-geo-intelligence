@@ -14,9 +14,9 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const GEMINI_SCAN_TIMEOUT_MS = 15_000;
-const GROQ_MODEL_TIMEOUT_MS = 10_000;
-const GROQ_TOTAL_BUDGET_MS = 20_000;
+const GEMINI_SCAN_TIMEOUT_MS = 20_000;
+const GROQ_MODEL_TIMEOUT_MS = 12_000;
+const GROQ_TOTAL_BUDGET_MS = 24_000;
 
 const GROQ_CHAT_COMPLETIONS_URL =
   "https://api.groq.com/openai/v1/chat/completions";
@@ -25,7 +25,7 @@ const GROQ_FALLBACK_MODELS = [
   "qwen/qwen3.8-27b",
   "openai/gpt-oss-20b",
 ] as const;
-const MAX_GROQ_RESEARCH_CHARS = 12_500;
+const MAX_GROQ_RESEARCH_CHARS = 11_500;
 
 interface GroundingSource {
   title: string;
@@ -165,8 +165,11 @@ const AGGREGATOR_HOSTS = [
 const CURRENCY_LINE_RE =
   /(?:\d\s*(?:z[łl]|pln|eur|usd|\$|€|,-)(?![a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ])|(?:€|\$|pln|eur)\s*\d)/i;
 
+const ZERO_PRICE_ONLY_RE =
+  /^\s*0+(?:[.,]0+)?\s*(?:z[łl]|pln|eur|usd|\$|€)\s*$/i;
+
 const VENDOR_SCRIPT_RE =
-  /^(?:react|react-dom|radix|lucide|icons|motion|framer-motion|query|tanstack|vendor|polyfill|chunk-vendors|gtag|gtm|analytics|swiper|jquery|bootstrap)/i;
+  /^(?:react|react-dom|radix|lucide|icons|motion|framer-motion|query|tanstack|vendor|polyfill|chunk-vendors|gtag|gtm|analytics|swiper|jquery|bootstrap|cookie|front\.min|comment-reply)/i;
 
 const APP_OR_PRICING_SCRIPT_RE =
   /(?:index|main|app|oferta|offer|cennik|price|pricing|calc|service|uslug|menu|wynajem|catalog|atrakcj|shop|store|produkt)/i;
@@ -435,13 +438,13 @@ function extractVisibleText(html: string): { title: string; text: string } {
     .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&ndash;/gi, "–")
-    .replace(/&mdash;/gi, "—")
+    .replace(/(&ndash;|&#8211;)/gi, "–")
+    .replace(/(&mdash;|&#8212;)/gi, "—")
     .replace(/(&sup2;|&#178;)/gi, "²")
     .replace(/[ \t\r\f\v]+/g, " ")
     .replace(/\n\s*\n+/g, "\n")
     .trim();
-  return { title, text: stripped.slice(0, 16_000) };
+  return { title, text: stripped.slice(0, 14_000) };
 }
 
 function extractJsonLdPricingText(html: string): string {
@@ -491,7 +494,7 @@ function extractJsonLdPricingText(html: string): string {
     }
   }
 
-  return Array.from(new Set(lines)).slice(0, 35).join("\n");
+  return Array.from(new Set(lines)).slice(0, 30).join("\n");
 }
 
 function decodeJsEscapes(raw: string): string {
@@ -524,6 +527,7 @@ function extractSpaPricingLines(jsTexts: string[]): string {
     if (
       cleaned.length < 5 ||
       cleaned.length > 220 ||
+      ZERO_PRICE_ONLY_RE.test(cleaned) ||
       isJsArtifactLine(cleaned) ||
       seen.has(cleaned)
     ) {
@@ -567,10 +571,17 @@ function extractSpaPricingLines(jsTexts: string[]): string {
       pushLine(val);
     }
 
-    if (out.length >= 60) break;
+    if (out.length >= 50) break;
   }
 
-  return out.slice(0, 60).join("\n");
+  return out.slice(0, 50).join("\n");
+}
+
+function isLikelySpaHtml(html: string, visibleText: string): boolean {
+  if (visibleText.length < 700) return true;
+  return /<script[^>]+type=["']module["']|id=["'](?:root|app|__next)["']|\/(?:assets|_next\/static)\//i.test(
+    html,
+  );
 }
 
 function findSameOriginScripts(html: string, baseUrl: URL): string[] {
@@ -656,11 +667,11 @@ function findLazyRouteChunks(
   return Array.from(candidates.keys()).slice(0, 2);
 }
 
-function compactSiteText(rawText: string, maxChars = 5_200): string {
+function compactSiteText(rawText: string, maxChars = 4_000): string {
   const lines = rawText
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line.length > 1);
+    .filter((line) => line.length > 1 && !ZERO_PRICE_ONLY_RE.test(line));
   const signalRe =
     /(z[łl]|pln|eur|usd|\$|€|,-|cennik|cena|od\s+\d+|from\s+\d+|m²|m2|szt|godz|hour|dzie[ńn]|day|imprez|event|wynajem|us[łl]ug|dojazd|gratis|opinie|price|pricing|rate|SCHEMA_OFFER|SPA_ITEM)/i;
   const picked = new Set<number>();
@@ -671,33 +682,38 @@ function compactSiteText(rawText: string, maxChars = 5_200): string {
       if (idx + 1 < lines.length) picked.add(idx + 1);
     }
   });
+  // Keep strictly in document order so service labels stay directly above their prices
   const selected = Array.from(picked)
     .sort((a, b) => a - b)
     .map((idx) => lines[idx]);
-  if (selected.length === 0) {
-    return lines.join("\n").slice(0, maxChars);
-  }
-  const currencyFirst = prioritizeCurrencyLines(selected.join("\n"), maxChars);
-  return currencyFirst || selected.join("\n").slice(0, maxChars);
+  const joined = (selected.length > 0 ? selected : lines).join("\n");
+  return joined.slice(0, maxChars);
 }
 
 function prioritizeCurrencyLines(rawText: string, maxChars: number): string {
+  if (rawText.length <= maxChars) return rawText;
   const lines = rawText
     .split("\n")
     .map((l) => l.trim())
-    .filter((l) => l.length > 2);
-  const namedCurrencyLines = lines.filter(
-    (l) =>
-      CURRENCY_LINE_RE.test(l) &&
-      /[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]{3,}/.test(
-        l.replace(/(?:pln|eur|usd|zł|od|from)/gi, ""),
-      ),
-  );
-  const currencyLines = lines.filter(
-    (l) => CURRENCY_LINE_RE.test(l) && !namedCurrencyLines.includes(l),
-  );
-  const otherLines = lines.filter((l) => !CURRENCY_LINE_RE.test(l));
-  const ordered = [...namedCurrencyLines, ...currencyLines, ...otherLines];
+    .filter((l) => l.length > 2 && !ZERO_PRICE_ONLY_RE.test(l));
+
+  // Keep preceding label lines paired with currency lines when trimming long pages for Groq
+  const highSignalIndices = new Set<number>();
+  lines.forEach((line, idx) => {
+    if (CURRENCY_LINE_RE.test(line)) {
+      if (idx > 0 && !CURRENCY_LINE_RE.test(lines[idx - 1])) {
+        highSignalIndices.add(idx - 1);
+      }
+      highSignalIndices.add(idx);
+    }
+  });
+
+  const highSignal = Array.from(highSignalIndices)
+    .sort((a, b) => a - b)
+    .map((idx) => lines[idx]);
+  const rest = lines.filter((_, idx) => !highSignalIndices.has(idx));
+  const ordered = [...highSignal, ...rest];
+
   const chunks: string[] = [];
   let len = 0;
   for (const line of ordered) {
@@ -717,23 +733,40 @@ function buildCompactGroqResearch(
   const sections: string[] = [];
   let remaining = maxChars;
   if (gbpContext) {
-    const gbpCap = Math.min(3_200, Math.floor(maxChars * 0.32));
+    const gbpCap = Math.min(3_200, Math.floor(maxChars * 0.34));
     const gbpSlice = gbpContext.slice(0, gbpCap).trim();
     sections.push(gbpSlice);
     remaining -= gbpSlice.length + 2;
   }
   if (fetchedSites.length > 0 && remaining > 400) {
-    // Prioritize websites that actually expose currency/price signals so marketing-only pages don't starve real price tables
     const sortedSites = [...fetchedSites].sort(
       (a, b) => Number(b.hasPriceSignals) - Number(a.hasPriceSignals),
     );
-    for (const site of sortedSites.slice(0, 10)) {
+    const sitesToInclude = sortedSites.slice(0, 9);
+    const pricedCount = Math.max(
+      1,
+      sitesToInclude.filter((s) => s.hasPriceSignals).length,
+    );
+    const unpricedCount = sitesToInclude.filter(
+      (s) => !s.hasPriceSignals,
+    ).length;
+    const unpricedCap = 240;
+    const budgetForPriced = Math.max(
+      480,
+      Math.floor(
+        (remaining - unpricedCount * (unpricedCap + 75)) / pricedCount,
+      ) - 70,
+    );
+    const pricedCap = Math.min(1_500, Math.max(520, budgetForPriced));
+
+    for (const site of sitesToInclude) {
       if (remaining < 180) break;
       const header = `=== SITE: ${site.title.slice(0, 60)} (${site.url}) ===`;
-      const siteCap = site.hasPriceSignals
-        ? Math.min(1_800, Math.max(500, remaining - header.length - 4))
-        : Math.min(280, Math.max(120, remaining - header.length - 4));
-      const compactBody = prioritizeCurrencyLines(site.text, siteCap);
+      const targetCap = site.hasPriceSignals ? pricedCap : unpricedCap;
+      const compactBody = prioritizeCurrencyLines(
+        site.text,
+        Math.min(targetCap, Math.max(120, remaining - header.length - 4)),
+      );
       if (!compactBody) continue;
       const block = `${header}\n${compactBody}`;
       if (block.length + 2 <= remaining) {
@@ -859,7 +892,7 @@ async function fetchSiteContext(
 
   let combined = parts.filter(Boolean).join("\n");
 
-  if (combined.length < 450 || !CURRENCY_LINE_RE.test(combined)) {
+  if (!CURRENCY_LINE_RE.test(combined) && isLikelySpaHtml(html, text)) {
     const scriptUrls = findSameOriginScripts(html, safeUrl);
     if (scriptUrls.length > 0) {
       const initialScripts = (
@@ -886,13 +919,16 @@ async function fetchSiteContext(
     }
   }
 
-  const compacted = compactSiteText(combined, 5_200);
+  const compacted = compactSiteText(combined, 4_000);
   if (!compacted) return null;
+  const meaningfulPriceLines = compacted
+    .split("\n")
+    .some((l) => CURRENCY_LINE_RE.test(l) && !ZERO_PRICE_ONLY_RE.test(l));
   return {
     url: safeUrl.toString(),
     title: title || safeUrl.hostname,
     text: compacted,
-    hasPriceSignals: CURRENCY_LINE_RE.test(compacted),
+    hasPriceSignals: meaningfulPriceLines,
   };
 }
 
@@ -1190,6 +1226,9 @@ async function discoverViaSerper(
       if (!link) continue;
       if (isExcludedCompetitorWebsite(link, excludeHost)) continue;
       collectedUrls.push(link);
+
+      const safeLink = isSafePublicUrl(link);
+      if (!safeLink || isAggregatorHost(safeLink.hostname)) continue;
       const snippet = item.snippet?.replace(/\s+/g, " ").trim() ?? "";
       const title = item.title?.replace(/\s+/g, " ").trim() ?? "";
       if (
@@ -1199,7 +1238,7 @@ async function discoverViaSerper(
       ) {
         seenSnippetLinks.add(link);
         organicSnippets.push(
-          `- ${title.slice(0, 75)} (${link}): ${snippet.slice(0, 220)}`,
+          `- ${title.slice(0, 65)} (${link}): ${snippet.slice(0, 180)}`,
         );
       }
     }
@@ -1213,7 +1252,7 @@ async function discoverViaSerper(
   }
   if (organicSnippets.length > 0) {
     contextSections.push(
-      `=== GOOGLE SEARCH PRICE SNIPPETS ===\n${organicSnippets.slice(0, 10).join("\n")}`,
+      `=== SEARCH PRICE SNIPPETS ===\n${organicSnippets.slice(0, 4).join("\n")}`,
     );
   }
 
@@ -1435,7 +1474,7 @@ function buildSynthesisPrompt(
   validServiceKeys: Set<string>,
   activeServices: ActiveServiceDescriptor[],
   nicheContextLabel: string,
-  maxResearchChars = 24_000,
+  maxResearchChars = 22_000,
 ): string {
   const languageLabel = params.locale === "pl" ? "Polish" : "English";
   const trackedServicesList = activeServices
@@ -1457,16 +1496,15 @@ function buildSynthesisPrompt(
   return [
     `Extract structured market intelligence strictly from the verified competitor data below.`,
     `Target business niche: ${nicheContextLabel}.`,
-    `Return 8-12 distinct local competitors in that exact niche when supported by the source data (covering both Google Business Profiles / Maps listings and company websites).`,
+    `Return ALL distinct local competitors present in the source data (aim for 8-12 companies when available, covering both Google Business Profiles / Maps listings and websites).`,
     excludeInstruction,
     `Populate "rating" and "reviewCount" whenever verified Google review numbers appear in the source text.`,
     `Do NOT invent companies, numbers, ratings, or prices not supported by the text.`,
     `Write "summary", "priceSummary", "travelFeeNote", "note", "label", and "evidence" in ${languageLabel}.`,
     `Active tracked services to benchmark (use these EXACT serviceKey values, including "live:*" keys): ${trackedServicesList || Array.from(validServiceKeys).join(", ")}.`,
-    `Emit a marketBenchmarks entry for EVERY tracked serviceKey (including "live:*" keys) that has exact item-and-unit-compatible competitor pricing in the source data (for example: wersalka <-> wersalka, płytki/gres <-> mycie płytek, poduszka/poduchy <-> poduchy meblowe, materac 1-os <-> materac pojedynczy).`,
     `CRITICAL SCOPE & UNIT RULE: Match each service strictly by its human label and billing unit — never rely on internal serviceKey naming alone. NEVER map prices between different item sizes, furniture types, or service tiers (for example: NEVER assign a small chair/pouf/cushion price like 15-25 PLN to an armchair/fotel, NEVER assign a 2-seat sofa price to a corner sofa/narożnik, NEVER assign a doormat price to a full carpet, NEVER assign a 1-seat mattress price to a double mattress, and NEVER compare hourly/add-on/deposit/travel fees against full-service or full-day prices).`,
     `If a competitor only lists an incompatible item or unit, mention it in competitors[].priceSummary and OMIT that service from marketBenchmarks.`,
-    `Compute avgPricePln, minPricePln, maxPricePln across found local companies only for serviceKey entries with exact item-and-unit-compatible price evidence, and briefly cite the matched competitor items/prices in "note".`,
+    `Compute avgPricePln, minPricePln, maxPricePln across found local companies for every tracked serviceKey (including "live:*" keys) with exact item-and-unit-compatible price evidence, and briefly cite the matched competitor items/prices in "note".`,
     `\n=== VERIFIED LOCAL COMPETITOR DATA (${params.city}, ${params.country}) ===\n${researchText.slice(0, maxResearchChars)}`,
   ]
     .filter(Boolean)
@@ -1489,7 +1527,7 @@ async function structureReportWithGemini(
     validServiceKeys,
     activeServices,
     nicheContextLabel,
-    24_000,
+    22_000,
   );
 
   const structuredResponse = await ai.models.generateContent({
@@ -1601,13 +1639,13 @@ async function structureReportWithGroq(
         body: JSON.stringify({
           model,
           temperature: 0.1,
-          max_tokens: 4000,
+          max_tokens: 6000,
           response_format: { type: "json_object" },
           messages: [
             {
               role: "system",
               content:
-                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Only cite companies and numbers supported by input, include every tracked serviceKey (including live:*) with verified exact item-and-unit match, and never mix different furniture sizes, item categories, or billing units.',
+                'Return strict JSON matching shape: {"summary":"...","competitors":[{"name":"...","website":"...","rating":4.8,"reviewCount":50,"travelFeeNote":"...","priceSummary":"..."}],"marketBenchmarks":[{"serviceKey":"...","avgPricePln":100,"minPricePln":80,"maxPricePln":120,"sampleCount":2,"note":"..."}],"painPoints":[{"key":"...","label":"...","evidence":"...","severityScore":70}]}. Include up to 12 competitors present in input, benchmark every tracked serviceKey with exact item-and-unit match, and never mix furniture sizes, item categories, or billing units.',
             },
             {
               role: "user",
