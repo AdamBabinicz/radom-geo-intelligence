@@ -162,6 +162,15 @@ export function MarketSwitcher({
     customNiche !== null ? customNiche : resolvedFallbackLabel;
   const trimmedCustom = (customNiche ?? "").trim();
 
+  function findMatchingPresetId(rawValue: string): IndustryId | null {
+    const normalized = rawValue.trim().toLowerCase();
+    if (!normalized) return null;
+    const match = INDUSTRY_LIST.find(
+      (item) => t[item.labelKey].trim().toLowerCase() === normalized,
+    );
+    return match ? match.id : null;
+  }
+
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
       if (
@@ -219,6 +228,12 @@ export function MarketSwitcher({
   }
 
   function handleConfirmCustomNiche() {
+    const matchedPreset = findMatchingPresetId(trimmedCustom);
+    if (matchedPreset) {
+      handleSelectPreset(matchedPreset);
+      industryInputRef.current?.blur();
+      return;
+    }
     if (!trimmedCustom) {
       onCustomNicheChange?.(null);
     }
@@ -363,11 +378,22 @@ export function MarketSwitcher({
               value={industryInputValue}
               onFocus={() => setIsPresetMenuOpen(true)}
               onChange={(e) => {
-                onCustomNicheChange?.(e.target.value);
+                const nextValue = e.target.value;
+                const matchedPreset = findMatchingPresetId(nextValue);
+                if (matchedPreset) {
+                  onCustomNicheChange?.(null);
+                  onIndustryChange(matchedPreset);
+                } else {
+                  onCustomNicheChange?.(nextValue);
+                }
                 if (!isPresetMenuOpen) setIsPresetMenuOpen(true);
               }}
               onBlur={() => {
-                if (customNiche !== null && !customNiche.trim()) {
+                const matchedPreset = findMatchingPresetId(trimmedCustom);
+                if (matchedPreset) {
+                  onCustomNicheChange?.(null);
+                  onIndustryChange(matchedPreset);
+                } else if (customNiche !== null && !customNiche.trim()) {
                   onCustomNicheChange?.(null);
                 }
               }}

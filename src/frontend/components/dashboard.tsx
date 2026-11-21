@@ -63,6 +63,8 @@ export function Dashboard() {
     runScan,
   } = useDashboardIntelligence();
 
+  const hasPricingCalculator = market.benchmarks.length > 0;
+
   return (
     <div className={dark ? "dark" : ""}>
       <div className="min-h-screen bg-[#f5f7f8] text-slate-900 dark:bg-[#101719] dark:text-slate-100">
@@ -167,7 +169,13 @@ export function Dashboard() {
               />
             </div>
 
-            <div className="mt-5 grid grid-cols-1 gap-5 xl:items-start [&>*]:min-w-0 xl:grid-cols-[minmax(0,1.08fr)_minmax(0,.92fr)]">
+            <div
+              className={`mt-5 grid grid-cols-1 gap-5 xl:items-start [&>*]:min-w-0 ${
+                hasPricingCalculator
+                  ? "xl:grid-cols-[minmax(0,1.08fr)_minmax(0,.92fr)]"
+                  : ""
+              }`}
+            >
               <RovoConsole
                 t={t}
                 market={market}
@@ -180,13 +188,15 @@ export function Dashboard() {
                 detectedIndustryLabel={detectedIndustryLabel}
                 topPainPoint={topLivePainPoint}
               />
-              <PricingCalculator
-                t={t}
-                market={market}
-                locale={locale}
-                radiusKm={radiusKm}
-                selectedTown={selectedTown}
-              />
+              {hasPricingCalculator && (
+                <PricingCalculator
+                  t={t}
+                  market={market}
+                  locale={locale}
+                  radiusKm={radiusKm}
+                  selectedTown={selectedTown}
+                />
+              )}
             </div>
 
             <AiCouncilPanel

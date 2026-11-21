@@ -6,7 +6,7 @@
   "councilCrossProviderLive": "Aktywna debata między różnymi dostawcami AI",
   "councilSingleProviderHint": "Niezależna sesja krytyka (dodaj GROQ_API_KEY lub OPENAI_API_KEY, aby spierać modele różnych dostawców)",
   "councilHumanConstraintLabel": "Zasada / limit operatora (opcjonalnie)",
-  "councilHumanConstraintPlaceholder": "np. Nie podnoś ceny narożnika powyżej 220 zł, podkreśl darmowy dojazd od 250 zł",
+  "councilHumanConstraintPlaceholder": "np. Nie podnoś ceny głównej usługi powyżej 220 zł, podkreśl darmowy dojazd od 250 zł",
   "councilRunBtn": "Uruchom naradę wielomodelową",
   "councilRunningBtn": "Modele debatują…",
   "councilLessonsTitle": "Zapamiętane reguły operatora (Lessons Learned)",
