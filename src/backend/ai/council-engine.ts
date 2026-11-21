@@ -1,560 +1,46 @@
-import { ThinkingLevel, Type } from "@google/genai";
-import type { IndustryId } from "../../config/industries";
+import { ThinkingLevel } from "@google/genai";
 import {
   GEMINI_TEXT_MODEL,
   getGeminiClient,
   parseJsonSafe,
 } from "./gemini-client";
+import {
+  buildCompactMarketBrief,
+  buildGroundedFallbackCouncil,
+  buildRound3FallbackOptions,
+  clampPriceMoves,
+  normalizeSynthesisOption,
+} from "./council/fallback-and-normalizers";
+import {
+  callOpenAiCompatibleJson,
+  CRITIC_RESPONSE_SCHEMA,
+  formatExternalModelLabel,
+  getSecondaryProvider,
+  isQuotaError,
+  isTransientGeminiFailure,
+  STRATEGIST_RESPONSE_SCHEMA,
+  SYNTHESIS_RESPONSE_SCHEMA,
+} from "./council/providers";
+import {
+  GEMINI_ROUND_TIMEOUT_MS,
+  type CouncilDebateResult,
+  type CouncilDecisionOption,
+  type CouncilRequestInput,
+  type RawCriticPayload,
+  type RawStrategistPayload,
+  type RawSynthesisPayload,
+} from "./council/types";
 
-const GEMINI_ROUND_TIMEOUT_MS = 14_000;
-const EXTERNAL_MODEL_TIMEOUT_MS = 12_000;
-const EXTERNAL_ROUND_BUDGET_MS = 20_000;
-
-export interface CouncilServiceInput {
-  serviceKey: string;
-  label: string;
-  unitType: string;
-  ourPricePln: number;
-  localPricePln: number;
-}
-
-export interface CouncilCompetitorInput {
-  name: string;
-  rating?: number;
-  reviewCount?: number;
-  priceSummary: string;
-  travelFeeNote?: string;
-}
-
-export interface CouncilPainPointInput {
-  label: string;
-  score: number;
-  evidence?: string;
-}
-
-export interface CouncilRequestInput {
-  city: string;
-  industryId: IndustryId;
-  industryLabel?: string;
-  radiusKm: number;
-  locale: "pl" | "en";
-  avgGapPct: number;
-  townsInRadius: string[];
-  services: CouncilServiceInput[];
-  competitors: CouncilCompetitorInput[];
-  painPoints: CouncilPainPointInput[];
-  humanNote?: string;
-  lessonsLearned?: string[];
-}
-
-export interface CouncilPriceMove {
-  serviceKey: string;
-  label: string;
-  currentPricePln: number;
-  proposedPricePln: number;
-  rationale: string;
-}
-
-export interface CouncilPriceAdjustment {
-  serviceKey: string;
-  label: string;
-  currentPricePln: number;
-  finalPricePln: number;
-}
-
-export interface CouncilDecisionOption {
-  id: "safe" | "margin";
-  title: string;
-  summary: string;
-  priceAdjustments: CouncilPriceAdjustment[];
-  actionItems: string[];
-}
-
-export interface CouncilDebateResult {
-  aiEnhanced: boolean;
-  crossProviderUsed: boolean;
-  fallbackNotice?: string;
-  generatedAt: string;
-  models: {
-    strategist: string;
-    critic: string;
-    criticProvider: "groq" | "openai" | "gemini-isolated" | "deterministic";
-  };
-  round1Strategist: {
-    thesis: string;
-    campaignAngle: string;
-    priceMoves: CouncilPriceMove[];
-  };
-  round2Critic: {
-    verdict: "challenge" | "revise" | "caution";
-    riskScore: number;
-    objections: string[];
-    counterProposals: string[];
-  };
-  round3Synthesis: {
-    summaryForHuman: string;
-    options: [CouncilDecisionOption, CouncilDecisionOption];
-  };
-}
-
-interface ExternalProviderConfig {
-  provider: "groq" | "openai";
-  endpoint: string;
-  apiKey: string;
-  models: string[];
-}
-
-const GROQ_DEFAULT_MODELS = [
-  "openai/gpt-oss-120b",
-  "qwen/qwen3.8-27b",
-  "openai/gpt-oss-20b",
-] as const;
-
-function getSecondaryProvider(): ExternalProviderConfig | null {
-  const groqKey = process.env.GROQ_API_KEY?.trim();
-  if (groqKey) {
-    const preferred = process.env.GROQ_TEXT_MODEL?.trim();
-    const models = Array.from(
-      new Set(
-        [preferred, ...GROQ_DEFAULT_MODELS].filter((m): m is string =>
-          Boolean(m && m.length > 0),
-        ),
-      ),
-    );
-    return {
-      provider: "groq",
-      endpoint: "https://api.groq.com/openai/v1/chat/completions",
-      apiKey: groqKey,
-      models,
-    };
-  }
-  const openaiKey = process.env.OPENAI_API_KEY?.trim();
-  if (openaiKey) {
-    const preferred = process.env.OPENAI_TEXT_MODEL?.trim() || "gpt-4o-mini";
-    return {
-      provider: "openai",
-      endpoint: "https://api.openai.com/v1/chat/completions",
-      apiKey: openaiKey,
-      models: [preferred],
-    };
-  }
-  return null;
-}
-
-function formatExternalModelLabel(
-  provider: "groq" | "openai",
-  model: string,
-): string {
-  return provider === "groq" ? `Groq · ${model}` : `OpenAI · ${model}`;
-}
-
-function isQuotaError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err ?? "");
-  return (
-    msg.includes("429") ||
-    msg.includes("RESOURCE_EXHAUSTED") ||
-    msg.toLowerCase().includes("quota")
-  );
-}
-
-function isTransientGeminiFailure(err: unknown): boolean {
-  if (isQuotaError(err)) return true;
-  if (err instanceof DOMException) {
-    return err.name === "TimeoutError" || err.name === "AbortError";
-  }
-  const msg = err instanceof Error ? err.message : String(err ?? "");
-  return (
-    msg.includes("503") ||
-    msg.includes("UNAVAILABLE") ||
-    msg.toLowerCase().includes("timeout") ||
-    msg.toLowerCase().includes("aborted")
-  );
-}
-
-function stripThinkBlocks(raw: string): string {
-  return raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-}
-
-async function callOpenAiCompatibleJson<T>(
-  cfg: ExternalProviderConfig,
-  systemPrompt: string,
-  userPrompt: string,
-  orderedModels?: string[],
-): Promise<{ data: T | null; usedModel: string }> {
-  const modelsToTry =
-    orderedModels && orderedModels.length > 0 ? orderedModels : cfg.models;
-  const deadline = Date.now() + EXTERNAL_ROUND_BUDGET_MS;
-  let lastError: Error | null = null;
-
-  for (const model of modelsToTry) {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 1_500) break;
-
-    try {
-      const res = await fetch(cfg.endpoint, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${cfg.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          temperature: 0.4,
-          max_tokens: 1800,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-        }),
-        signal: AbortSignal.timeout(
-          Math.min(EXTERNAL_MODEL_TIMEOUT_MS, remainingMs),
-        ),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        throw new Error(
-          `${cfg.provider} (${model}) HTTP ${res.status}: ${errText.slice(0, 180)}`,
-        );
-      }
-
-      const json = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const rawContent = json.choices?.[0]?.message?.content;
-      if (!rawContent) {
-        throw new Error(`${cfg.provider} (${model}) returned empty content`);
-      }
-      const cleaned = stripThinkBlocks(rawContent);
-      const parsed = parseJsonSafe<T | null>(cleaned, null);
-      if (!parsed) {
-        throw new Error(`${cfg.provider} (${model}) returned unparseable JSON`);
-      }
-      return { data: parsed, usedModel: model };
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      console.warn(
-        `[/api/council] Model ${model} failed, trying fallback if available:`,
-        lastError.message,
-      );
-    }
-  }
-
-  throw lastError ?? new Error(`${cfg.provider} request failed`);
-}
-
-function buildCompactMarketBrief(input: CouncilRequestInput): string {
-  const resolvedIndustry = input.industryLabel?.trim() || input.industryId;
-  const servicesLines = input.services
-    .slice(0, 12)
-    .map((s) => {
-      const gap =
-        s.localPricePln > 0
-          ? `${Math.round(((s.ourPricePln - s.localPricePln) / s.localPricePln) * 100)}%`
-          : "n/a";
-      const enHint =
-        input.locale === "en"
-          ? ` (~$${Math.round(s.ourPricePln / 4)} USD vs ~$${
-              s.localPricePln > 0 ? Math.round(s.localPricePln / 4) : 0
-            } USD)`
-          : "";
-      return `- [${s.serviceKey}] ${s.label}: our=${s.ourPricePln} PLN, localAvg=${s.localPricePln > 0 ? `${s.localPricePln} PLN` : "none"} (gap ${gap})${enHint}`;
-    })
-    .join("\n");
-
-  const compLines = input.competitors
-    .slice(0, 6)
-    .map(
-      (c) =>
-        `- ${c.name}${c.rating ? ` ★${c.rating}(${c.reviewCount ?? 0})` : ""}: ${c.priceSummary}`,
-    )
-    .join("\n");
-
-  const painLines = input.painPoints
-    .slice(0, 4)
-    .map(
-      (p) => `- ${p.label} (${p.score}%)${p.evidence ? `: ${p.evidence}` : ""}`,
-    )
-    .join("\n");
-
-  const lessonsBlock =
-    input.lessonsLearned && input.lessonsLearned.length > 0
-      ? `Operator's prior Lessons Learned (MUST honor these):\n${input.lessonsLearned
-          .slice(0, 6)
-          .map((l) => `- ${l}`)
-          .join("\n")}`
-      : "";
-
-  const humanConstraintBlock = input.humanNote?.trim()
-    ? `Active Human Operator Constraint (HIGHEST PRIORITY): ${input.humanNote.trim()}`
-    : "";
-
-  return [
-    `City: ${input.city} | Industry: ${resolvedIndustry} | Radius: ${input.radiusKm} km | Avg Market Gap: ${input.avgGapPct}%`,
-    `Towns in zone: ${input.townsInRadius.slice(0, 10).join(", ")}`,
-    `Services:\n${servicesLines || "- none"}`,
-    compLines ? `Competitors:\n${compLines}` : "",
-    painLines ? `Customer pain points:\n${painLines}` : "",
-    lessonsBlock,
-    humanConstraintBlock,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function clampPriceMoves(
-  rawMoves: Array<{
-    serviceKey?: string;
-    label?: string;
-    currentPricePln?: number;
-    proposedPricePln?: number;
-    rationale?: string;
-  }>,
-  services: CouncilServiceInput[],
-): CouncilPriceMove[] {
-  const byKey = new Map(services.map((s) => [s.serviceKey, s]));
-  const out: CouncilPriceMove[] = [];
-  const seen = new Set<string>();
-  for (const m of rawMoves) {
-    const key = String(m.serviceKey ?? "").trim();
-    if (!key || seen.has(key)) continue;
-    const base = byKey.get(key);
-    const current = base?.ourPricePln ?? Number(m.currentPricePln);
-    const proposed = Number(m.proposedPricePln);
-    if (!Number.isFinite(current) || current <= 0) continue;
-    if (!Number.isFinite(proposed) || proposed <= 0) continue;
-    seen.add(key);
-    out.push({
-      serviceKey: key,
-      label: String(m.label || base?.label || key).slice(0, 75),
-      currentPricePln: Math.round(current),
-      proposedPricePln: Math.round(proposed),
-      rationale: String(m.rationale ?? "").slice(0, 180),
-    });
-    if (out.length >= 4) break;
-  }
-  return out;
-}
-
-function buildGroundedFallbackCouncil(
-  input: CouncilRequestInput,
-  fallbackNotice?: string,
-): CouncilDebateResult {
-  const isPl = input.locale === "pl";
-  const isCustomOrNonUpholstery =
-    Boolean(input.industryLabel?.trim()) || input.industryId !== "upholstery";
-  const underpriced = input.services
-    .filter((s) => s.localPricePln > 0 && s.ourPricePln < s.localPricePln)
-    .sort(
-      (a, b) =>
-        (b.localPricePln - b.ourPricePln) / b.localPricePln -
-        (a.localPricePln - a.ourPricePln) / a.localPricePln,
-    );
-  const topTargets = (
-    underpriced.length > 0 ? underpriced : input.services
-  ).slice(0, 3);
-
-  const priceMoves: CouncilPriceMove[] = topTargets.map((s) => {
-    const target =
-      s.localPricePln > s.ourPricePln
-        ? Math.round(s.ourPricePln + (s.localPricePln - s.ourPricePln) * 0.65)
-        : Math.round(s.ourPricePln * 1.08);
-    return {
-      serviceKey: s.serviceKey,
-      label: s.label,
-      currentPricePln: s.ourPricePln,
-      proposedPricePln: target,
-      rationale: isPl
-        ? s.localPricePln > 0
-          ? `Średnia w mieście ${input.city} to ${s.localPricePln} zł — bezpieczne domknięcie luki cenowej.`
-          : `Korekta marżowa +8% w promieniu ${input.radiusKm} km.`
-        : s.localPricePln > 0
-          ? `${input.city} avg is ~$${Math.round(s.localPricePln / 4)} — closing part of the market gap.`
-          : `Modest +8% margin adjustment inside ${input.radiusKm} km zone.`,
-    };
-  });
-
-  const topPain = input.painPoints[0]?.label;
-  const secondaryTowns =
-    input.townsInRadius.slice(1, 4).join(", ") || input.city;
-
-  const safeAdjustments: CouncilPriceAdjustment[] = topTargets.map((s) => {
-    const gentle =
-      s.localPricePln > s.ourPricePln
-        ? Math.round(s.ourPricePln + (s.localPricePln - s.ourPricePln) * 0.35)
-        : s.ourPricePln;
-    return {
-      serviceKey: s.serviceKey,
-      label: s.label,
-      currentPricePln: s.ourPricePln,
-      finalPricePln: gentle,
-    };
-  });
-
-  const marginAdjustments: CouncilPriceAdjustment[] = priceMoves.map((m) => ({
-    serviceKey: m.serviceKey,
-    label: m.label,
-    currentPricePln: m.currentPricePln,
-    finalPricePln: m.proposedPricePln,
-  }));
-
-  const humanSuffix = input.humanNote?.trim()
-    ? isPl
-      ? ` Uwzględniono zasadę operatora: "${input.humanNote.trim()}".`
-      : ` Honored operator rule: "${input.humanNote.trim()}".`
-    : "";
-
-  const addOnCounterProposal = isCustomOrNonUpholstery
-    ? isPl
-      ? "Utrzymaj cenę wejściową głównego pakietu, a marżę buduj na usługach dodatkowych oraz pakietach premium."
-      : "Protect flagship entry pricing while monetizing add-on services and priority packages."
-    : isPl
-      ? "Utrzymaj cenę wejściową głównego pakietu, a marżę buduj na usługach dodatkowych (impregnacja, pufa, dosuszanie)."
-      : "Protect flagship entry price while monetizing add-ons (fabric protection, drying, extra pieces).";
-
-  const marginActionMiddle = isCustomOrNonUpholstery
-    ? isPl
-      ? "Przygotuj pakiety cross-sell (usługi dodatkowe i gwarancja terminu) dla większych zleceń"
-      : "Bundle high-margin add-on services or priority scheduling for larger bookings"
-    : isPl
-      ? "Przygotuj pakiety cross-sell (impregnacja / dosuszanie) dla zleceń powyżej 200 zł"
-      : "Bundle add-ons (fabric protection / drying) for higher-value bookings";
-
-  const sensitivityReasonPl = topPain
-    ? `ryzyka wokół: ${topPain}`
-    : "wrażliwość cenową lokalnego rynku";
-  const sensitivityReasonEn = topPain
-    ? `customer friction around ${topPain}`
-    : "local market price sensitivity";
-
-  return {
-    aiEnhanced: false,
-    crossProviderUsed: false,
-    fallbackNotice,
-    generatedAt: new Date().toISOString(),
-    models: {
-      strategist: isPl
-        ? "Silnik Regułowy (Dane Live)"
-        : "Deterministic Engine (Live Data)",
-      critic: isPl ? "Audytor Ryzyka (Dane Live)" : "Risk Auditor (Live Data)",
-      criticProvider: "deterministic",
-    },
-    round1Strategist: {
-      thesis: isPl
-        ? `W strefie ${input.city} (${input.radiusKm} km) średnia różnica cen wynosi ${input.avgGapPct}%. Podniesienie ${topTargets.length} najtańszych usług zmniejszy lukę bez utraty przewagi nad konkurentami.`
-        : `Across ${input.city} (${input.radiusKm} km), our price gap averages ${input.avgGapPct}%. Lifting ${topTargets.length} underpriced services boosts margin while staying below local rivals.`,
-      campaignAngle: isPl
-        ? `Kampania "Pełny cennik z góry — zero dopłat" dla miejscowości: ${secondaryTowns}.`
-        : `"Upfront transparent pricing — zero hidden fees" campaign targeting ${secondaryTowns}.`,
-      priceMoves,
-    },
-    round2Critic: {
-      verdict: "revise",
-      riskScore: 58,
-      objections: [
-        isPl
-          ? `Główna skarga klientów (${topPain || "brak jawnych cen"}) oznacza, że podwyżka bez podkreślenia ceny końcowej obniży konwersję.`
-          : `Top customer complaint (${topPain || "opaque pricing"}) warns against raising prices without clearer upfront quotes.`,
-        isPl
-          ? `Jednorazowy skok o >15% przy wysokiej konkurencji w Google Maps może wypchnąć część zapytań do firm z oceną 4.9★.`
-          : `Abrupt >15% hikes risk losing price-sensitive leads to 4.9★ Google Maps competitors.`,
-      ],
-      counterProposals: [
-        isPl
-          ? `Rozbij podwyżkę na łagodniejszy krok (+35% luki zamiast +65%) i wyeksponuj darmowy dojazd w promieniu ${input.radiusKm} km.`
-          : `Phase increases to ~35% of the gap first and highlight free zone travel inside ${input.radiusKm} km.`,
-        addOnCounterProposal,
-      ],
-    },
-    round3Synthesis: {
-      summaryForHuman: isPl
-        ? `Strateg zaproponował domknięcie 65% luki cenowej, ale Krytyk wstrzymał agresywny skok ze względu na ${sensitivityReasonPl}.${humanSuffix} Wybierz wariant do publikacji w Confluence i Jira.`
-        : `Strategist proposed closing 65% of the price gap, but Critic flagged churn risk around ${sensitivityReasonEn}.${humanSuffix} Select an option to ship to Confluence & Jira.`,
-      options: [
-        {
-          id: "safe",
-          title: isPl
-            ? "Wariant A · Zaufanie i Przejrzystość"
-            : "Option A · Trust & Transparency",
-          summary: isPl
-            ? "Łagodna korekta cen (+35% luki), publikacja pełnego cennika i gwarancja braku ukrytych kosztów."
-            : "Gentle price lift (+35% of gap), public itemized rate card, and zero-hidden-fee guarantee.",
-          priceAdjustments: safeAdjustments,
-          actionItems: isPl
-            ? [
-                `Zaktualizuj publiczny cennik WWW dla miasta ${input.city} o jasne stawki końcowe i darmowy dojazd w strefie ${input.radiusKm} km`,
-                `Uruchom kampanię "Cennik z góry" w ${secondaryTowns}`,
-                `Dodaj kalkulator wyceny z dojazdem na górę strony głównej`,
-              ]
-            : [
-                `Publish transparent rate card for ${input.city} with free travel inside ${input.radiusKm} km`,
-                `Launch "Zero hidden fees" local campaign across ${secondaryTowns}`,
-                `Feature instant zone quote calculator above the fold`,
-              ],
-        },
-        {
-          id: "margin",
-          title: isPl
-            ? "Wariant B · Maksymalizacja Marży"
-            : "Option B · Margin Expansion",
-          summary: isPl
-            ? "Szybsze wyrównanie do 65% średniej lokalnej na usługach podstawowych + pakietowanie usług dodatkowych."
-            : "Faster lift toward 65% of local average on core services plus high-margin add-on bundles.",
-          priceAdjustments: marginAdjustments,
-          actionItems: isPl
-            ? [
-                `Wdróż wyższe stawki bazowe dla: ${topTargets.map((t) => t.label).join(", ")}`,
-                marginActionMiddle,
-                `Skieruj reklamy na dzielnice o najwyższych ocenach konkurencji w Google Maps`,
-              ]
-            : [
-                `Roll out higher base rates for: ${topTargets.map((t) => t.label).join(", ")}`,
-                marginActionMiddle,
-                `Target high-intent suburbs around ${secondaryTowns}`,
-              ],
-        },
-      ],
-    },
-  };
-}
-
-interface RawStrategistPayload {
-  thesis?: string;
-  campaignAngle?: string;
-  priceMoves?: Array<{
-    serviceKey?: string;
-    label?: string;
-    currentPricePln?: number;
-    proposedPricePln?: number;
-    rationale?: string;
-  }>;
-}
-
-interface RawCriticPayload {
-  verdict?: string;
-  riskScore?: number;
-  objections?: string[];
-  counterProposals?: string[];
-}
-
-interface RawSynthesisOption {
-  id?: string;
-  title?: string;
-  summary?: string;
-  priceAdjustments?: Array<{
-    serviceKey?: string;
-    label?: string;
-    currentPricePln?: number;
-    finalPricePln?: number;
-  }>;
-  actionItems?: string[];
-}
-
-interface RawSynthesisPayload {
-  summaryForHuman?: string;
-  options?: RawSynthesisOption[];
-}
+export type {
+  CouncilCompetitorInput,
+  CouncilDebateResult,
+  CouncilDecisionOption,
+  CouncilPainPointInput,
+  CouncilPriceAdjustment,
+  CouncilPriceMove,
+  CouncilRequestInput,
+  CouncilServiceInput,
+} from "./council/types";
 
 export async function runAiCouncil(
   input: CouncilRequestInput,
@@ -601,34 +87,7 @@ export async function runAiCouncil(
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction: strategistSystem,
           responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              thesis: { type: Type.STRING },
-              campaignAngle: { type: Type.STRING },
-              priceMoves: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    serviceKey: { type: Type.STRING },
-                    label: { type: Type.STRING },
-                    currentPricePln: { type: Type.NUMBER },
-                    proposedPricePln: { type: Type.NUMBER },
-                    rationale: { type: Type.STRING },
-                  },
-                  required: [
-                    "serviceKey",
-                    "label",
-                    "currentPricePln",
-                    "proposedPricePln",
-                    "rationale",
-                  ],
-                },
-              },
-            },
-            required: ["thesis", "campaignAngle", "priceMoves"],
-          },
+          responseSchema: STRATEGIST_RESPONSE_SCHEMA,
         },
       });
       strategistData = parseJsonSafe<RawStrategistPayload | null>(
@@ -753,24 +212,7 @@ export async function runAiCouncil(
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction: criticSystem,
           responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              verdict: { type: Type.STRING },
-              riskScore: { type: Type.INTEGER },
-              objections: { type: Type.ARRAY, items: { type: Type.STRING } },
-              counterProposals: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-              },
-            },
-            required: [
-              "verdict",
-              "riskScore",
-              "objections",
-              "counterProposals",
-            ],
-          },
+          responseSchema: CRITIC_RESPONSE_SCHEMA,
         },
       });
       criticData = parseJsonSafe<RawCriticPayload | null>(res2.text, null);
@@ -850,53 +292,7 @@ export async function runAiCouncil(
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction: synthesisSystem,
           responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              summaryForHuman: { type: Type.STRING },
-              options: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.STRING },
-                    title: { type: Type.STRING },
-                    summary: { type: Type.STRING },
-                    priceAdjustments: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          serviceKey: { type: Type.STRING },
-                          label: { type: Type.STRING },
-                          currentPricePln: { type: Type.NUMBER },
-                          finalPricePln: { type: Type.NUMBER },
-                        },
-                        required: [
-                          "serviceKey",
-                          "label",
-                          "currentPricePln",
-                          "finalPricePln",
-                        ],
-                      },
-                    },
-                    actionItems: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                    },
-                  },
-                  required: [
-                    "id",
-                    "title",
-                    "summary",
-                    "priceAdjustments",
-                    "actionItems",
-                  ],
-                },
-              },
-            },
-            required: ["summaryForHuman", "options"],
-          },
+          responseSchema: SYNTHESIS_RESPONSE_SCHEMA,
         },
       });
       synthesisData = parseJsonSafe<RawSynthesisPayload | null>(
@@ -932,84 +328,12 @@ export async function runAiCouncil(
     }
   }
 
-  const normalizeOption = (
-    raw: RawSynthesisOption | undefined,
-    fallback: CouncilDecisionOption,
-    forcedId: "safe" | "margin",
-  ): CouncilDecisionOption => {
-    if (!raw || !raw.summary) return fallback;
-    const adj = (raw.priceAdjustments ?? [])
-      .filter(
-        (a) =>
-          a.serviceKey &&
-          Number.isFinite(Number(a.currentPricePln)) &&
-          Number.isFinite(Number(a.finalPricePln)) &&
-          Number(a.finalPricePln) > 0,
-      )
-      .slice(0, 4)
-      .map((a) => ({
-        serviceKey: String(a.serviceKey),
-        label: String(a.label || a.serviceKey).slice(0, 75),
-        currentPricePln: Math.round(Number(a.currentPricePln)),
-        finalPricePln: Math.round(Number(a.finalPricePln)),
-      }));
-    const items = (raw.actionItems ?? [])
-      .map((s) => String(s).trim())
-      .filter(Boolean)
-      .slice(0, 4);
-    return {
-      id: forcedId,
-      title: String(raw.title || fallback.title).slice(0, 80),
-      summary: String(raw.summary).slice(0, 260),
-      priceAdjustments: adj.length > 0 ? adj : fallback.priceAdjustments,
-      actionItems: items.length > 0 ? items : fallback.actionItems,
-    };
-  };
-
-  const round1MarginAdjustments: CouncilPriceAdjustment[] =
-    round1.priceMoves.map((m) => ({
-      serviceKey: m.serviceKey,
-      label: m.label,
-      currentPricePln: m.currentPricePln,
-      finalPricePln: m.proposedPricePln,
-    }));
-
-  const round1SafeAdjustments: CouncilPriceAdjustment[] = round1.priceMoves.map(
-    (m) => ({
-      serviceKey: m.serviceKey,
-      label: m.label,
-      currentPricePln: m.currentPricePln,
-      finalPricePln:
-        m.proposedPricePln > m.currentPricePln
-          ? Math.round(
-              m.currentPricePln +
-                (m.proposedPricePln - m.currentPricePln) * 0.55,
-            )
-          : m.proposedPricePln,
-    }),
-  );
-
-  const fallbackSafeOption: CouncilDecisionOption =
-    round1SafeAdjustments.length > 0
-      ? {
-          ...fallbackBaseline.round3Synthesis.options[0],
-          priceAdjustments: round1SafeAdjustments,
-        }
-      : fallbackBaseline.round3Synthesis.options[0];
-
-  const fallbackMarginOption: CouncilDecisionOption =
-    round1MarginAdjustments.length > 0
-      ? {
-          ...fallbackBaseline.round3Synthesis.options[1],
-          priceAdjustments: round1MarginAdjustments,
-          actionItems: [
-            input.locale === "pl"
-              ? `Wdróż wyższe stawki bazowe dla: ${round1.priceMoves.map((m) => m.label).join(", ")}`
-              : `Roll out higher base rates for: ${round1.priceMoves.map((m) => m.label).join(", ")}`,
-            ...fallbackBaseline.round3Synthesis.options[1].actionItems.slice(1),
-          ],
-        }
-      : fallbackBaseline.round3Synthesis.options[1];
+  const { fallbackSafeOption, fallbackMarginOption } =
+    buildRound3FallbackOptions(
+      round1.priceMoves,
+      fallbackBaseline,
+      input.locale,
+    );
 
   const rawSafe =
     synthesisData?.options?.find((o) => o.id === "safe") ??
@@ -1019,8 +343,8 @@ export async function runAiCouncil(
     synthesisData?.options?.[1];
 
   const finalOptions: [CouncilDecisionOption, CouncilDecisionOption] = [
-    normalizeOption(rawSafe, fallbackSafeOption, "safe"),
-    normalizeOption(rawMargin, fallbackMarginOption, "margin"),
+    normalizeSynthesisOption(rawSafe, fallbackSafeOption, "safe"),
+    normalizeSynthesisOption(rawMargin, fallbackMarginOption, "margin"),
   ];
 
   const fallbackNotice =

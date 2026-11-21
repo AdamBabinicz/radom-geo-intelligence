@@ -1,1012 +1,89 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Sparkles } from "lucide-react";
+import { DashboardKpiGrid } from "./dashboard/dashboard-kpi-grid";
 import {
-  Activity,
-  Bot,
-  BrainCircuit,
-  CircleHelp,
-  Command,
-  Globe2,
-  LayoutDashboard,
-  MapPin,
-  Moon,
-  Search,
-  Sparkles,
-  Sun,
-  TrendingUp,
-  Users,
-  Waves,
-} from "lucide-react";
-import {
-  INDUSTRY_TEMPLATES,
-  resolveServiceLabel,
-  resolveUnitType,
-  type IndustryId,
-  type IndustryServiceItem,
-  type ServiceUnitType,
-} from "@/src/config/industries";
-import {
-  applyIndustryToMarket,
-  getMarketMetrics,
-  RADOM_UPHOLSTERY_MARKET,
-  type MarketProfile,
-  type TownGeo,
-} from "@/src/config/markets";
-import {
-  formatTemplate,
-  SUPPORTED_LOCALES,
-  translations,
-  type AppDictionary,
-  type Locale,
-} from "@/src/locales";
+  DashboardFooter,
+  DashboardHeader,
+  DashboardSidebar,
+} from "./dashboard/dashboard-shell";
+import { useDashboardIntelligence } from "./dashboard/use-dashboard-intelligence";
 import { AiCouncilPanel } from "./features/ai-council/ai-council-panel";
-import {
-  CompetitorTable,
-  type LiveMarketScanResult,
-} from "./features/competitor-table/competitor-table";
+import { CompetitorTable } from "./features/competitor-table/competitor-table";
 import { CookieConsent } from "./features/legal/cookie-consent";
 import { ScrollToTop } from "./features/legal/scroll-to-top";
-import {
-  MarketSwitcher,
-  type IndustryControlMode,
-  type SyncNotice,
-} from "./features/market-controls/market-switcher";
+import { MarketSwitcher } from "./features/market-controls/market-switcher";
 import { PricingCalculator } from "./features/pricing-calculator";
 import { CoverageMap } from "./features/radius-map/coverage-map";
 import { RovoConsole } from "./features/rovo-console/rovo-console";
 
-const LOCALE_KEY = "northstar_locale";
-const THEME_KEY = "northstar_theme";
-const DEFAULT_WEBSITE_URL = "https://pranie-dywanow.j.pl/";
-const CLIENT_SYNC_TIMEOUT_MS = 55_000;
-
-const LEGAL_ROUTE_OVERRIDES: Partial<
-  Record<Locale, { privacy: string; terms: string }>
-> = {
-  pl: {
-    privacy: "/polityka-prywatnosci",
-    terms: "/regulamin",
-  },
-};
-
-type PricingSyncCode =
-  | "MISSING_URL"
-  | "INVALID_URL"
-  | "INVALID_PROTOCOL"
-  | "PRIVATE_HOST_BLOCKED"
-  | "SITE_UNREACHABLE"
-  | "NO_PUBLIC_PRICES"
-  | "AI_FALLBACK_USED";
-
-interface PricingSyncItem {
-  serviceKey: string;
-  pricePln: number;
-  labelPl?: string;
-  labelEn?: string;
-  unitType?: ServiceUnitType;
-}
-
-interface SiteProfile {
-  businessName?: string;
-  nichePl: string;
-  nicheEn: string;
-  matchedIndustryId?: "upholstery" | "hvac" | "plumbing" | "custom";
-  searchQueriesPl?: string[];
-  searchQueriesEn?: string[];
-}
-
-interface PricingSyncResponse {
-  aiEnhanced?: boolean;
-  hasPublicPrices?: boolean;
-  code?: PricingSyncCode;
-  host?: string;
-  warning?: string;
-  extractedCount?: number;
-  siteProfile?: SiteProfile;
-  prices?: PricingSyncItem[];
-  error?: string;
-}
-
-type LiveScanWithNiche = LiveMarketScanResult & {
-  detectedIndustryLabel?: string;
-};
-
-function isSupportedLocale(value: string | null): value is Locale {
-  if (!value) return false;
-  return (SUPPORTED_LOCALES as readonly string[]).includes(value);
-}
-
-async function readJsonSafe<T>(response: Response): Promise<T | null> {
-  try {
-    const raw = await response.text();
-    if (!raw.trim()) return null;
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function isTimeoutFailure(err: unknown, status?: number): boolean {
-  if (status === 408 || status === 504) return true;
-  if (err instanceof DOMException) {
-    return err.name === "TimeoutError" || err.name === "AbortError";
-  }
-  return false;
-}
-
-function isBlockedLocalHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  if (
-    host === "localhost" ||
-    host === "0.0.0.0" ||
-    host === "::1" ||
-    host === "[::1]" ||
-    host.endsWith(".local") ||
-    host.endsWith(".internal")
-  ) {
-    return true;
-  }
-  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host)) {
-    return true;
-  }
-  if (/^169\.254\./.test(host)) return true;
-  const match172 = host.match(/^172\.(\d+)\./);
-  if (match172) {
-    const second = Number(match172[1]);
-    if (second >= 16 && second <= 31) return true;
-  }
-  return false;
-}
-
-function validateClientWebsiteUrl(
-  rawUrl: string,
-  t: AppDictionary,
-): { valid: true; host: string } | { valid: false; message: string } {
-  const trimmed = rawUrl.trim();
-  if (!trimmed || /\s/.test(trimmed)) {
-    return { valid: false, message: t.syncInvalidUrlError };
-  }
-
-  let parsed: URL;
-  try {
-    const withProtocol = /^[a-z][a-z0-9+.-]*:/i.test(trimmed)
-      ? trimmed
-      : `https://${trimmed}`;
-    parsed = new URL(withProtocol);
-  } catch {
-    return { valid: false, message: t.syncInvalidUrlError };
-  }
-
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    return { valid: false, message: t.syncInvalidUrlError };
-  }
-
-  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
-  if (isBlockedLocalHostname(host)) {
-    return { valid: false, message: t.syncPrivateHostError };
-  }
-
-  if (
-    !host ||
-    !host.includes(".") ||
-    host.startsWith(".") ||
-    host.endsWith(".") ||
-    host.includes("..")
-  ) {
-    return { valid: false, message: t.syncInvalidUrlError };
-  }
-
-  return { valid: true, host };
-}
-
-function resolveSyncErrorMessage(
-  data: PricingSyncResponse | null,
-  status: number,
-  fallbackHost: string,
-  t: AppDictionary,
-): string {
-  const targetHost = data?.host || fallbackHost;
-  switch (data?.code) {
-    case "MISSING_URL":
-    case "INVALID_URL":
-    case "INVALID_PROTOCOL":
-      return t.syncInvalidUrlError;
-    case "PRIVATE_HOST_BLOCKED":
-      return t.syncPrivateHostError;
-    case "SITE_UNREACHABLE":
-      return formatTemplate(t.syncSiteUnreachableError, { host: targetHost });
-    default:
-      break;
-  }
-  if (!data) {
-    return isTimeoutFailure(null, status)
-      ? t.syncWebsiteTimeoutError
-      : formatTemplate(t.syncWebsiteHttpError, { status });
-  }
-  return data.error ?? data.warning ?? t.syncWebsiteError;
-}
-
-function resolveWorkspaceProfile(
-  websiteUrl: string,
-  defaultName: string,
-): { initials: string; displayName: string; isDomainBound: boolean } {
-  const raw = websiteUrl.trim();
-  if (!raw) {
-    return {
-      initials: "NO",
-      displayName: defaultName,
-      isDomainBound: false,
-    };
-  }
-  try {
-    const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-    const host = new URL(withProtocol).hostname
-      .toLowerCase()
-      .replace(/^www\./, "");
-    if (!host || !host.includes(".")) {
-      return {
-        initials: "NO",
-        displayName: defaultName,
-        isDomainBound: false,
-      };
-    }
-    const primaryLabel = host.split(".")[0] ?? host;
-    const parts = primaryLabel.split(/[-_]+/).filter(Boolean);
-    const initials =
-      parts.length >= 2
-        ? `${parts[0][0]}${parts[1][0]}`.toUpperCase()
-        : primaryLabel.slice(0, 2).toUpperCase();
-    return {
-      initials: initials || "NO",
-      displayName: host,
-      isDomainBound: true,
-    };
-  } catch {
-    return {
-      initials: "NO",
-      displayName: defaultName,
-      isDomainBound: false,
-    };
-  }
-}
-
 export function Dashboard() {
-  const [locale, setLocale] = useState<Locale>("en");
-  const [dark, setDark] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [radiusKm, setRadiusKm] = useState<number>(30);
-  const [baseMarket, setBaseMarket] = useState<MarketProfile>(
-    RADOM_UPHOLSTERY_MARKET,
-  );
-  const [industryId, setIndustryId] = useState<IndustryId>("upholstery");
-  const [customNiche, setCustomNiche] = useState<string | null>(null);
-  const [selectedTown, setSelectedTown] = useState<TownGeo | null>(null);
-  const [cookieModalSignal, setCookieModalSignal] = useState(0);
-
-  const [websiteUrl, setWebsiteUrl] = useState<string>(DEFAULT_WEBSITE_URL);
-  const [syncedCatalog, setSyncedCatalog] = useState<
-    IndustryServiceItem[] | null
-  >(null);
-  const [syncedCount, setSyncedCount] = useState<number>(0);
-  const [siteProfile, setSiteProfile] = useState<SiteProfile | null>(null);
-  const [isSyncingPrices, setIsSyncingPrices] = useState<boolean>(false);
-
-  const [liveScan, setLiveScan] = useState<LiveScanWithNiche | null>(null);
-  const [scannedBenchmarks, setScannedBenchmarks] = useState<
-    Record<string, number>
-  >({});
-  const [isScanningMarket, setIsScanningMarket] = useState<boolean>(false);
-  const [syncNotice, setSyncNotice] = useState<SyncNotice | null>(null);
-
-  const focusCitySearch = () => {
-    const input = document.getElementById(
-      "city-search-input",
-    ) as HTMLInputElement | null;
-    if (!input) return;
-    input.scrollIntoView({ behavior: "smooth", block: "center" });
-    input.focus();
-    input.select();
-  };
-
-  useEffect(() => {
-    const queryLang = new URLSearchParams(window.location.search).get("lang");
-    const savedLocale = window.localStorage.getItem(LOCALE_KEY);
-    if (isSupportedLocale(queryLang)) {
-      setLocale(queryLang);
-      window.localStorage.setItem(LOCALE_KEY, queryLang);
-    } else if (isSupportedLocale(savedLocale)) {
-      setLocale(savedLocale);
-    }
-    const savedTheme = window.localStorage.getItem(THEME_KEY);
-    if (savedTheme === "dark") setDark(true);
-  }, []);
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        focusCitySearch();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  const toggleLocale = () => {
-    const currentIndex = SUPPORTED_LOCALES.indexOf(locale);
-    const nextIndex = (currentIndex + 1) % SUPPORTED_LOCALES.length;
-    const next = SUPPORTED_LOCALES[nextIndex];
-    setLocale(next);
-    window.localStorage.setItem(LOCALE_KEY, next);
-  };
-
-  const toggleDark = () => {
-    const next = !dark;
-    setDark(next);
-    window.localStorage.setItem(THEME_KEY, next ? "dark" : "light");
-  };
-
-  const resetLiveIntelligence = () => {
-    setSyncedCatalog(null);
-    setSyncedCount(0);
-    setSiteProfile(null);
-    setLiveScan(null);
-    setScannedBenchmarks({});
-    setSyncNotice(null);
-  };
-
-  const handleMarketChange = (nextMarket: MarketProfile) => {
-    setBaseMarket(nextMarket);
-    setSelectedTown(null);
-    resetLiveIntelligence();
-    if (
-      nextMarket.id === RADOM_UPHOLSTERY_MARKET.id &&
-      industryId === "upholstery" &&
-      !customNiche?.trim()
-    ) {
-      setWebsiteUrl(DEFAULT_WEBSITE_URL);
-    } else if (websiteUrl === DEFAULT_WEBSITE_URL) {
-      setWebsiteUrl("");
-    }
-  };
-
-  const handleIndustryChange = (nextIndustry: IndustryId) => {
-    setIndustryId(nextIndustry);
-    setCustomNiche(null);
-    resetLiveIntelligence();
-    if (
-      baseMarket.id === RADOM_UPHOLSTERY_MARKET.id &&
-      nextIndustry === "upholstery"
-    ) {
-      setWebsiteUrl(DEFAULT_WEBSITE_URL);
-    } else if (websiteUrl === DEFAULT_WEBSITE_URL) {
-      setWebsiteUrl("");
-    }
-  };
-
-  const handleCustomNicheChange = (nextNiche: string | null) => {
-    setCustomNiche(nextNiche);
-    if (syncNotice) setSyncNotice(null);
-    if (nextNiche !== null) {
-      setLiveScan(null);
-      setScannedBenchmarks({});
-      if (
-        websiteUrl === DEFAULT_WEBSITE_URL &&
-        nextNiche.trim().length > 0 &&
-        nextNiche.trim().toLowerCase() !==
-          translations[locale].industryUpholstery.toLowerCase()
-      ) {
-        setWebsiteUrl("");
-      }
-    }
-  };
-
-  const t = translations[locale];
-  const trimmedCustomNiche = (customNiche ?? "").trim();
-  const hasManualCustomNiche = trimmedCustomNiche.length > 0;
-
-  const isWebsiteAutoNiche =
-    Boolean(liveScan?.detectedIndustryLabel) ||
-    Boolean(
-      siteProfile &&
-      (siteProfile.matchedIndustryId === "custom" ||
-        (siteProfile.matchedIndustryId &&
-          siteProfile.matchedIndustryId !== industryId)),
-    );
-
-  const industryMode: IndustryControlMode = hasManualCustomNiche
-    ? "custom"
-    : isWebsiteAutoNiche
-      ? "auto"
-      : "preset";
-
-  const detectedSiteNicheLabel =
-    liveScan?.detectedIndustryLabel ||
-    (siteProfile
-      ? locale === "pl"
-        ? siteProfile.nichePl
-        : siteProfile.nicheEn
-      : "");
-
-  const activeIndustryLabel = hasManualCustomNiche
-    ? trimmedCustomNiche
-    : isWebsiteAutoNiche && detectedSiteNicheLabel
-      ? detectedSiteNicheLabel
-      : t[INDUSTRY_TEMPLATES[industryId].labelKey];
-
-  const workspaceProfile = resolveWorkspaceProfile(websiteUrl, t.accountName);
-  const baseIndustryMarket = applyIndustryToMarket(baseMarket, industryId);
-  const isCaseStudy =
-    (baseIndustryMarket.source ?? "case-study") === "case-study";
-
-  const activeBenchmarksSource = hasManualCustomNiche
-    ? []
-    : syncedCatalog !== null
-      ? syncedCatalog
-      : isWebsiteAutoNiche
-        ? []
-        : baseIndustryMarket.benchmarks;
-
-  const hasLiveAiScan = Boolean(liveScan?.aiEnhanced);
-  const market: MarketProfile = {
-    ...baseIndustryMarket,
-    benchmarks: activeBenchmarksSource.map((row) => {
-      const scanned = scannedBenchmarks[row.serviceKey];
-      const resolvedLocalPrice =
-        typeof scanned === "number" && scanned > 0
-          ? scanned
-          : hasLiveAiScan && (row.isLiveDiscovered || !isCaseStudy)
-            ? 0
-            : row.localPricePln;
-      return {
-        ...row,
-        localPricePln: resolvedLocalPrice,
-      };
-    }),
-  };
-
-  const metrics = getMarketMetrics(market, radiusKm);
-  const townsInRadius = [
-    market.centerName,
-    ...metrics.localTowns
-      .filter((town) => town.distKm <= radiusKm)
-      .map((town) => town.name),
-  ];
-
-  const currentYear = new Date().getFullYear();
-  const copyrightRange = currentYear >= 2027 ? `2026 - ${currentYear}` : "2026";
-  const liveCompetitorsCount = liveScan?.competitors.length ?? 0;
-  const topLivePainPoint =
-    liveScan?.aiEnhanced && liveScan.painPoints.length > 0
-      ? liveScan.painPoints[0].label
-      : undefined;
-
-  const legalRoutes = LEGAL_ROUTE_OVERRIDES[locale] ?? {
-    privacy: "/privacy",
-    terms: "/terms",
-  };
-
-  const handleSyncPrices = async () => {
-    const trimmed = websiteUrl.trim();
-    if (!trimmed) return;
-
-    const validation = validateClientWebsiteUrl(trimmed, t);
-    if (!validation.valid) {
-      setSiteProfile(null);
-      setSyncedCatalog(null);
-      setSyncedCount(0);
-      setLiveScan(null);
-      setScannedBenchmarks({});
-      setSyncNotice({ tone: "error", message: validation.message });
-      return;
-    }
-
-    setIsSyncingPrices(true);
-    setSyncNotice(null);
-    setLiveScan(null);
-    setScannedBenchmarks({});
-
-    try {
-      const response = await fetch(
-        `/api/pricing/sync?url=${encodeURIComponent(trimmed)}`,
-        {
-          signal: AbortSignal.timeout(CLIENT_SYNC_TIMEOUT_MS),
-        },
-      );
-      const data = await readJsonSafe<PricingSyncResponse>(response);
-
-      if (!data || !response.ok) {
-        setSiteProfile(null);
-        setSyncedCatalog(null);
-        setSyncedCount(0);
-        setSyncNotice({
-          tone: "error",
-          message: resolveSyncErrorMessage(
-            data,
-            response.status,
-            validation.host,
-            t,
-          ),
-        });
-        return;
-      }
-
-      const resolvedHost = data.host || validation.host;
-      const detectedNiche = (
-        (locale === "pl"
-          ? data.siteProfile?.nichePl
-          : data.siteProfile?.nicheEn) ||
-        data.siteProfile?.nichePl ||
-        data.siteProfile?.nicheEn ||
-        ""
-      ).trim();
-
-      if (
-        data.hasPublicPrices === false ||
-        data.code === "NO_PUBLIC_PRICES" ||
-        !Array.isArray(data.prices) ||
-        data.prices.length === 0
-      ) {
-        if (detectedNiche && data.siteProfile) {
-          setCustomNiche(null);
-          const detectedPreset = data.siteProfile.matchedIndustryId;
-          if (
-            detectedPreset === "upholstery" ||
-            detectedPreset === "hvac" ||
-            detectedPreset === "plumbing"
-          ) {
-            setIndustryId(detectedPreset);
-          }
-          setSiteProfile(data.siteProfile);
-          setSyncedCatalog([]);
-          setSyncedCount(0);
-          setSyncNotice({
-            tone: "info",
-            message: formatTemplate(t.syncNoPublicPricesInfo, {
-              niche: detectedNiche,
-              host: resolvedHost,
-            }),
-          });
-          return;
-        }
-
-        setSiteProfile(null);
-        setSyncedCatalog(null);
-        setSyncedCount(0);
-        setSyncNotice({
-          tone: "error",
-          message: formatTemplate(t.syncNoPublicPricesNoNicheError, {
-            host: resolvedHost,
-          }),
-        });
-        return;
-      }
-
-      const detectedPreset = data.siteProfile?.matchedIndustryId;
-      const effectiveIndustryId: IndustryId =
-        detectedPreset === "upholstery" ||
-        detectedPreset === "hvac" ||
-        detectedPreset === "plumbing"
-          ? detectedPreset
-          : industryId;
-      if (effectiveIndustryId !== industryId) {
-        setIndustryId(effectiveIndustryId);
-      }
-
-      const effectiveBaselineByKey = new Map(
-        INDUSTRY_TEMPLATES[effectiveIndustryId].services.map((row) => [
-          row.serviceKey,
-          row,
-        ]),
-      );
-      const canUseCaseStudyBaseline =
-        baseMarket.id === RADOM_UPHOLSTERY_MARKET.id &&
-        (baseMarket.source ?? "case-study") === "case-study";
-
-      const nextCatalog: IndustryServiceItem[] = [];
-      const seenKeys = new Set<string>();
-      for (const item of data.prices) {
-        if (
-          typeof item.serviceKey !== "string" ||
-          !item.serviceKey.trim() ||
-          typeof item.pricePln !== "number" ||
-          !Number.isFinite(item.pricePln) ||
-          item.pricePln <= 0
-        ) {
-          continue;
-        }
-        const key = item.serviceKey.trim();
-        if (seenKeys.has(key)) continue;
-        seenKeys.add(key);
-
-        const preset = effectiveBaselineByKey.get(key);
-        const unitType: ServiceUnitType =
-          item.unitType === "m2" ||
-          item.unitType === "piece" ||
-          item.unitType === "fixed"
-            ? item.unitType
-            : preset
-              ? resolveUnitType(preset)
-              : "fixed";
-
-        const presetUnit = preset ? resolveUnitType(preset) : null;
-        const isUnitCompatible =
-          presetUnit === null || (unitType === "m2") === (presetUnit === "m2");
-        const isPriceScaleCompatible =
-          !preset ||
-          preset.ourPricePln <= 0 ||
-          (item.pricePln / preset.ourPricePln >= 0.4 &&
-            item.pricePln / preset.ourPricePln <= 2.5);
-
-        nextCatalog.push({
-          serviceKey: key,
-          ourPricePln: Math.round(item.pricePln),
-          localPricePln:
-            canUseCaseStudyBaseline &&
-            preset &&
-            isUnitCompatible &&
-            isPriceScaleCompatible
-              ? preset.localPricePln
-              : 0,
-          isPerUnit: unitType !== "fixed",
-          unitType,
-          labels:
-            item.labelPl || item.labelEn
-              ? {
-                  pl: item.labelPl?.trim() || undefined,
-                  en: item.labelEn?.trim() || undefined,
-                }
-              : preset?.labels,
-          isLiveDiscovered: true,
-        });
-      }
-
-      if (nextCatalog.length === 0) {
-        if (detectedNiche && data.siteProfile) {
-          setCustomNiche(null);
-          setSiteProfile(data.siteProfile);
-          setSyncedCatalog([]);
-          setSyncedCount(0);
-          setSyncNotice({
-            tone: "info",
-            message: formatTemplate(t.syncNoPublicPricesInfo, {
-              niche: detectedNiche,
-              host: resolvedHost,
-            }),
-          });
-        } else {
-          setSiteProfile(null);
-          setSyncedCatalog(null);
-          setSyncedCount(0);
-          setSyncNotice({ tone: "error", message: t.syncWebsiteError });
-        }
-        return;
-      }
-
-      setCustomNiche(null);
-      setSiteProfile(data.siteProfile ?? null);
-      setSyncedCatalog(nextCatalog);
-      setSyncedCount(nextCatalog.length);
-      if (data.code === "AI_FALLBACK_USED") {
-        setSyncNotice({
-          tone: "warning",
-          message: t.syncFallbackParserNotice,
-        });
-      } else if (data.aiEnhanced === false && data.warning) {
-        setSyncNotice({
-          tone: "warning",
-          message: data.warning,
-        });
-      }
-    } catch (err) {
-      setSyncNotice({
-        tone: "error",
-        message: isTimeoutFailure(err)
-          ? t.syncWebsiteTimeoutError
-          : t.syncWebsiteError,
-      });
-    } finally {
-      setIsSyncingPrices(false);
-    }
-  };
-
-  const handleScanMarket = async () => {
-    setIsScanningMarket(true);
-    setSyncNotice(null);
-    const effectiveSiteProfile: SiteProfile | undefined = hasManualCustomNiche
-      ? {
-          businessName: siteProfile?.businessName,
-          nichePl: trimmedCustomNiche,
-          nicheEn: trimmedCustomNiche,
-          matchedIndustryId: "custom",
-          searchQueriesPl: [trimmedCustomNiche],
-          searchQueriesEn: [trimmedCustomNiche],
-        }
-      : (siteProfile ?? undefined);
-
-    try {
-      const response = await fetch("/api/market/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          city: market.centerName,
-          country: market.country,
-          countryCode: market.countryCode,
-          industryId,
-          radiusKm,
-          locale,
-          excludeUrl: websiteUrl.trim() || undefined,
-          siteProfile: effectiveSiteProfile,
-          services: market.benchmarks.map((row) => ({
-            serviceKey: row.serviceKey,
-            label: resolveServiceLabel(row, t, locale),
-            unitType: resolveUnitType(row),
-            ourPricePln: row.ourPricePln,
-          })),
-        }),
-        signal: AbortSignal.timeout(CLIENT_SYNC_TIMEOUT_MS),
-      });
-      const data = await readJsonSafe<
-        LiveScanWithNiche & {
-          error?: string;
-          warning?: string;
-        }
-      >(response);
-
-      if (!data) {
-        setSyncNotice({
-          tone: "error",
-          message: isTimeoutFailure(null, response.status)
-            ? t.scanMarketTimeoutError
-            : formatTemplate(t.scanMarketHttpError, {
-                status: response.status,
-              }),
-        });
-        return;
-      }
-
-      if (!response.ok) {
-        setSyncNotice({
-          tone: "error",
-          message: data.error ?? data.warning ?? t.scanMarketError,
-        });
-        return;
-      }
-
-      setLiveScan(data);
-      const nextBenchmarks: Record<string, number> = {};
-      for (const item of data.marketBenchmarks ?? []) {
-        if (
-          typeof item.serviceKey === "string" &&
-          typeof item.avgPricePln === "number" &&
-          Number.isFinite(item.avgPricePln) &&
-          item.avgPricePln > 0
-        ) {
-          nextBenchmarks[item.serviceKey] = Math.round(item.avgPricePln);
-        }
-      }
-      setScannedBenchmarks(nextBenchmarks);
-      if (!data.aiEnhanced && data.warning) {
-        setSyncNotice({
-          tone: "warning",
-          message: data.warning,
-        });
-      }
-    } catch (err) {
-      setSyncNotice({
-        tone: "error",
-        message: isTimeoutFailure(err)
-          ? t.scanMarketTimeoutError
-          : t.scanMarketError,
-      });
-    } finally {
-      setIsScanningMarket(false);
-    }
-  };
-
-  const runScan = async () => {
-    setRunning(true);
-    try {
-      await fetch("/api/mcp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: Date.now(),
-          method: "tools/call",
-          params: {
-            name: "analyzeCompetitors",
-            arguments: {
-              center: market.centerName,
-              radiusKm,
-              industryId,
-              townsInRadius,
-              competitorsTracked:
-                liveCompetitorsCount > 0
-                  ? liveCompetitorsCount
-                  : metrics.competitorsTracked,
-              locale,
-            },
-          },
-        }),
-      });
-    } finally {
-      window.setTimeout(() => setRunning(false), 600);
-    }
-  };
-
-  const hasComparableBenchmarks = market.benchmarks.some(
-    (row) => row.localPricePln > 0,
-  );
-  const gapMetricLabel = !hasComparableBenchmarks
-    ? "—"
-    : metrics.avgGapPct < 0
-      ? `−${Math.abs(metrics.avgGapPct)}%`
-      : metrics.avgGapPct === 0
-        ? "0%"
-        : `+${metrics.avgGapPct}%`;
+  const {
+    locale,
+    dark,
+    t,
+    running,
+    radiusKm,
+    setRadiusKm,
+    industryId,
+    industryMode,
+    customNiche,
+    selectedTown,
+    setSelectedTown,
+    cookieModalSignal,
+    openCookieSettings,
+    websiteUrl,
+    syncedCount,
+    isSyncingPrices,
+    liveScan,
+    isScanningMarket,
+    syncNotice,
+    market,
+    metrics,
+    townsInRadius,
+    activeIndustryLabel,
+    detectedIndustryLabel,
+    workspaceProfile,
+    isCaseStudy,
+    copyrightRange,
+    legalRoutes,
+    liveCompetitorsCount,
+    topLivePainPoint,
+    hasComparableBenchmarks,
+    gapMetricLabel,
+    focusCitySearch,
+    toggleLocale,
+    toggleDark,
+    handleMarketChange,
+    handleIndustryChange,
+    handleCustomNicheChange,
+    handleWebsiteUrlChange,
+    handleSyncPrices,
+    handleScanMarket,
+    runScan,
+  } = useDashboardIntelligence();
 
   return (
     <div className={dark ? "dark" : ""}>
       <div className="min-h-screen bg-[#f5f7f8] text-slate-900 dark:bg-[#101719] dark:text-slate-100">
-        <aside className="fixed inset-y-0 left-0 z-10 hidden w-[248px] flex-col border-r border-slate-200/80 bg-white px-5 py-6 dark:border-slate-800 dark:bg-[#141c1e] lg:flex">
-          <a className="flex items-center gap-3 px-1" href="#overview">
-            <span className="grid size-10 place-items-center rounded-xl bg-teal-700 text-white">
-              <Waves size={21} />
-            </span>
-            <span>
-              <span className="block text-sm font-semibold tracking-tight">
-                {t.brand}
-              </span>
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                {t.workspace}
-              </span>
-            </span>
-          </a>
-
-          <p className="mb-3 mt-10 px-2 text-[10px] font-bold uppercase tracking-[.16em] text-slate-500 dark:text-slate-400">
-            {t.workspace}
-          </p>
-          <nav
-            className="flex flex-col gap-1 text-[13px] font-medium"
-            aria-label={t.primaryNav}
-          >
-            <a
-              href="#overview"
-              className="flex items-center gap-3 rounded-lg bg-teal-50 px-3 py-2.5 text-teal-800 dark:bg-teal-950/60 dark:text-teal-200"
-            >
-              <LayoutDashboard size={17} />
-              {t.overview}
-            </a>
-            <a
-              href="#market"
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
-              <TrendingUp size={17} />
-              {t.marketIntelligence}
-              <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900">
-                {t.new}
-              </span>
-            </a>
-            <a
-              href="#coverage"
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
-              <MapPin size={17} />
-              {t.serviceAreas}
-            </a>
-            <a
-              href="#agent"
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
-              <Bot size={17} />
-              {t.rovoAgent}
-            </a>
-            <a
-              href="#pricing"
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
-              <Command size={17} />
-              {t.pricePreview}
-            </a>
-            <a
-              href="#council"
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
-              <BrainCircuit size={17} />
-              {t.councilTitle}
-            </a>
-          </nav>
-
-          <div className="mt-auto rounded-xl border border-slate-200 p-3.5 dark:border-slate-700">
-            <div className="flex items-center gap-2 text-xs font-semibold">
-              <CircleHelp
-                size={15}
-                className="text-teal-700 dark:text-teal-300"
-              />
-              {t.needHelp}
-            </div>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600 dark:text-slate-400">
-              {t.helpCopy}
-            </p>
-            <button
-              type="button"
-              onClick={focusCitySearch}
-              className="mt-3 text-xs font-semibold text-teal-700 dark:text-teal-300"
-            >
-              {t.viewGuide} →
-            </button>
-          </div>
-
-          <div className="mt-4 flex items-center gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
-            <div
-              className={`grid size-9 shrink-0 place-items-center rounded-full text-xs font-bold ${
-                workspaceProfile.isDomainBound
-                  ? "bg-teal-50 text-teal-800 dark:bg-teal-950/70 dark:text-teal-200"
-                  : "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
-              }`}
-            >
-              {workspaceProfile.initials}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p
-                className="truncate text-xs font-semibold"
-                title={workspaceProfile.displayName}
-              >
-                {workspaceProfile.displayName}
-              </p>
-              <p className="truncate text-[10px] text-slate-500 dark:text-slate-400">
-                {t.adminRole}
-              </p>
-            </div>
-          </div>
-        </aside>
+        <DashboardSidebar
+          t={t}
+          workspaceProfile={workspaceProfile}
+          onFocusSearch={focusCitySearch}
+        />
 
         <main
           id="overview"
           className="min-h-screen min-w-0 overflow-x-clip lg:ml-[248px]"
         >
-          <header className="sticky top-0 z-[5] flex h-[68px] items-center justify-between border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-md dark:border-slate-800 dark:bg-[#141c1e]/90 sm:px-5 md:px-9">
-            <div className="flex min-w-0 items-center gap-2 truncate text-xs text-slate-500 dark:text-slate-400">
-              <span className="truncate">{t.workspace}</span>
-              <span>/</span>
-              <span className="truncate font-semibold text-slate-700 dark:text-slate-200">
-                {t.overview}
-              </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={focusCitySearch}
-                aria-label={t.search}
-                title={`${t.search} (Ctrl+K)`}
-                className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-xs text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-              >
-                <Search size={15} />
-                <kbd className="hidden rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700 dark:bg-slate-800 dark:text-slate-300 sm:inline">
-                  Ctrl+K
-                </kbd>
-              </button>
-              <button
-                type="button"
-                aria-label={t.toggleTheme}
-                onClick={toggleDark}
-                className="grid size-9 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              >
-                {dark ? <Sun size={17} /> : <Moon size={17} />}
-              </button>
-              <button
-                type="button"
-                onClick={toggleLocale}
-                className="flex h-9 items-center gap-1 rounded-lg border border-slate-200 px-2.5 text-xs font-semibold dark:border-slate-700"
-              >
-                <Globe2 size={15} />
-                {locale.toUpperCase()}
-              </button>
-            </div>
-          </header>
+          <DashboardHeader
+            t={t}
+            locale={locale}
+            dark={dark}
+            onFocusSearch={focusCitySearch}
+            onToggleDark={toggleDark}
+            onToggleLocale={toggleLocale}
+          />
 
           <div className="mx-auto max-w-[1450px] px-4 py-6 sm:px-5 md:px-9 md:py-9">
             <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -1046,17 +123,7 @@ export function Dashboard() {
               customNiche={customNiche}
               onCustomNicheChange={handleCustomNicheChange}
               websiteUrl={websiteUrl}
-              onWebsiteUrlChange={(next) => {
-                if (next.trim() !== websiteUrl.trim()) {
-                  setSiteProfile(null);
-                  setSyncedCatalog(null);
-                  setSyncedCount(0);
-                  setLiveScan(null);
-                  setScannedBenchmarks({});
-                }
-                setWebsiteUrl(next);
-                if (syncNotice) setSyncNotice(null);
-              }}
+              onWebsiteUrlChange={handleWebsiteUrlChange}
               onSyncPrices={handleSyncPrices}
               onScanMarket={handleScanMarket}
               isSyncingPrices={isSyncingPrices}
@@ -1066,49 +133,17 @@ export function Dashboard() {
               scannedCompetitorsCount={liveCompetitorsCount}
             />
 
-            <section
-              aria-label={t.performanceSummary}
-              className="mb-5 grid grid-cols-2 gap-3 [&>*]:min-w-0 xl:grid-cols-4"
-            >
-              <Metric
-                icon={<MapPin size={16} />}
-                label={t.coverageArea}
-                value={`${radiusKm} ${t.kmUnit}`}
-                foot={`${t.radiusFromRadom} (${market.centerName})`}
-              />
-              <Metric
-                icon={<Users size={16} />}
-                label={t.serviceableTowns}
-                value={String(metrics.serviceableTownsCount)}
-                foot={t.townsInRadius}
-              />
-              <Metric
-                icon={<Activity size={16} />}
-                label={t.localCompetitors}
-                value={String(
-                  liveCompetitorsCount > 0
-                    ? liveCompetitorsCount
-                    : metrics.competitorsTracked,
-                )}
-                foot={
-                  liveCompetitorsCount > 0
-                    ? t.competitorsLiveFoot
-                    : t.competitorsTracked
-                }
-                badge={liveCompetitorsCount > 0 ? "LIVE AI" : undefined}
-              />
-              <Metric
-                icon={<TrendingUp size={16} />}
-                label={t.avgMarketGap}
-                value={gapMetricLabel}
-                foot={
-                  hasComparableBenchmarks
-                    ? t.belowMarketAverage
-                    : t.noLocalBenchmark
-                }
-                highlight={hasComparableBenchmarks && metrics.avgGapPct <= 0}
-              />
-            </section>
+            <DashboardKpiGrid
+              t={t}
+              radiusKm={radiusKm}
+              centerName={market.centerName}
+              serviceableTownsCount={metrics.serviceableTownsCount}
+              competitorsTracked={metrics.competitorsTracked}
+              liveCompetitorsCount={liveCompetitorsCount}
+              avgGapPct={metrics.avgGapPct}
+              gapMetricLabel={gapMetricLabel}
+              hasComparableBenchmarks={hasComparableBenchmarks}
+            />
 
             <div className="grid grid-cols-1 gap-5 xl:items-start [&>*]:min-w-0 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,.95fr)]">
               <CoverageMap
@@ -1126,11 +161,7 @@ export function Dashboard() {
                 industryId={industryId}
                 syncedCount={syncedCount}
                 liveScan={liveScan}
-                detectedIndustryLabel={
-                  isWebsiteAutoNiche || hasManualCustomNiche
-                    ? activeIndustryLabel
-                    : undefined
-                }
+                detectedIndustryLabel={detectedIndustryLabel}
                 onScanMarket={handleScanMarket}
                 isScanningMarket={isScanningMarket}
               />
@@ -1146,11 +177,7 @@ export function Dashboard() {
                 onRun={runScan}
                 industryId={industryId}
                 liveCompetitorsCount={liveCompetitorsCount}
-                detectedIndustryLabel={
-                  isWebsiteAutoNiche || hasManualCustomNiche
-                    ? activeIndustryLabel
-                    : undefined
-                }
+                detectedIndustryLabel={detectedIndustryLabel}
                 topPainPoint={topLivePainPoint}
               />
               <PricingCalculator
@@ -1167,97 +194,25 @@ export function Dashboard() {
               market={market}
               locale={locale}
               industryId={industryId}
-              detectedIndustryLabel={
-                isWebsiteAutoNiche || hasManualCustomNiche
-                  ? activeIndustryLabel
-                  : undefined
-              }
+              detectedIndustryLabel={detectedIndustryLabel}
               radiusKm={radiusKm}
               avgGapPct={metrics.avgGapPct}
               townsInRadius={townsInRadius}
               liveScan={liveScan}
             />
 
-            <footer className="mt-8 flex flex-col justify-between gap-3 border-t border-slate-200 py-5 text-[11px] text-slate-600 sm:flex-row sm:items-center dark:border-slate-800 dark:text-slate-400">
-              <span>
-                © {copyrightRange} {t.brand} · {t.footerLeft}
-              </span>
-              <div className="flex flex-wrap items-center gap-4">
-                <span>{isCaseStudy ? t.footerRight : t.citySourceLiveGeo}</span>
-                <Link
-                  href={legalRoutes.privacy}
-                  className="font-medium hover:text-teal-700 dark:hover:text-teal-300"
-                >
-                  {t.privacyPolicy}
-                </Link>
-                <Link
-                  href={legalRoutes.terms}
-                  className="font-medium hover:text-teal-700 dark:hover:text-teal-300"
-                >
-                  {t.termsOfService}
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => setCookieModalSignal((v) => v + 1)}
-                  className="font-medium text-teal-700 hover:underline dark:text-teal-300"
-                >
-                  {t.cookieSettingsBtn}
-                </button>
-              </div>
-            </footer>
+            <DashboardFooter
+              t={t}
+              copyrightRange={copyrightRange}
+              isCaseStudy={isCaseStudy}
+              legalRoutes={legalRoutes}
+              onOpenCookieSettings={openCookieSettings}
+            />
           </div>
         </main>
         <CookieConsent t={t} reopenSignal={cookieModalSignal} />
         <ScrollToTop label={t.scrollToTop} />
       </div>
-    </div>
-  );
-}
-
-function Metric({
-  icon,
-  label,
-  value,
-  foot,
-  badge,
-  highlight,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  foot: string;
-  badge?: string;
-  highlight?: boolean;
-}) {
-  return (
-    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_2px_8px_rgba(20,40,45,.025)] dark:border-slate-800 dark:bg-[#172123] md:p-5">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-slate-600 dark:text-slate-400">
-          {label}
-        </span>
-        <span className="grid size-8 place-items-center rounded-lg bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-300">
-          {icon}
-        </span>
-      </div>
-      <div className="mt-3 flex items-baseline gap-2">
-        <span
-          className={`text-[25px] font-semibold tracking-tight ${
-            highlight
-              ? "text-emerald-700 dark:text-emerald-300"
-              : "text-slate-900 dark:text-slate-100"
-          }`}
-        >
-          {value}
-        </span>
-        {badge && (
-          <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700 dark:bg-teal-950/70 dark:text-teal-300">
-            {badge}
-          </span>
-        )}
-      </div>
-      <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
-        {foot}
-      </p>
     </div>
   );
 }
