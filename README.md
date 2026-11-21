@@ -58,9 +58,17 @@ flowchart LR
   FORGE --> O1
   FORGE --> O2
 
-  style WEB fill:#eff6ff,stroke:#93c5fd,stroke-width:2px,color:#091e42
-  style FORGE fill:#eff6ff,stroke:#0052cc,stroke-width:2px,color:#091e42
-  style OUT fill:#ecfdf5,stroke:#00875a,stroke-width:2px,color:#091e42
+  style WEB fill:transparent,stroke:#64748b,stroke-width:2px,stroke-dasharray: 5 5
+  style FORGE fill:transparent,stroke:#2563eb,stroke-width:2px,stroke-dasharray: 5 5
+  style OUT fill:transparent,stroke:#0d9488,stroke-width:2px,stroke-dasharray: 5 5
+
+  classDef webNode fill:#1e293b,stroke:#475569,stroke-width:1.5px,color:#f8fafc
+  classDef forgeNode fill:#0052cc,stroke:#3b82f6,stroke-width:1.5px,color:#ffffff
+  classDef outNode fill:#0f766e,stroke:#14b8a6,stroke-width:1.5px,color:#ffffff
+
+  class W1,W2,W3,W4 webNode
+  class F1,F2,F3 forgeNode
+  class O1,O2 outNode
 ```
 
 | Layer               | Component                       | Endpoint / Module                       | Security & Fallbacks                                                                               |
@@ -169,7 +177,7 @@ curl -X POST https://nsops.vercel.app/api/mcp \
 │   ├── terms/page.tsx               # Terms of service
 │   ├── robots.ts & sitemap.ts       # Search & AI crawler metadata
 │   └── layout.tsx & page.tsx        # Root App Router entry & JSON-LD schema
-├── northstar-ops-rovo/              # Native Atlassian Forge UI Kit + Rovo + MCP app
+├── northstar-ops-rovo/              # Native Atlassian Forge UI Kit + Rovo + MCP app (v3.6.0)
 │   ├── manifest.yml                 # jira:projectPage, rovo:agent, rovo:skill, rovo:mcp, actions & scopes
 │   ├── skills/geo-pricing-strategist/SKILL.md
 │   └── src/
@@ -179,13 +187,22 @@ curl -X POST https://nsops.vercel.app/api/mcp \
 │   ├── llms.txt                     # Machine-readable AI discovery specification
 │   └── site.webmanifest             # PWA manifest & custom Northstar Ops icons
 ├── tests/
+│   ├── business-logic.test.mjs      # Unit tests: Haversine geo-math, zone pricing, currency & industry resolvers
 │   └── project-invariants.test.mjs  # Automated architectural, i18n, MCP & Forge parity tests
 └── src/
-    ├── backend/                     # Gemini client, AI Council engine, MCP tools, REST bridge
+    ├── backend/
+    │   ├── ai/                      # Gemini client & modular multi-provider AI Council engine
+    │   ├── market-scan/             # Live competitor discovery, crawler & report synthesizer
+    │   ├── mcp-server/              # Parameterized Web MCP JSON-RPC tool definitions
+    │   ├── operations/              # Atlassian REST v2/v3 client, Confluence & Jira publishers
+    │   └── pricing-sync/            # SSRF-guarded HTML/JSON-LD/SPA extractor & service rules
     ├── config/                      # Parameterized industry templates & market geo math
-    ├── frontend/components/         # Dashboard, GIS SVG map, competitor table, calculator, Rovo & Council UI
-    ├── lib/                         # Haversine distance, projection math, currency formatting
-    └── locales/                     # Strict EN & PL i18n JSON dictionaries
+    ├── frontend/components/
+    │   ├── dashboard/               # Shell, KPI grid & live intelligence state hook
+    │   └── features/                # AI Council, competitor table, GIS SVG map, calculator, Rovo & legal UI
+    ├── lib/                         # Haversine distance, cos(lat) projection math & currency formatting
+    ├── locales/                     # Strict EN & PL i18n JSON dictionaries (100% key parity)
+    └── types/                       # Shared market, pricing, council & Atlassian DTOs
 ```
 
 ---
@@ -243,15 +260,24 @@ npx @forge/cli install --non-interactive --site <your-site>.atlassian.net --prod
 
 ---
 
-## 7. Automated Invariant Checks (`pnpm test`)
+## 7. Automated Tests & Invariant Checks (`pnpm test`)
 
-`tests/project-invariants.test.mjs` guards project quality continuously with 5 structural checks:
+`node --test tests/*.test.mjs` (**9/9 passing**) guards both core geo-pricing domain logic (`tests/business-logic.test.mjs`) and architectural parity (`tests/project-invariants.test.mjs`):
 
-1. **100% EN/PL i18n Parity:** Ensures identical keys and non-empty strings across all `src/locales/en/*.json` and `src/locales/pl/*.json` namespaces.
-2. **Zero Inline Styles:** Verifies zero `style={{...}}` attributes across Next.js TSX components and Forge UI Kit JSX sources.
-3. **Strict TypeScript Build:** Confirms `next.config.mjs` never enables `ignoreBuildErrors: true`.
-4. **Web MCP & `llms.txt` Parity:** Verifies all 6 MCP tools match `public/llms.txt` and support global `distanceKm` quoting without hardcoded town lists.
-5. **Forge `Runs on Atlassian` & Manifest Parity:** Confirms zero `external:` egress permissions, zero `fetch()` calls inside Forge handlers/UI Kit, and full parity between `manifest.yml`, `SKILL.md`, `index.js`, and `src/frontend/index.jsx`.
+### Unit & Business Logic Tests (`tests/business-logic.test.mjs` — 4 checks)
+
+1. **Symmetric Haversine & `cos(lat)` Projections:** Verifies symmetric distance math and planar projection scaling across global coordinates.
+2. **Zone Pricing & Drive-Time Monotonicity:** Ensures travel fees and drive-time tiers remain strictly monotonic across `0–100 km`.
+3. **PLN/EN Currency Conversion & Formatting:** Validates exchange precision and `Intl.NumberFormat` output rules across `PLN / USD / EUR / GBP`.
+4. **Industry Templates & Service Resolvers:** Verifies preset and custom dynamic industry matching and normalized service units.
+
+### Architectural Invariant Checks (`tests/project-invariants.test.mjs` — 5 checks)
+
+5. **100% EN/PL i18n Parity:** Ensures identical keys, placeholders, and non-empty strings across all `src/locales/en/*.json` and `src/locales/pl/*.json` namespaces.
+6. **Zero Inline Styles:** Verifies zero `style={{...}}` attributes across Next.js TSX components and Forge UI Kit JSX sources.
+7. **Strict TypeScript Build:** Confirms `next.config.mjs` never enables `ignoreBuildErrors: true`.
+8. **Web MCP & `llms.txt` Parity:** Verifies all 6 MCP tools match `public/llms.txt` and support global `distanceKm` quoting without hardcoded town lists.
+9. **Forge `Runs on Atlassian` & Manifest Parity:** Confirms zero `external:` egress permissions, zero `fetch()` calls inside Forge handlers/UI Kit, and full parity between `manifest.yml`, `SKILL.md`, `index.js`, and `src/frontend/index.jsx`.
 
 ---
 

@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke, router } from "@forge/bridge";
 import ForgeReconciler, {
   Box,
@@ -17,12 +23,17 @@ import ForgeReconciler, {
   TabPanel,
   Tabs,
   Text,
+  TextArea,
   Textfield,
   useProductContext,
   xcss,
 } from "@forge/react";
 
 const WEB_HUB_URL = "https://nsops.vercel.app";
+
+const fullWidthBox = xcss({
+  width: "100%",
+});
 
 const cardStyle = xcss({
   backgroundColor: "elevation.surface.raised",
@@ -31,6 +42,7 @@ const cardStyle = xcss({
   borderWidth: "border.width",
   borderRadius: "border.radius.200",
   padding: "space.200",
+  width: "100%",
 });
 
 const COPY = {
@@ -54,8 +66,11 @@ const COPY = {
     tabAutomation: "Confluence & Jira Actions",
     jiraSectionTitle: "Live Jira Project Context",
     confluenceSectionTitle: "Live Confluence Space Context",
+    coverageTitle: "Active Coverage Zone",
+    coverageTownsLabel: "Serviceable towns in radius",
     noIssues: "No issues found in this project yet.",
     noPages: "No Confluence pages found in this space yet.",
+    confluenceUnavailable: "Confluence space unavailable",
     colKey: "Key",
     colSummary: "Summary",
     colType: "Type",
@@ -87,15 +102,18 @@ const COPY = {
     playbookSummaryLabel: "Executive Strategy Summary",
     playbookSummaryDefault:
       "Localized pricing alignment, transparent zone travel fees, and fast-turnaround service positioning.",
-    spaceKeyLabel: "Confluence Space Key",
+    spaceKeyLabel: "Confluence Space Key (auto-detected if empty)",
+    spaceKeyPlaceholder: "Auto-detect active space",
     publishBtn: "Publish Playbook",
     campaignTitle: "Create Expansion Campaign in Jira",
     campaignNameLabel: "Campaign Title",
+    campaignNameDefault: "Regional Expansion Campaign",
     campaignActionsLabel: "Action Items (semicolon-separated)",
     campaignActionsDefault:
       "Audit top 5 local competitors; Update zone pricing matrix; Launch local district outreach",
     createCampaignBtn: "Create Jira Epic & Tasks",
     actionSuccessTitle: "Atlassian action completed",
+    tasksCreatedWord: "tasks created",
     openPage: "Open Page",
     industryOptions: [
       { label: "Upholstery & Carpet Cleaning", value: "upholstery" },
@@ -124,8 +142,11 @@ const COPY = {
     tabAutomation: "Akcje Confluence i Jira",
     jiraSectionTitle: "Żywy kontekst projektu Jira",
     confluenceSectionTitle: "Żywy kontekst przestrzeni Confluence",
+    coverageTitle: "Aktywna strefa zasięgu",
+    coverageTownsLabel: "Miejscowości obsługiwane w promieniu",
     noIssues: "Brak zgłoszeń w tym projekcie.",
     noPages: "Brak stron w tej przestrzeni Confluence.",
+    confluenceUnavailable: "Przestrzeń Confluence niedostępna",
     colKey: "Klucz",
     colSummary: "Podsumowanie",
     colType: "Typ",
@@ -157,15 +178,18 @@ const COPY = {
     playbookSummaryLabel: "Podsumowanie strategii",
     playbookSummaryDefault:
       "Dopasowanie cennika do rynku lokalnego, jawne opłaty strefowe i szybka realizacja zleceń.",
-    spaceKeyLabel: "Klucz przestrzeni Confluence",
+    spaceKeyLabel: "Klucz przestrzeni Confluence (auto-wykrywany gdy pusty)",
+    spaceKeyPlaceholder: "Wykryj automatycznie aktywną przestrzeń",
     publishBtn: "Publikuj w Confluence",
     campaignTitle: "Utwórz kampanię ekspansji w Jira",
     campaignNameLabel: "Nazwa kampanii",
+    campaignNameDefault: "Regionalna kampania ekspansji",
     campaignActionsLabel: "Zadania do utworzenia (oddzielone średnikiem)",
     campaignActionsDefault:
       "Audyt 5 lokalnych konkurentów; Aktualizacja cennika strefowego; Kampania w okolicznych miejscowościach",
     createCampaignBtn: "Utwórz Epik i zadania w Jira",
     actionSuccessTitle: "Akcja Atlassian zakończona sukcesem",
+    tasksCreatedWord: "utworzonych zadań",
     openPage: "Otwórz stronę",
     industryOptions: [
       { label: "Pranie dywanów i tapicerki", value: "upholstery" },
@@ -189,6 +213,7 @@ const CURRENCY_OPTIONS = ["PLN", "USD", "EUR", "GBP"].map((code) => ({
 function App() {
   const productContext = useProductContext();
   const activeProjectKey = productContext?.extension?.project?.key || "KAN";
+  const initializedProjectRef = useRef(null);
 
   const [locale, setLocale] = useState("en");
   const t = COPY[locale];
@@ -201,6 +226,7 @@ function App() {
 
   const [workspaceData, setWorkspaceData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
   const [quoteTown, setQuoteTown] = useState("Pionki");
@@ -213,59 +239,103 @@ function App() {
   const [quoteCreated, setQuoteCreated] = useState(null);
   const [quoteBusy, setQuoteBusy] = useState(false);
 
-  const [spaceKeyInput, setSpaceKeyInput] = useState("northstarg");
+  const [spaceKeyInput, setSpaceKeyInput] = useState("");
   const [playbookSummary, setPlaybookSummary] = useState(
     COPY.en.playbookSummaryDefault,
   );
-  const [campaignName, setCampaignName] = useState(
-    "Regional Expansion Campaign",
-  );
+  const [campaignName, setCampaignName] = useState(COPY.en.campaignNameDefault);
   const [campaignActions, setCampaignActions] = useState(
     COPY.en.campaignActionsDefault,
   );
   const [actionBusy, setActionBusy] = useState(false);
   const [actionResult, setActionResult] = useState(null);
 
-  const effectiveIndustry = useMemo(() => {
-    if (industryPreset === "custom") {
-      return customIndustry.trim() || "Local Field Service";
+  const resolveEffectiveIndustry = useCallback((preset, customVal) => {
+    if (preset === "custom") {
+      return customVal.trim() || "Local Field Service";
     }
-    return industryPreset;
-  }, [industryPreset, customIndustry]);
+    return preset;
+  }, []);
 
-  const loadWorkspace = useCallback(async () => {
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const data = await invoke("getProjectWorkspaceData", {
-        city,
-        industry: effectiveIndustry,
-        radiusKm: Number(radiusKm),
-        currency,
-        projectKey: activeProjectKey,
-        spaceKey: spaceKeyInput,
-      });
-      setWorkspaceData(data);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : t.loadError);
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    city,
-    effectiveIndustry,
-    radiusKm,
-    currency,
-    activeProjectKey,
-    spaceKeyInput,
-    t.loadError,
-  ]);
+  const effectiveIndustry = useMemo(
+    () => resolveEffectiveIndustry(industryPreset, customIndustry),
+    [industryPreset, customIndustry, resolveEffectiveIndustry],
+  );
+
+  const fetchWorkspace = useCallback(
+    async (overrides = {}, options = {}) => {
+      const quiet = Boolean(options.quiet);
+      if (quiet) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setErrorMsg(null);
+
+      const nextCity = (overrides.city ?? city).trim() || "Radom";
+      const nextPreset = overrides.industryPreset ?? industryPreset;
+      const nextCustom = overrides.customIndustry ?? customIndustry;
+      const nextIndustry = resolveEffectiveIndustry(nextPreset, nextCustom);
+      const nextRadius = Number(overrides.radiusKm ?? radiusKm) || 30;
+      const nextCurrency = overrides.currency ?? currency;
+      const nextSpaceKey = (overrides.spaceKey ?? spaceKeyInput).trim();
+
+      try {
+        const data = await invoke("getProjectWorkspaceData", {
+          city: nextCity,
+          industry: nextIndustry,
+          radiusKm: nextRadius,
+          currency: nextCurrency,
+          projectKey: activeProjectKey,
+          spaceKey: nextSpaceKey,
+        });
+        setWorkspaceData(data);
+
+        const detectedSpaceKey =
+          data?.atlassianWorkspace?.confluenceSpace?.key || "";
+        if (!nextSpaceKey && detectedSpaceKey) {
+          setSpaceKeyInput(detectedSpaceKey);
+        }
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : t.loadError);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [
+      city,
+      industryPreset,
+      customIndustry,
+      radiusKm,
+      currency,
+      spaceKeyInput,
+      activeProjectKey,
+      resolveEffectiveIndustry,
+      t.loadError,
+    ],
+  );
 
   useEffect(() => {
-    if (productContext) {
-      loadWorkspace();
+    if (productContext && initializedProjectRef.current !== activeProjectKey) {
+      initializedProjectRef.current = activeProjectKey;
+      fetchWorkspace();
     }
-  }, [productContext, loadWorkspace]);
+  }, [productContext, activeProjectKey, fetchWorkspace]);
+
+  const handleApplyParameters = async () => {
+    const cleanCity = city.trim() || "Radom";
+    const isRadom = cleanCity.toLowerCase() === "radom";
+    if (
+      !isRadom &&
+      (quoteTown.trim().toLowerCase() === "pionki" || !quoteTown.trim())
+    ) {
+      setQuoteTown(cleanCity);
+      setQuoteDistanceKm("0");
+      setQuoteResult(null);
+    }
+    await fetchWorkspace({ city: cleanCity });
+  };
 
   const handleToggleLocale = (nextLocale) => {
     setLocale(nextLocale);
@@ -274,6 +344,9 @@ function App() {
     }
     if (playbookSummary === COPY[locale].playbookSummaryDefault) {
       setPlaybookSummary(COPY[nextLocale].playbookSummaryDefault);
+    }
+    if (campaignName === COPY[locale].campaignNameDefault) {
+      setCampaignName(COPY[nextLocale].campaignNameDefault);
     }
     if (campaignActions === COPY[locale].campaignActionsDefault) {
       setCampaignActions(COPY[nextLocale].campaignActionsDefault);
@@ -321,7 +394,7 @@ function App() {
       });
       setQuoteCreated(res);
       setQuoteResult(res.quote);
-      await loadWorkspace();
+      await fetchWorkspace({}, { quiet: true });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : t.loadError);
     } finally {
@@ -333,17 +406,24 @@ function App() {
     setActionBusy(true);
     setErrorMsg(null);
     try {
+      const cleanCity = city.trim() || "Radom";
       const res = await invoke("publishPlaybook", {
-        title: `${t.title} Playbook: ${city} (${radiusKm} km)`,
-        city,
+        title: `${t.title} Playbook: ${cleanCity} (${radiusKm} km)`,
+        city: cleanCity,
         industry: effectiveIndustry,
         radiusKm: Number(radiusKm) || 30,
         currency,
-        spaceKey: spaceKeyInput,
+        spaceKey: spaceKeyInput.trim(),
         summary: playbookSummary,
       });
       setActionResult({ type: "confluence", data: res });
-      await loadWorkspace();
+      if (res?.spaceKey) {
+        setSpaceKeyInput(res.spaceKey);
+      }
+      await fetchWorkspace(
+        { spaceKey: res?.spaceKey || spaceKeyInput },
+        { quiet: true },
+      );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : t.loadError);
     } finally {
@@ -355,15 +435,16 @@ function App() {
     setActionBusy(true);
     setErrorMsg(null);
     try {
+      const cleanCity = city.trim() || "Radom";
       const res = await invoke("createCampaign", {
-        campaignTitle: `${campaignName} (${city})`,
-        city,
+        campaignTitle: `${campaignName} (${cleanCity})`,
+        city: cleanCity,
         industry: effectiveIndustry,
         actionItems: campaignActions,
         projectKey: activeProjectKey,
       });
       setActionResult({ type: "jira", data: res });
-      await loadWorkspace();
+      await fetchWorkspace({}, { quiet: true });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : t.loadError);
     } finally {
@@ -372,10 +453,12 @@ function App() {
   };
 
   const jiraIssues = workspaceData?.atlassianWorkspace?.recentJiraIssues || [];
+  const confluenceSpace = workspaceData?.atlassianWorkspace?.confluenceSpace;
   const confluencePages =
     workspaceData?.atlassianWorkspace?.recentConfluencePages || [];
   const benchmarks = workspaceData?.pricingBenchmarks || [];
   const painPoints = workspaceData?.topCustomerPainPoints || [];
+  const townDetails = workspaceData?.townDetails || [];
 
   const issuesHead = {
     cells: [
@@ -496,9 +579,13 @@ function App() {
                 value={t.industryOptions.find(
                   (o) => o.value === industryPreset,
                 )}
-                onChange={(opt) =>
-                  setIndustryPreset(opt?.value || "upholstery")
-                }
+                onChange={(opt) => {
+                  const nextPreset = opt?.value || "upholstery";
+                  setIndustryPreset(nextPreset);
+                  if (nextPreset !== "custom") {
+                    fetchWorkspace({ industryPreset: nextPreset });
+                  }
+                }}
               />
             </Stack>
             {industryPreset === "custom" && (
@@ -518,7 +605,11 @@ function App() {
                 inputId="ns-radius"
                 options={RADIUS_OPTIONS}
                 value={RADIUS_OPTIONS.find((o) => o.value === radiusKm)}
-                onChange={(opt) => setRadiusKm(opt?.value || "30")}
+                onChange={(opt) => {
+                  const nextRadius = opt?.value || "30";
+                  setRadiusKm(nextRadius);
+                  fetchWorkspace({ radiusKm: nextRadius });
+                }}
               />
             </Stack>
             <Stack space="space.050">
@@ -527,10 +618,18 @@ function App() {
                 inputId="ns-currency"
                 options={CURRENCY_OPTIONS}
                 value={CURRENCY_OPTIONS.find((o) => o.value === currency)}
-                onChange={(opt) => setCurrency(opt?.value || "PLN")}
+                onChange={(opt) => {
+                  const nextCurrency = opt?.value || "PLN";
+                  setCurrency(nextCurrency);
+                  fetchWorkspace({ currency: nextCurrency });
+                }}
               />
             </Stack>
-            <Button appearance="primary" onClick={loadWorkspace}>
+            <Button
+              appearance="primary"
+              isDisabled={loading || refreshing}
+              onClick={handleApplyParameters}
+            >
               {t.applyParams}
             </Button>
           </Inline>
@@ -557,283 +656,350 @@ function App() {
           </TabList>
 
           <TabPanel>
-            <Stack space="space.200">
-              <Box xcss={cardStyle}>
-                <Stack space="space.100">
-                  <Inline spread="space-between" alignBlock="center">
-                    <Heading as="h2">{t.jiraSectionTitle}</Heading>
-                    <Button appearance="subtle" onClick={loadWorkspace}>
-                      {t.refresh}
-                    </Button>
-                  </Inline>
-                  <DynamicTable
-                    head={issuesHead}
-                    rows={issuesRows}
-                    emptyView={<Text>{t.noIssues}</Text>}
-                  />
-                </Stack>
-              </Box>
+            <Box xcss={fullWidthBox}>
+              <Stack space="space.200">
+                <Box xcss={cardStyle}>
+                  <Stack space="space.100">
+                    <Inline spread="space-between" alignBlock="center">
+                      <Heading as="h2">{t.jiraSectionTitle}</Heading>
+                      <Button
+                        appearance="subtle"
+                        isDisabled={refreshing}
+                        onClick={() => fetchWorkspace({}, { quiet: true })}
+                      >
+                        {t.refresh}
+                      </Button>
+                    </Inline>
+                    <DynamicTable
+                      head={issuesHead}
+                      rows={issuesRows}
+                      emptyView={<Text>{t.noIssues}</Text>}
+                    />
+                  </Stack>
+                </Box>
 
-              <Box xcss={cardStyle}>
-                <Stack space="space.100">
-                  <Heading as="h2">{t.confluenceSectionTitle}</Heading>
-                  {confluencePages.length === 0 ? (
-                    <Text>{t.noPages}</Text>
-                  ) : (
-                    <Stack space="space.075">
-                      {confluencePages.map((page) => (
-                        <Inline
-                          key={page.id}
-                          spread="space-between"
-                          alignBlock="center"
-                        >
-                          <Text>{page.title}</Text>
-                          {page.webPath && (
-                            <Button
-                              appearance="link"
-                              onClick={() => router.navigate(page.webPath)}
-                            >
-                              {t.openPage}
-                            </Button>
-                          )}
+                <Box xcss={cardStyle}>
+                  <Stack space="space.100">
+                    <Inline space="space.100" alignBlock="center" shouldWrap>
+                      <Heading as="h2">{t.confluenceSectionTitle}</Heading>
+                      {confluenceSpace?.key && (
+                        <Lozenge appearance="default">
+                          {confluenceSpace.key}
+                        </Lozenge>
+                      )}
+                    </Inline>
+                    {confluenceSpace?.error ? (
+                      <SectionMessage
+                        appearance="warning"
+                        title={t.confluenceUnavailable}
+                      >
+                        <Text>{confluenceSpace.error}</Text>
+                      </SectionMessage>
+                    ) : confluencePages.length === 0 ? (
+                      <Text>{t.noPages}</Text>
+                    ) : (
+                      <Stack space="space.075">
+                        {confluencePages.map((page) => (
+                          <Inline
+                            key={page.id}
+                            spread="space-between"
+                            alignBlock="center"
+                          >
+                            <Text>{page.title}</Text>
+                            {page.webPath && (
+                              <Button
+                                appearance="link"
+                                onClick={() => router.navigate(page.webPath)}
+                              >
+                                {t.openPage}
+                              </Button>
+                            )}
+                          </Inline>
+                        ))}
+                      </Stack>
+                    )}
+                  </Stack>
+                </Box>
+
+                {workspaceData && (
+                  <Box xcss={cardStyle}>
+                    <Stack space="space.100">
+                      <Inline space="space.100" alignBlock="center" shouldWrap>
+                        <Heading as="h2">{t.coverageTitle}</Heading>
+                        <Lozenge appearance="inprogress">
+                          {`${workspaceData.city} · ${workspaceData.targetRadiusKm} km`}
+                        </Lozenge>
+                      </Inline>
+                      <Text>{workspaceData.geoCoverageNote}</Text>
+                      {townDetails.length > 0 && (
+                        <Stack space="space.050">
+                          <Text>{t.coverageTownsLabel}</Text>
+                          <Inline space="space.075" shouldWrap>
+                            {townDetails.map((town) => (
+                              <Lozenge key={town.name} appearance="default">
+                                {`${town.name} (${town.distKm} km · ${town.travelFee} ${town.currency})`}
+                              </Lozenge>
+                            ))}
+                          </Inline>
+                        </Stack>
+                      )}
+                    </Stack>
+                  </Box>
+                )}
+
+                <Box xcss={cardStyle}>
+                  <Stack space="space.100">
+                    <Heading as="h2">{t.benchmarksTitle}</Heading>
+                    {benchmarks.length > 0 ? (
+                      <DynamicTable head={benchHead} rows={benchRows} />
+                    ) : (
+                      <SectionMessage appearance="information">
+                        <Text>{t.customIndustryNote}</Text>
+                      </SectionMessage>
+                    )}
+                    <Heading as="h3">{t.painPointsTitle}</Heading>
+                    <Stack space="space.050">
+                      {painPoints.map((p, idx) => (
+                        <Inline key={idx} space="space.100" alignBlock="center">
+                          <Lozenge appearance="moved">{`${p.frequencyPct}%`}</Lozenge>
+                          <Text>{p.issue}</Text>
                         </Inline>
                       ))}
                     </Stack>
-                  )}
-                </Stack>
-              </Box>
-
-              <Box xcss={cardStyle}>
-                <Stack space="space.100">
-                  <Heading as="h2">{t.benchmarksTitle}</Heading>
-                  {benchmarks.length > 0 ? (
-                    <DynamicTable head={benchHead} rows={benchRows} />
-                  ) : (
-                    <SectionMessage appearance="information">
-                      <Text>{t.customIndustryNote}</Text>
-                    </SectionMessage>
-                  )}
-                  <Heading as="h3">{t.painPointsTitle}</Heading>
-                  <Stack space="space.050">
-                    {painPoints.map((p, idx) => (
-                      <Inline key={idx} space="space.100" alignBlock="center">
-                        <Lozenge appearance="moved">{`${p.frequencyPct}%`}</Lozenge>
-                        <Text>{p.issue}</Text>
-                      </Inline>
-                    ))}
                   </Stack>
-                </Stack>
-              </Box>
-            </Stack>
+                </Box>
+              </Stack>
+            </Box>
           </TabPanel>
 
           <TabPanel>
-            <Stack space="space.200">
-              <Box xcss={cardStyle}>
-                <Stack space="space.150">
-                  <Heading as="h2">{t.tabCalculator}</Heading>
-                  <Inline space="space.150" shouldWrap>
-                    <Stack space="space.050">
-                      <Label labelFor="q-service">{t.serviceNameLabel}</Label>
-                      <Textfield
-                        id="q-service"
-                        value={quoteServiceLabel}
-                        onChange={(e) => setQuoteServiceLabel(e.target.value)}
-                      />
-                    </Stack>
-                    <Stack space="space.050">
-                      <Label labelFor="q-town">{t.townLabel}</Label>
-                      <Textfield
-                        id="q-town"
-                        value={quoteTown}
-                        onChange={(e) => setQuoteTown(e.target.value)}
-                      />
-                    </Stack>
-                    <Stack space="space.050">
-                      <Label labelFor="q-dist">{t.distanceLabel}</Label>
-                      <Textfield
-                        id="q-dist"
-                        type="number"
-                        value={quoteDistanceKm}
-                        onChange={(e) => setQuoteDistanceKm(e.target.value)}
-                      />
-                    </Stack>
-                    <Stack space="space.050">
-                      <Label labelFor="q-val">{t.orderValueLabel}</Label>
-                      <Textfield
-                        id="q-val"
-                        type="number"
-                        value={quoteOrderValue}
-                        onChange={(e) => setQuoteOrderValue(e.target.value)}
-                      />
-                    </Stack>
-                  </Inline>
-                  <Inline space="space.100" shouldWrap>
-                    <Button
-                      appearance="default"
-                      isDisabled={quoteBusy}
-                      onClick={handleCalculateQuote}
-                    >
-                      {t.computeQuote}
-                    </Button>
-                    <Button
-                      appearance="primary"
-                      isDisabled={quoteBusy}
-                      onClick={handleCreateQuoteTicket}
-                    >
-                      {t.createQuoteIssue}
-                    </Button>
-                  </Inline>
-                  {quoteResult && (
-                    <SectionMessage
-                      appearance={
-                        quoteResult.inStandardZone ? "success" : "warning"
-                      }
-                      title={`${t.quoteSummaryTitle} — ${quoteResult.town}`}
-                    >
+            <Box xcss={fullWidthBox}>
+              <Stack space="space.200">
+                <Box xcss={cardStyle}>
+                  <Stack space="space.150">
+                    <Heading as="h2">{t.tabCalculator}</Heading>
+                    <Inline space="space.150" shouldWrap>
                       <Stack space="space.050">
+                        <Label labelFor="q-svc">{t.serviceNameLabel}</Label>
+                        <Textfield
+                          id="q-svc"
+                          value={quoteServiceLabel}
+                          onChange={(e) => setQuoteServiceLabel(e.target.value)}
+                        />
+                      </Stack>
+                      <Stack space="space.050">
+                        <Label labelFor="q-town">{t.townLabel}</Label>
+                        <Textfield
+                          id="q-town"
+                          value={quoteTown}
+                          onChange={(e) => setQuoteTown(e.target.value)}
+                        />
+                      </Stack>
+                      <Stack space="space.050">
+                        <Label labelFor="q-dist">{t.distanceLabel}</Label>
+                        <Textfield
+                          id="q-dist"
+                          type="number"
+                          value={quoteDistanceKm}
+                          onChange={(e) => setQuoteDistanceKm(e.target.value)}
+                        />
+                      </Stack>
+                      <Stack space="space.050">
+                        <Label labelFor="q-val">
+                          {`${t.orderValueLabel} (${currency})`}
+                        </Label>
+                        <Textfield
+                          id="q-val"
+                          type="number"
+                          value={quoteOrderValue}
+                          onChange={(e) => setQuoteOrderValue(e.target.value)}
+                        />
+                      </Stack>
+                    </Inline>
+                    <Inline space="space.100" shouldWrap>
+                      <Button
+                        appearance="default"
+                        isDisabled={quoteBusy}
+                        onClick={handleCalculateQuote}
+                      >
+                        {t.computeQuote}
+                      </Button>
+                      <Button
+                        appearance="primary"
+                        isDisabled={quoteBusy}
+                        onClick={handleCreateQuoteTicket}
+                      >
+                        {t.createQuoteIssue}
+                      </Button>
+                    </Inline>
+                    {quoteResult && (
+                      <SectionMessage
+                        appearance={
+                          quoteResult.inStandardZone ? "success" : "warning"
+                        }
+                        title={`${t.quoteSummaryTitle} — ${quoteResult.town}`}
+                      >
+                        <Stack space="space.050">
+                          <Inline space="space.100" alignBlock="center">
+                            <Lozenge
+                              appearance={
+                                quoteResult.inStandardZone ? "success" : "moved"
+                              }
+                            >
+                              {quoteResult.inStandardZone
+                                ? t.inZone
+                                : t.outOfZone}
+                            </Lozenge>
+                            <Text>{`${quoteResult.distanceKm} km · ${t.driveTimeLabel}: ~${quoteResult.estimatedDriveMin} min`}</Text>
+                          </Inline>
+                          <Text>{`${t.travelFeeLabel}: ${quoteResult.travelFee} ${quoteResult.currency} | ${t.totalLabel}: ${quoteResult.total} ${quoteResult.currency}`}</Text>
+                        </Stack>
+                      </SectionMessage>
+                    )}
+                    {quoteCreated?.ok && (
+                      <SectionMessage
+                        appearance="success"
+                        title={`${t.quoteCreatedTitle}: ${quoteCreated.key}`}
+                      >
                         <Inline space="space.100" alignBlock="center">
-                          <Lozenge
-                            appearance={
-                              quoteResult.inStandardZone ? "success" : "moved"
+                          <Text>{quoteCreated.summary}</Text>
+                          <Button
+                            appearance="link"
+                            onClick={() =>
+                              router.navigate(quoteCreated.browsePath)
                             }
                           >
-                            {quoteResult.inStandardZone
-                              ? t.inZone
-                              : t.outOfZone}
-                          </Lozenge>
-                          <Text>{`${quoteResult.distanceKm} km · ${t.driveTimeLabel}: ~${quoteResult.estimatedDriveMin} min`}</Text>
+                            {t.openIssue}
+                          </Button>
                         </Inline>
-                        <Text>{`${t.travelFeeLabel}: ${quoteResult.travelFee} ${quoteResult.currency} | ${t.totalLabel}: ${quoteResult.total} ${quoteResult.currency}`}</Text>
-                      </Stack>
-                    </SectionMessage>
-                  )}
-                  {quoteCreated?.ok && (
-                    <SectionMessage
-                      appearance="success"
-                      title={`${t.quoteCreatedTitle}: ${quoteCreated.key}`}
-                    >
-                      <Inline space="space.100" alignBlock="center">
-                        <Text>{quoteCreated.summary}</Text>
-                        <Button
-                          appearance="link"
-                          onClick={() =>
-                            router.navigate(quoteCreated.browsePath)
-                          }
-                        >
-                          {t.openIssue}
-                        </Button>
-                      </Inline>
-                    </SectionMessage>
-                  )}
-                </Stack>
-              </Box>
-            </Stack>
+                      </SectionMessage>
+                    )}
+                  </Stack>
+                </Box>
+              </Stack>
+            </Box>
           </TabPanel>
 
           <TabPanel>
-            <Stack space="space.200">
-              <Box xcss={cardStyle}>
-                <Stack space="space.150">
-                  <Heading as="h2">{t.publishTitle}</Heading>
-                  <Inline space="space.150" shouldWrap>
-                    <Stack space="space.050">
-                      <Label labelFor="cf-space">{t.spaceKeyLabel}</Label>
-                      <Textfield
-                        id="cf-space"
-                        value={spaceKeyInput}
-                        onChange={(e) => setSpaceKeyInput(e.target.value)}
-                      />
-                    </Stack>
-                    <Stack space="space.050">
-                      <Label labelFor="cf-sum">{t.playbookSummaryLabel}</Label>
-                      <Textfield
-                        id="cf-sum"
-                        value={playbookSummary}
-                        onChange={(e) => setPlaybookSummary(e.target.value)}
-                      />
-                    </Stack>
-                  </Inline>
-                  <Button
-                    appearance="primary"
-                    isDisabled={actionBusy}
-                    onClick={handlePublishPlaybook}
-                  >
-                    {t.publishBtn}
-                  </Button>
-                </Stack>
-              </Box>
-
-              <Box xcss={cardStyle}>
-                <Stack space="space.150">
-                  <Heading as="h2">{t.campaignTitle}</Heading>
-                  <Inline space="space.150" shouldWrap>
-                    <Stack space="space.050">
-                      <Label labelFor="jr-name">{t.campaignNameLabel}</Label>
-                      <Textfield
-                        id="jr-name"
-                        value={campaignName}
-                        onChange={(e) => setCampaignName(e.target.value)}
-                      />
-                    </Stack>
-                    <Stack space="space.050">
-                      <Label labelFor="jr-acts">{t.campaignActionsLabel}</Label>
-                      <Textfield
-                        id="jr-acts"
-                        value={campaignActions}
-                        onChange={(e) => setCampaignActions(e.target.value)}
-                      />
-                    </Stack>
-                  </Inline>
-                  <Button
-                    appearance="primary"
-                    isDisabled={actionBusy}
-                    onClick={handleCreateCampaign}
-                  >
-                    {t.createCampaignBtn}
-                  </Button>
-                </Stack>
-              </Box>
-
-              {actionResult && (
-                <SectionMessage
-                  appearance="success"
-                  title={t.actionSuccessTitle}
-                >
-                  {actionResult.type === "confluence" ? (
-                    <Inline space="space.100" alignBlock="center">
-                      <Text>{`${actionResult.data.title} (${actionResult.data.spaceKey})`}</Text>
-                      {actionResult.data.webPath && (
-                        <Button
-                          appearance="link"
-                          onClick={() =>
-                            router.navigate(actionResult.data.webPath)
-                          }
-                        >
-                          {t.openPage}
-                        </Button>
-                      )}
+            <Box xcss={fullWidthBox}>
+              <Stack space="space.200">
+                <Box xcss={cardStyle}>
+                  <Stack space="space.150">
+                    <Heading as="h2">{t.publishTitle}</Heading>
+                    <Box xcss={fullWidthBox}>
+                      <Stack space="space.050">
+                        <Label labelFor="cf-space">{t.spaceKeyLabel}</Label>
+                        <Textfield
+                          id="cf-space"
+                          placeholder={t.spaceKeyPlaceholder}
+                          value={spaceKeyInput}
+                          onChange={(e) => setSpaceKeyInput(e.target.value)}
+                        />
+                      </Stack>
+                    </Box>
+                    <Box xcss={fullWidthBox}>
+                      <Stack space="space.050">
+                        <Label labelFor="cf-sum">
+                          {t.playbookSummaryLabel}
+                        </Label>
+                        <TextArea
+                          id="cf-sum"
+                          minimumRows={3}
+                          value={playbookSummary}
+                          onChange={(e) => setPlaybookSummary(e.target.value)}
+                        />
+                      </Stack>
+                    </Box>
+                    <Inline space="space.100">
+                      <Button
+                        appearance="primary"
+                        isDisabled={actionBusy}
+                        onClick={handlePublishPlaybook}
+                      >
+                        {t.publishBtn}
+                      </Button>
                     </Inline>
-                  ) : (
-                    <Inline space="space.100" alignBlock="center" shouldWrap>
-                      <Text>{`${actionResult.data.projectKey}: ${actionResult.data.createdCount} tasks`}</Text>
-                      {actionResult.data.epicIssue && (
-                        <Button
-                          appearance="link"
-                          onClick={() =>
-                            router.navigate(
-                              actionResult.data.epicIssue.browsePath,
-                            )
-                          }
-                        >
-                          {actionResult.data.epicIssue.key}
-                        </Button>
-                      )}
+                  </Stack>
+                </Box>
+
+                <Box xcss={cardStyle}>
+                  <Stack space="space.150">
+                    <Heading as="h2">{t.campaignTitle}</Heading>
+                    <Box xcss={fullWidthBox}>
+                      <Stack space="space.050">
+                        <Label labelFor="jr-name">{t.campaignNameLabel}</Label>
+                        <Textfield
+                          id="jr-name"
+                          value={campaignName}
+                          onChange={(e) => setCampaignName(e.target.value)}
+                        />
+                      </Stack>
+                    </Box>
+                    <Box xcss={fullWidthBox}>
+                      <Stack space="space.050">
+                        <Label labelFor="jr-acts">
+                          {t.campaignActionsLabel}
+                        </Label>
+                        <TextArea
+                          id="jr-acts"
+                          minimumRows={3}
+                          value={campaignActions}
+                          onChange={(e) => setCampaignActions(e.target.value)}
+                        />
+                      </Stack>
+                    </Box>
+                    <Inline space="space.100">
+                      <Button
+                        appearance="primary"
+                        isDisabled={actionBusy}
+                        onClick={handleCreateCampaign}
+                      >
+                        {t.createCampaignBtn}
+                      </Button>
                     </Inline>
-                  )}
-                </SectionMessage>
-              )}
-            </Stack>
+                  </Stack>
+                </Box>
+
+                {actionResult && (
+                  <SectionMessage
+                    appearance="success"
+                    title={t.actionSuccessTitle}
+                  >
+                    {actionResult.type === "confluence" ? (
+                      <Inline space="space.100" alignBlock="center">
+                        <Text>{`${actionResult.data.title} (${actionResult.data.spaceKey})`}</Text>
+                        {actionResult.data.webPath && (
+                          <Button
+                            appearance="link"
+                            onClick={() =>
+                              router.navigate(actionResult.data.webPath)
+                            }
+                          >
+                            {t.openPage}
+                          </Button>
+                        )}
+                      </Inline>
+                    ) : (
+                      <Inline space="space.100" alignBlock="center" shouldWrap>
+                        <Text>{`${actionResult.data.projectKey}: ${actionResult.data.createdCount} ${t.tasksCreatedWord}`}</Text>
+                        {actionResult.data.epicIssue && (
+                          <Button
+                            appearance="link"
+                            onClick={() =>
+                              router.navigate(
+                                actionResult.data.epicIssue.browsePath,
+                              )
+                            }
+                          >
+                            {actionResult.data.epicIssue.key}
+                          </Button>
+                        )}
+                      </Inline>
+                    )}
+                  </SectionMessage>
+                )}
+              </Stack>
+            </Box>
           </TabPanel>
         </Tabs>
       )}

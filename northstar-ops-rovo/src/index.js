@@ -140,7 +140,6 @@ function resolveIndustryProfile(raw) {
       ...INDUSTRY_BASELINES.upholstery,
     };
   }
-
   if (
     lower === "hvac" ||
     lower.includes("hvac") ||
@@ -150,7 +149,6 @@ function resolveIndustryProfile(raw) {
   ) {
     return { key: "hvac", isPreset: true, ...INDUSTRY_BASELINES.hvac };
   }
-
   if (
     lower === "plumbing" ||
     lower.includes("plumb") ||
@@ -229,13 +227,15 @@ function estimateDriveMinutes(distanceKm) {
 }
 
 async function resolveConfluenceSpace(requestedKey) {
-  const targetKey = cleanString(requestedKey, DEFAULT_CONFLUENCE_SPACE_KEY);
+  const explicitKey = cleanString(requestedKey, "");
+  const lookupKey = explicitKey || DEFAULT_CONFLUENCE_SPACE_KEY;
 
   const byKeyRes = await api
     .asUser()
-    .requestConfluence(route`/wiki/api/v2/spaces?keys=${targetKey}&limit=5`, {
-      headers: { Accept: "application/json" },
-    });
+    .requestConfluence(
+      route`/wiki/api/v2/spaces?keys=${lookupKey}&status=current&limit=5`,
+      { headers: { Accept: "application/json" } },
+    );
 
   if (byKeyRes.ok) {
     const byKeyData = await byKeyRes.json();
@@ -244,23 +244,36 @@ async function resolveConfluenceSpace(requestedKey) {
     }
   }
 
-  const fallbackRes = await api
+  const globalFallbackRes = await api
     .asUser()
-    .requestConfluence(route`/wiki/api/v2/spaces?limit=5`, {
-      headers: { Accept: "application/json" },
-    });
+    .requestConfluence(
+      route`/wiki/api/v2/spaces?type=global&status=current&limit=10`,
+      { headers: { Accept: "application/json" } },
+    );
 
-  if (fallbackRes.ok) {
-    const fallbackData = await fallbackRes.json();
-    if (
-      Array.isArray(fallbackData?.results) &&
-      fallbackData.results.length > 0
-    ) {
-      return fallbackData.results[0];
+  if (globalFallbackRes.ok) {
+    const globalData = await globalFallbackRes.json();
+    if (Array.isArray(globalData?.results) && globalData.results.length > 0) {
+      return globalData.results[0];
     }
   }
 
-  throw new Error(`Could not resolve Confluence space "${targetKey}".`);
+  const anyFallbackRes = await api
+    .asUser()
+    .requestConfluence(route`/wiki/api/v2/spaces?status=current&limit=10`, {
+      headers: { Accept: "application/json" },
+    });
+
+  if (anyFallbackRes.ok) {
+    const anyData = await anyFallbackRes.json();
+    if (Array.isArray(anyData?.results) && anyData.results.length > 0) {
+      return anyData.results[0];
+    }
+  }
+
+  throw new Error(
+    `No accessible Confluence space found (checked "${lookupKey}" and workspace fallback).`,
+  );
 }
 
 async function fetchRecentConfluencePages(spaceId) {
@@ -305,20 +318,24 @@ async function resolveJiraProject(requestedKey) {
     });
 
   if (directRes.ok) {
-    return directRes.json();
+    const directProject = await directRes.json();
+    if (!directProject?.archived && !directProject?.deleted) {
+      return directProject;
+    }
   }
 
   const searchRes = await api
     .asUser()
-    .requestJira(route`/rest/api/3/project/search?maxResults=10`, {
+    .requestJira(route`/rest/api/3/project/search?maxResults=15`, {
       headers: { Accept: "application/json" },
     });
 
   if (searchRes.ok) {
     const searchData = await searchRes.json();
-    const candidates = Array.isArray(searchData?.values)
+    const rawCandidates = Array.isArray(searchData?.values)
       ? searchData.values
       : [];
+    const candidates = rawCandidates.filter((p) => !p.archived && !p.deleted);
     const preferred =
       candidates.find((p) => p.projectTypeKey === "software") ||
       candidates.find((p) => p.projectTypeKey === "business") ||
@@ -493,6 +510,7 @@ export async function calculateServiceFee(rawPayload) {
   const knownTown = REFERENCE_RADOM_TOWNS.find(
     (t) => t.name.toLowerCase() === townName.toLowerCase(),
   );
+
   const distanceKm =
     typeof input.distanceKm === "number" && Number.isFinite(input.distanceKm)
       ? clampNumber(input.distanceKm, 0, 500, 0)
@@ -504,11 +522,13 @@ export async function calculateServiceFee(rawPayload) {
     knownTown && input.distanceKm === undefined
       ? knownTown.travelFeePln
       : computeZoneTravelFeePln(distanceKm);
+
   const travelFee = convertFromPln(travelFeePln, currencyCfg);
   const driveMin =
     knownTown && input.distanceKm === undefined
       ? knownTown.driveMin
       : estimateDriveMinutes(distanceKm);
+
   const inStandardZone = distanceKm <= radiusKm;
   const total = Math.round((orderValue + travelFee) * 100) / 100;
 
@@ -785,6 +805,7 @@ async function createJiraQuoteTicket(rawPayload, context) {
   ).toUpperCase();
   const town = cleanString(input.town, REFERENCE_CASE_STUDY_CITY);
   const serviceLabel = cleanString(input.serviceLabel, "Service Quote");
+
   const quote = await calculateServiceFee({
     town,
     orderValue: input.orderValue,
@@ -797,6 +818,7 @@ async function createJiraQuoteTicket(rawPayload, context) {
   const validIssueTypes = Array.isArray(projectData?.issueTypes)
     ? projectData.issueTypes.filter((t) => !t.subtask)
     : [];
+
   const taskType =
     validIssueTypes.find((t) =>
       /^(task|zadanie|story|historia)$/i.test(t.name),
@@ -813,6 +835,7 @@ async function createJiraQuoteTicket(rawPayload, context) {
       0,
       240,
     );
+
   const issueRes = await api.asUser().requestJira(route`/rest/api/3/issue`, {
     method: "POST",
     headers: {
