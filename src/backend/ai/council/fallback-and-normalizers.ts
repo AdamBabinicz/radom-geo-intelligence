@@ -1,3 +1,4 @@
+import { formatPrice } from "../../../lib/currency";
 import type {
   CouncilDebateResult,
   CouncilDecisionOption,
@@ -10,6 +11,7 @@ import type {
 
 export function buildCompactMarketBrief(input: CouncilRequestInput): string {
   const resolvedIndustry = input.industryLabel?.trim() || input.industryId;
+  const isEn = input.locale === "en";
   const servicesLines = input.services
     .slice(0, 12)
     .map((s) => {
@@ -17,13 +19,15 @@ export function buildCompactMarketBrief(input: CouncilRequestInput): string {
         s.localPricePln > 0
           ? `${Math.round(((s.ourPricePln - s.localPricePln) / s.localPricePln) * 100)}%`
           : "n/a";
-      const enHint =
-        input.locale === "en"
-          ? ` (~$${Math.round(s.ourPricePln / 4)} USD vs ~$${
-              s.localPricePln > 0 ? Math.round(s.localPricePln / 4) : 0
-            } USD)`
-          : "";
-      return `- [${s.serviceKey}] ${s.label}: our=${s.ourPricePln} PLN, localAvg=${s.localPricePln > 0 ? `${s.localPricePln} PLN` : "none"} (gap ${gap})${enHint}`;
+      if (isEn) {
+        const ourUsd = formatPrice(s.ourPricePln, "en");
+        const localUsd =
+          s.localPricePln > 0 ? formatPrice(s.localPricePln, "en") : "none";
+        return `- [${s.serviceKey}] ${s.label}: our=${ourUsd} (scalePln=${s.ourPricePln}), localAvg=${localUsd}${
+          s.localPricePln > 0 ? ` (scalePln=${s.localPricePln})` : ""
+        } (gap ${gap})`;
+      }
+      return `- [${s.serviceKey}] ${s.label}: our=${s.ourPricePln} PLN, localAvg=${s.localPricePln > 0 ? `${s.localPricePln} PLN` : "none"} (gap ${gap})`;
     })
     .join("\n");
 
@@ -134,7 +138,7 @@ export function buildGroundedFallbackCouncil(
           ? `Średnia w mieście ${input.city} to ${s.localPricePln} zł — bezpieczne domknięcie luki cenowej.`
           : `Korekta marżowa +8% w promieniu ${input.radiusKm} km.`
         : s.localPricePln > 0
-          ? `${input.city} avg is ~$${Math.round(s.localPricePln / 4)} — closing part of the market gap.`
+          ? `${input.city} avg is ${formatPrice(s.localPricePln, "en")} — closing part of the market gap.`
           : `Modest +8% margin adjustment inside ${input.radiusKm} km zone.`,
     };
   });

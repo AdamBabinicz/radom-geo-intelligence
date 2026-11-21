@@ -1,4 +1,5 @@
 import { resolveServiceLabel, type IndustryId } from "../../config/industries";
+import { formatPrice } from "../../lib/currency";
 import {
   formatTemplate,
   resolveLocale,
@@ -259,7 +260,10 @@ export async function createCustomerQuote(
     input.unitLabel && typeof input.quantity === "number"
       ? ` (${input.quantity} ${input.unitLabel})`
       : "";
-  const summary = `${t.jiraQuotePrefix} ${serviceName}${qtySuffix} · ${input.town} · ${input.totalPln} PLN`;
+  const formattedUnit = formatPrice(input.unitPricePln, locale);
+  const formattedTravel = formatPrice(input.travelFeePln, locale);
+  const formattedTotal = formatPrice(input.totalPln, locale);
+  const summary = `${t.jiraQuotePrefix} ${serviceName}${qtySuffix} · ${input.town} · ${formattedTotal}`;
 
   const atlassian = getAtlassianConfig();
 
@@ -294,8 +298,8 @@ export async function createCustomerQuote(
                     `${t.jiraQuoteServiceLabel}: ${serviceName}${qtySuffix}`,
                     `${t.jiraQuoteTownLabel}: ${input.town} (${t.jiraQuoteHubLabel}: ${input.center})`,
                     `${t.jiraQuoteZoneLabel}: ${input.inZone === false ? t.outOfZoneStatus : t.inZoneStatus}`,
-                    `${t.jiraQuoteUnitPriceLabel}: ${input.unitPricePln} PLN | ${t.jiraQuoteTravelLabel}: ${input.travelFeePln} PLN`,
-                    `${t.jiraQuoteTotalLabel}: ${input.totalPln} PLN`,
+                    `${t.jiraQuoteUnitPriceLabel}: ${formattedUnit} | ${t.jiraQuoteTravelLabel}: ${formattedTravel}`,
+                    `${t.jiraQuoteTotalLabel}: ${formattedTotal}`,
                     t.jiraQuoteCreatedNote,
                   ]),
                 },

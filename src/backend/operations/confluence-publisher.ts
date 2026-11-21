@@ -3,6 +3,7 @@ import {
   resolveServiceLabel,
   type IndustryId,
 } from "../../config/industries";
+import { formatPrice } from "../../lib/currency";
 import {
   formatTemplate,
   resolveLocale,
@@ -185,13 +186,14 @@ export async function exportStrategyToConfluence(input: {
                     100,
                 )
               : 0;
+            const ourPriceStr = formatPrice(row.ourPricePln, locale);
             const marketAvgCell = hasLocalAvg
-              ? `${row.localPricePln} PLN`
+              ? formatPrice(row.localPricePln, locale)
               : "—";
             const deltaStr = hasLocalAvg
               ? `${delta > 0 ? "+" : ""}${delta}%`
               : "—";
-            return `<tr><td>${escapeHtml(label)}</td><td>${row.ourPricePln} PLN</td><td>${escapeHtml(marketAvgCell)}</td><td>${escapeHtml(deltaStr)}</td></tr>`;
+            return `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(ourPriceStr)}</td><td>${escapeHtml(marketAvgCell)}</td><td>${escapeHtml(deltaStr)}</td></tr>`;
           })
           .join("");
 

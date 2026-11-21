@@ -1,4 +1,5 @@
 import { ThinkingLevel } from "@google/genai";
+import { formatPrice } from "../../lib/currency";
 import {
   GEMINI_TEXT_MODEL,
   getGeminiClient,
@@ -50,7 +51,7 @@ export async function runAiCouncil(
   const languageLabel = input.locale === "pl" ? "Polish" : "English";
   const currencyRule =
     input.locale === "en"
-      ? " Keep JSON price fields (currentPricePln, proposedPricePln, finalPricePln) as integer PLN, while referring to prices in USD ($) in prose."
+      ? " DISPLAY CURRENCY IS STRICTLY USD ($). NEVER write 'PLN', 'zł', or Polish currency names in ANY text field (thesis, campaignAngle, rationale, objections, counterProposals, summaryForHuman, title, summary, actionItems). In prose, cite prices ONLY in USD ($) using 1 USD = 4 scalePln (e.g., $74 = 296, $70 = 280, $50 = 200). For numeric JSON fields (currentPricePln, proposedPricePln, finalPricePln), always output exact integer targetUsd * 4 so USD badges match your prose."
       : "";
   const brief = buildCompactMarketBrief(input);
 
@@ -147,6 +148,23 @@ export async function runAiCouncil(
     priceMoves: cleanMoves,
   };
 
+  const round1ForAudit =
+    input.locale === "en"
+      ? {
+          thesis: round1.thesis,
+          campaignAngle: round1.campaignAngle,
+          priceMoves: round1.priceMoves.map((m) => ({
+            serviceKey: m.serviceKey,
+            label: m.label,
+            currentUsd: formatPrice(m.currentPricePln, "en"),
+            proposedUsd: formatPrice(m.proposedPricePln, "en"),
+            currentScalePln: m.currentPricePln,
+            proposedScalePln: m.proposedPricePln,
+            rationale: m.rationale,
+          })),
+        }
+      : round1;
+
   let criticData: RawCriticPayload | null = null;
   let criticLabel = "";
   let criticProvider: "groq" | "openai" | "gemini-isolated" | "deterministic" =
@@ -160,7 +178,7 @@ export async function runAiCouncil(
 
   const criticPrompt = [
     `LIVE MARKET CONTEXT:\n${brief}`,
-    `\nAGENT 1 PROPOSAL TO AUDIT:\n${JSON.stringify(round1)}`,
+    `\nAGENT 1 PROPOSAL TO AUDIT:\n${JSON.stringify(round1ForAudit)}`,
     `\nReturn strict JSON with keys: verdict ("challenge" | "revise" | "caution"), riskScore (integer 20..95), objections (2-3 sharp concrete strings), counterProposals (2-3 concrete mitigation strings).`,
   ].join("\n");
 
@@ -269,7 +287,7 @@ export async function runAiCouncil(
     `Write all text in ${languageLabel}.${currencyRule} Return valid JSON.`;
 
   const synthesisPrompt = [
-    `ROUND 1 STRATEGIST:\n${JSON.stringify(round1)}`,
+    `ROUND 1 STRATEGIST:\n${JSON.stringify(round1ForAudit)}`,
     `ROUND 2 CRITIC:\n${JSON.stringify(round2)}`,
     input.humanNote?.trim()
       ? `HUMAN CONSTRAINT: ${input.humanNote.trim()}`
