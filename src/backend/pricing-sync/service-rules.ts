@@ -220,6 +220,13 @@ const CORNER_SOFA_LABEL_RE =
 const COUCH_LABEL_RE =
   /(?:^|[^a-ząćęłńóśźż])(sof[a-ząćęłńóśźż]*|kanap[a-ząćęłńóśźż]*|couch[a-z]*|loveseat[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
 
+const UPHOLSTERY_LABEL_HINT_RE =
+  /(?:^|[^a-ząćęłńóśźż])(carpet|rug|upholstery|sofa|couch|loveseat|sectional|chair|recliner|ottoman|pouf|mattress|curtain|drape|grout|tile\s*clean|auto\s*seat|dywan|wyk[łl]adzin|tapicerk|kanap|naro[żz]nik|fotel|krzes[łl]|materac|puf[ayę]?|zas[łl]on)(?:[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+const HVAC_LABEL_HINT_RE =
+  /(?:^|[^a-ząćęłńóśźż])(hvac|air[\s-]*cond|\bac\b|heat\s*pump|furnace|duct\s*clean|thermostat|refrigerant|klimatyzac|pomp[ayę]\s+ciep[łl]|rekuperac|wentylac)(?:[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+const PLUMBING_LABEL_HINT_RE =
+  /(?:^|[^a-ząćęłńóśźż])(plumb|drain|sewer|unclog|leak\s*repair|water\s*heater|boiler|faucet|pipe|hydraul|kanalizac|odp[łl]yw|udra[żz]nian|wyciek|kot[łl]|kocio[łl])(?:[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+
 export function isCanonicalKeyCompatibleWithLabel(
   canonicalKey: string,
   labelPl: string,
@@ -397,17 +404,61 @@ export function buildUniqueLiveKey(
 export function inferPresetFromPrices(
   prices: ExtractedPrice[],
 ): DetectedIndustryMatch {
-  let upholsteryHits = 0;
-  let hvacHits = 0;
-  let plumbingHits = 0;
+  let upholsteryKeyHits = 0;
+  let hvacKeyHits = 0;
+  let plumbingKeyHits = 0;
+  let upholsteryLabelHits = 0;
+  let hvacLabelHits = 0;
+  let plumbingLabelHits = 0;
+
   for (const item of prices) {
-    if (UPHOLSTERY_DETECTION_KEYS.has(item.serviceKey)) upholsteryHits++;
-    if (HVAC_DETECTION_KEYS.has(item.serviceKey)) hvacHits++;
-    if (PLUMBING_DETECTION_KEYS.has(item.serviceKey)) plumbingHits++;
+    if (UPHOLSTERY_DETECTION_KEYS.has(item.serviceKey)) upholsteryKeyHits++;
+    if (HVAC_DETECTION_KEYS.has(item.serviceKey)) hvacKeyHits++;
+    if (PLUMBING_DETECTION_KEYS.has(item.serviceKey)) plumbingKeyHits++;
+
+    const combinedText = `${item.serviceKey} ${item.labelEn} ${item.labelPl}`;
+    if (
+      UPHOLSTERY_DETECTION_KEYS.has(item.serviceKey) ||
+      UPHOLSTERY_LABEL_HINT_RE.test(combinedText)
+    ) {
+      upholsteryLabelHits++;
+    }
+    if (
+      HVAC_DETECTION_KEYS.has(item.serviceKey) ||
+      HVAC_LABEL_HINT_RE.test(combinedText)
+    ) {
+      hvacLabelHits++;
+    }
+    if (
+      PLUMBING_DETECTION_KEYS.has(item.serviceKey) ||
+      PLUMBING_LABEL_HINT_RE.test(combinedText)
+    ) {
+      plumbingLabelHits++;
+    }
   }
-  if (upholsteryHits >= 2) return "upholstery";
-  if (hvacHits >= 2) return "hvac";
-  if (plumbingHits >= 2) return "plumbing";
+
+  if (upholsteryKeyHits >= 2) return "upholstery";
+  if (hvacKeyHits >= 2) return "hvac";
+  if (plumbingKeyHits >= 2) return "plumbing";
+
+  const minRatioPass = (hits: number) =>
+    hits >= 2 && (prices.length <= 5 || hits / prices.length >= 0.2);
+
+  const candidates: Array<{
+    id: Exclude<DetectedIndustryMatch, "custom">;
+    hits: number;
+  }> = [
+    { id: "upholstery", hits: upholsteryLabelHits },
+    { id: "hvac", hits: hvacLabelHits },
+    { id: "plumbing", hits: plumbingLabelHits },
+  ];
+  candidates.sort((a, b) => b.hits - a.hits);
+
+  const [top, runnerUp] = candidates;
+  if (minRatioPass(top.hits) && top.hits >= Math.max(2, runnerUp.hits * 2)) {
+    return top.id;
+  }
+
   return "custom";
 }
 

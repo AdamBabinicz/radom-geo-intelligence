@@ -24,10 +24,9 @@ import {
 } from "@/src/config/industries";
 import {
   RADOM_UPHOLSTERY_MARKET,
-  type MarketDataSource,
   type MarketProfile,
 } from "@/src/config/markets";
-import { formatTemplate, type AppDictionary } from "@/src/locales";
+import type { AppDictionary } from "@/src/locales";
 
 export type IndustryControlMode = "preset" | "auto" | "custom";
 
@@ -38,27 +37,16 @@ export interface SyncNotice {
   message: string;
 }
 
-type GeoErrorCode =
-  | "CITY_EMPTY"
-  | "CITY_NOT_FOUND"
-  | "GEO_TIMEOUT"
-  | "GEO_FAILED";
-
-const GEO_RESOLVE_TIMEOUT_MS = 28_000;
-
-interface GeoResolvePayload {
-  source?: MarketDataSource;
-  market?: MarketProfile;
-  centerGps?: { lat: number; lon: number };
-  code?: GeoErrorCode;
-  error?: string;
-}
-
 interface MarketSwitcherProps {
   t: AppDictionary;
   market: MarketProfile;
+  cityQuery: string;
+  onCityQueryChange: (nextQuery: string) => void;
+  onAnalyzeCity: () => Promise<void> | void;
+  onResetRadomMarket: () => void;
+  isResolvingCity?: boolean;
+  cityError?: string | null;
   industryId: IndustryId;
-  onMarketChange: (nextMarket: MarketProfile) => void;
   onIndustryChange: (nextIndustry: IndustryId) => void;
   industryMode?: IndustryControlMode;
   activeIndustryDisplay?: string;
@@ -76,62 +64,16 @@ interface MarketSwitcherProps {
   scannedCompetitorsCount?: number;
 }
 
-async function readJsonSafe<T>(response: Response): Promise<T | null> {
-  try {
-    const raw = await response.text();
-    if (!raw.trim()) return null;
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function isTimeoutFailure(error: unknown, status?: number): boolean {
-  if (status === 408 || status === 504) {
-    return true;
-  }
-  if (error instanceof DOMException) {
-    return error.name === "TimeoutError" || error.name === "AbortError";
-  }
-  if (error instanceof Error) {
-    const message = error.message.toLowerCase();
-    return (
-      error.name === "TimeoutError" ||
-      error.name === "AbortError" ||
-      message.includes("timed out") ||
-      message.includes("timeout")
-    );
-  }
-  return false;
-}
-
-function resolveGeoErrorMessage(
-  t: AppDictionary,
-  city: string,
-  status?: number,
-  payload?: GeoResolvePayload | null,
-  err?: unknown,
-): string {
-  if (payload?.code === "CITY_EMPTY") {
-    return t.cityEmptyError;
-  }
-  if (payload?.code === "CITY_NOT_FOUND" || status === 404) {
-    return formatTemplate(t.cityNotFoundError, { city });
-  }
-  if (payload?.code === "GEO_TIMEOUT" || isTimeoutFailure(err, status)) {
-    return t.cityTimeoutError;
-  }
-  if (typeof status === "number" && status >= 400) {
-    return formatTemplate(t.cityHttpError, { status });
-  }
-  return t.cityErrorFallback;
-}
-
 export function MarketSwitcher({
   t,
   market,
+  cityQuery,
+  onCityQueryChange,
+  onAnalyzeCity,
+  onResetRadomMarket,
+  isResolvingCity = false,
+  cityError = null,
   industryId,
-  onMarketChange,
   onIndustryChange,
   industryMode = "preset",
   activeIndustryDisplay,
@@ -148,9 +90,6 @@ export function MarketSwitcher({
   syncedCount = 0,
   scannedCompetitorsCount = 0,
 }: MarketSwitcherProps) {
-  const [cityQuery, setCityQuery] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isPresetMenuOpen, setIsPresetMenuOpen] = useState(false);
   const industryBoxRef = useRef<HTMLDivElement | null>(null);
   const industryInputRef = useRef<HTMLInputElement | null>(null);
@@ -186,39 +125,7 @@ export function MarketSwitcher({
 
   async function handleCitySubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const trimmed = cityQuery.trim();
-    if (!trimmed) {
-      setErrorMsg(t.cityEmptyError);
-      return;
-    }
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      const response = await fetch(
-        `/api/geo/resolve?city=${encodeURIComponent(trimmed)}`,
-        { signal: AbortSignal.timeout(GEO_RESOLVE_TIMEOUT_MS) },
-      );
-      const data = await readJsonSafe<GeoResolvePayload>(response);
-      if (!response.ok || !data?.market) {
-        setErrorMsg(resolveGeoErrorMessage(t, trimmed, response.status, data));
-        return;
-      }
-      onMarketChange({
-        ...data.market,
-        source: data.source === "case-study" ? "case-study" : "live-geo",
-        centerGps: data.centerGps,
-      });
-    } catch (err) {
-      setErrorMsg(resolveGeoErrorMessage(t, trimmed, undefined, null, err));
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  function handleResetRadom() {
-    setCityQuery("");
-    setErrorMsg(null);
-    onMarketChange(RADOM_UPHOLSTERY_MARKET);
+    await onAnalyzeCity();
   }
 
   function handleSelectPreset(nextId: IndustryId) {
@@ -255,8 +162,8 @@ export function MarketSwitcher({
         ? "bg-sky-50 text-sky-700 dark:bg-sky-950/70 dark:text-sky-300"
         : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
 
-  const activeNotice: SyncNotice | null = errorMsg
-    ? { tone: "error", message: errorMsg }
+  const activeNotice: SyncNotice | null = cityError
+    ? { tone: "error", message: cityError }
     : (syncNotice ??
       (syncError ? { tone: "error", message: syncError } : null));
 
@@ -266,6 +173,8 @@ export function MarketSwitcher({
       : activeNotice?.tone === "warning"
         ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200"
         : "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-300";
+
+  const isBusy = isResolvingCity || isSyncingPrices || isScanningMarket;
 
   return (
     <section
@@ -313,30 +222,29 @@ export function MarketSwitcher({
                 id="city-search-input"
                 type="text"
                 value={cityQuery}
-                onChange={(e) => {
-                  setCityQuery(e.target.value);
-                  if (errorMsg) setErrorMsg(null);
-                }}
+                onChange={(e) => onCityQueryChange(e.target.value)}
                 placeholder={t.cityPlaceholder}
-                disabled={isLoading}
+                disabled={isResolvingCity}
                 className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-3 text-xs text-slate-800 outline-none focus:ring-2 focus:ring-teal-600 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               />
             </div>
 
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isResolvingCity}
               className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-teal-700 px-3.5 text-xs font-semibold text-white transition hover:bg-teal-800 disabled:opacity-60"
             >
-              {isLoading && <Loader2 size={13} className="animate-spin" />}
-              {isLoading ? t.loadingCityButton : t.loadCityButton}
+              {isResolvingCity && (
+                <Loader2 size={13} className="animate-spin" />
+              )}
+              {isResolvingCity ? t.loadingCityButton : t.loadCityButton}
             </button>
 
             {market.id !== RADOM_UPHOLSTERY_MARKET.id && (
               <button
                 type="button"
-                onClick={handleResetRadom}
-                disabled={isLoading}
+                onClick={onResetRadomMarket}
+                disabled={isResolvingCity}
                 className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
               >
                 <RotateCcw size={12} />
@@ -450,11 +358,9 @@ export function MarketSwitcher({
                   <Sparkles size={12} className="shrink-0" />
                 </button>
               )}
-
               <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                 {t.industryPresetsHeading}
               </div>
-
               {INDUSTRY_LIST.map((item) => {
                 const isSelected =
                   industryMode === "preset" && item.id === industryId;
@@ -484,7 +390,6 @@ export function MarketSwitcher({
                   </button>
                 );
               })}
-
               <p className="mt-1 border-t border-slate-100 px-2.5 pb-1 pt-1.5 text-[10px] leading-relaxed text-slate-500 dark:border-slate-800 dark:text-slate-400">
                 {t.industryCustomHint}
               </p>
@@ -536,8 +441,7 @@ export function MarketSwitcher({
                     if (
                       e.key === "Enter" &&
                       onSyncPrices &&
-                      !isSyncingPrices &&
-                      !isScanningMarket &&
+                      !isBusy &&
                       websiteUrl.trim()
                     ) {
                       e.preventDefault();
@@ -545,7 +449,7 @@ export function MarketSwitcher({
                     }
                   }}
                   placeholder={t.websiteUrlPlaceholder}
-                  disabled={isSyncingPrices || isScanningMarket}
+                  disabled={isBusy}
                   className="h-9 min-w-[200px] flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-800 outline-none focus:ring-2 focus:ring-teal-600 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                 />
 
@@ -553,9 +457,7 @@ export function MarketSwitcher({
                   <button
                     type="button"
                     onClick={onSyncPrices}
-                    disabled={
-                      isSyncingPrices || isScanningMarket || !websiteUrl.trim()
-                    }
+                    disabled={isBusy || !websiteUrl.trim()}
                     className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                   >
                     <RefreshCw
@@ -572,7 +474,7 @@ export function MarketSwitcher({
                   <button
                     type="button"
                     onClick={onScanMarket}
-                    disabled={isScanningMarket || isSyncingPrices}
+                    disabled={isBusy}
                     className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60 dark:bg-teal-700 dark:hover:bg-teal-600"
                   >
                     {isScanningMarket ? (

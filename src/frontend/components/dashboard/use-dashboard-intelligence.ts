@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   INDUSTRY_TEMPLATES,
   resolveServiceLabel,
@@ -12,6 +12,7 @@ import {
   applyIndustryToMarket,
   getMarketMetrics,
   RADOM_UPHOLSTERY_MARKET,
+  type MarketDataSource,
   type MarketProfile,
   type TownGeo,
 } from "@/src/config/markets";
@@ -19,6 +20,7 @@ import {
   formatTemplate,
   SUPPORTED_LOCALES,
   translations,
+  type AppDictionary,
   type Locale,
 } from "@/src/locales";
 import type {
@@ -44,6 +46,58 @@ import {
   type SiteProfile,
 } from "./types-and-helpers";
 
+type GeoErrorCode =
+  | "CITY_EMPTY"
+  | "CITY_NOT_FOUND"
+  | "GEO_TIMEOUT"
+  | "GEO_FAILED";
+
+const GEO_RESOLVE_TIMEOUT_MS = 28_000;
+
+interface GeoResolvePayload {
+  source?: MarketDataSource;
+  market?: MarketProfile;
+  centerGps?: { lat: number; lon: number };
+  code?: GeoErrorCode;
+  error?: string;
+}
+
+function isGeoTimeoutFailure(error: unknown, status?: number): boolean {
+  if (isTimeoutFailure(error, status)) return true;
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      message.includes("timed out") ||
+      message.includes("timeout")
+    );
+  }
+  return false;
+}
+
+function resolveGeoErrorMessage(
+  t: AppDictionary,
+  city: string,
+  status?: number,
+  payload?: GeoResolvePayload | null,
+  err?: unknown,
+): string {
+  if (payload?.code === "CITY_EMPTY") {
+    return t.cityEmptyError;
+  }
+  if (payload?.code === "CITY_NOT_FOUND" || status === 404) {
+    return formatTemplate(t.cityNotFoundError, { city });
+  }
+  if (payload?.code === "GEO_TIMEOUT" || isGeoTimeoutFailure(err, status)) {
+    return t.cityTimeoutError;
+  }
+  if (typeof status === "number" && status >= 400) {
+    return formatTemplate(t.cityHttpError, { status });
+  }
+  return t.cityErrorFallback;
+}
+
 export function useDashboardIntelligence() {
   const [locale, setLocale] = useState<Locale>("en");
   const [dark, setDark] = useState(false);
@@ -52,6 +106,11 @@ export function useDashboardIntelligence() {
   const [baseMarket, setBaseMarket] = useState<MarketProfile>(
     RADOM_UPHOLSTERY_MARKET,
   );
+  const [cityQuery, setCityQuery] = useState<string>("");
+  const [isResolvingCity, setIsResolvingCity] = useState<boolean>(false);
+  const [cityError, setCityError] = useState<string | null>(null);
+  const lastResolvedCityQueryRef = useRef<string>("");
+
   const [industryId, setIndustryId] = useState<IndustryId>("upholstery");
   const [customNiche, setCustomNiche] = useState<string | null>(null);
   const [selectedTown, setSelectedTown] = useState<TownGeo | null>(null);
@@ -129,10 +188,26 @@ export function useDashboardIntelligence() {
     setSyncNotice(null);
   };
 
-  const handleMarketChange = (nextMarket: MarketProfile) => {
+  const handleCityQueryChange = (nextQuery: string) => {
+    setCityQuery(nextQuery);
+    if (cityError) setCityError(null);
+  };
+
+  const handleMarketChange = (
+    nextMarket: MarketProfile,
+    options?: { preserveCustomWebsite?: boolean },
+  ) => {
     setBaseMarket(nextMarket);
     setSelectedTown(null);
-    resetLiveIntelligence();
+    const hasCustomWebsite =
+      websiteUrl.trim().length > 0 && websiteUrl.trim() !== DEFAULT_WEBSITE_URL;
+    if (options?.preserveCustomWebsite && hasCustomWebsite) {
+      setLiveScan(null);
+      setScannedBenchmarks({});
+      setSyncNotice(null);
+    } else {
+      resetLiveIntelligence();
+    }
     if (
       nextMarket.id === RADOM_UPHOLSTERY_MARKET.id &&
       industryId === "upholstery" &&
@@ -142,6 +217,16 @@ export function useDashboardIntelligence() {
     } else if (websiteUrl === DEFAULT_WEBSITE_URL) {
       setWebsiteUrl("");
     }
+    if (nextMarket.id === RADOM_UPHOLSTERY_MARKET.id) {
+      lastResolvedCityQueryRef.current = "";
+    }
+  };
+
+  const handleResetRadomMarket = () => {
+    setCityQuery("");
+    setCityError(null);
+    lastResolvedCityQueryRef.current = "";
+    handleMarketChange(RADOM_UPHOLSTERY_MARKET);
   };
 
   const handleIndustryChange = (nextIndustry: IndustryId) => {
@@ -277,6 +362,65 @@ export function useDashboardIntelligence() {
     terms: "/terms",
   };
 
+  const resolveCityByQuery = async (
+    rawQuery: string,
+    options?: { preserveCustomWebsite?: boolean },
+  ): Promise<MarketProfile | null> => {
+    const trimmed = rawQuery.trim();
+    if (!trimmed) {
+      setCityError(t.cityEmptyError);
+      return null;
+    }
+    setIsResolvingCity(true);
+    setCityError(null);
+    try {
+      const response = await fetch(
+        `/api/geo/resolve?city=${encodeURIComponent(trimmed)}`,
+        { signal: AbortSignal.timeout(GEO_RESOLVE_TIMEOUT_MS) },
+      );
+      const data = await readJsonSafe<GeoResolvePayload>(response);
+      if (!response.ok || !data?.market) {
+        setCityError(resolveGeoErrorMessage(t, trimmed, response.status, data));
+        return null;
+      }
+      const nextMarket: MarketProfile = {
+        ...data.market,
+        source: data.source === "case-study" ? "case-study" : "live-geo",
+        centerGps: data.centerGps,
+      };
+      lastResolvedCityQueryRef.current = trimmed.toLowerCase();
+      handleMarketChange(nextMarket, options);
+      return nextMarket;
+    } catch (err) {
+      setCityError(resolveGeoErrorMessage(t, trimmed, undefined, null, err));
+      return null;
+    } finally {
+      setIsResolvingCity(false);
+    }
+  };
+
+  const handleAnalyzeCity = async () => {
+    await resolveCityByQuery(cityQuery);
+  };
+
+  const ensureCityResolved = async (options?: {
+    preserveCustomWebsite?: boolean;
+  }): Promise<MarketProfile | null> => {
+    const trimmed = cityQuery.trim();
+    if (!trimmed) {
+      return baseMarket;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (
+      normalized === baseMarket.centerName.trim().toLowerCase() ||
+      (lastResolvedCityQueryRef.current.length > 0 &&
+        normalized === lastResolvedCityQueryRef.current)
+    ) {
+      return baseMarket;
+    }
+    return resolveCityByQuery(trimmed, options);
+  };
+
   const handleSyncPrices = async () => {
     const trimmed = websiteUrl.trim();
     if (!trimmed) return;
@@ -294,10 +438,18 @@ export function useDashboardIntelligence() {
 
     setIsSyncingPrices(true);
     setSyncNotice(null);
-    setLiveScan(null);
-    setScannedBenchmarks({});
 
     try {
+      const resolvedBaseMarket = await ensureCityResolved({
+        preserveCustomWebsite: true,
+      });
+      if (!resolvedBaseMarket) {
+        return;
+      }
+
+      setLiveScan(null);
+      setScannedBenchmarks({});
+
       const response = await fetch(
         `/api/pricing/sync?url=${encodeURIComponent(trimmed)}`,
         {
@@ -380,7 +532,7 @@ export function useDashboardIntelligence() {
       const nextCatalog = buildSyncedCatalog(
         data.prices,
         effectiveIndustryId,
-        baseMarket,
+        resolvedBaseMarket,
       );
 
       if (nextCatalog.length === 0) {
@@ -435,31 +587,56 @@ export function useDashboardIntelligence() {
   const handleScanMarket = async () => {
     setIsScanningMarket(true);
     setSyncNotice(null);
-    const effectiveSiteProfile: SiteProfile | undefined = hasManualCustomNiche
-      ? {
-          businessName: siteProfile?.businessName,
-          nichePl: trimmedCustomNiche,
-          nicheEn: trimmedCustomNiche,
-          matchedIndustryId: "custom",
-          searchQueriesPl: [trimmedCustomNiche],
-          searchQueriesEn: [trimmedCustomNiche],
-        }
-      : (siteProfile ?? undefined);
 
     try {
+      const resolvedBaseMarket = await ensureCityResolved({
+        preserveCustomWebsite: true,
+      });
+      if (!resolvedBaseMarket) {
+        return;
+      }
+
+      const cityChanged = resolvedBaseMarket.id !== baseMarket.id;
+      const effectiveTargetMarket = cityChanged
+        ? applyIndustryToMarket(resolvedBaseMarket, industryId)
+        : market;
+      const hasCustomSiteForNewCity =
+        websiteUrl.trim().length > 0 &&
+        websiteUrl.trim() !== DEFAULT_WEBSITE_URL;
+      const targetServices = hasManualCustomNiche
+        ? []
+        : cityChanged
+          ? hasCustomSiteForNewCity && syncedCatalog !== null
+            ? syncedCatalog
+            : isWebsiteAutoNiche
+              ? []
+              : effectiveTargetMarket.benchmarks
+          : market.benchmarks;
+
+      const effectiveSiteProfile: SiteProfile | undefined = hasManualCustomNiche
+        ? {
+            businessName: siteProfile?.businessName,
+            nichePl: trimmedCustomNiche,
+            nicheEn: trimmedCustomNiche,
+            matchedIndustryId: "custom",
+            searchQueriesPl: [trimmedCustomNiche],
+            searchQueriesEn: [trimmedCustomNiche],
+          }
+        : (siteProfile ?? undefined);
+
       const response = await fetch("/api/market/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          city: market.centerName,
-          country: market.country,
-          countryCode: market.countryCode,
+          city: effectiveTargetMarket.centerName,
+          country: effectiveTargetMarket.country,
+          countryCode: effectiveTargetMarket.countryCode,
           industryId,
           radiusKm,
           locale,
           excludeUrl: websiteUrl.trim() || undefined,
           siteProfile: effectiveSiteProfile,
-          services: market.benchmarks.map((row) => ({
+          services: targetServices.map((row) => ({
             serviceKey: row.serviceKey,
             label: resolveServiceLabel(row, t, locale),
             unitType: resolveUnitType(row),
@@ -529,6 +706,24 @@ export function useDashboardIntelligence() {
   const runScan = async () => {
     setRunning(true);
     try {
+      const resolvedBaseMarket = await ensureCityResolved({
+        preserveCustomWebsite: true,
+      });
+      if (!resolvedBaseMarket) {
+        return;
+      }
+      const targetMarket =
+        resolvedBaseMarket.id !== baseMarket.id
+          ? applyIndustryToMarket(resolvedBaseMarket, industryId)
+          : market;
+      const targetMetrics = getMarketMetrics(targetMarket, radiusKm);
+      const targetTowns = [
+        targetMarket.centerName,
+        ...targetMetrics.localTowns
+          .filter((town) => town.distKm <= radiusKm)
+          .map((town) => town.name),
+      ];
+
       await fetch("/api/mcp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -539,14 +734,14 @@ export function useDashboardIntelligence() {
           params: {
             name: "analyzeCompetitors",
             arguments: {
-              center: market.centerName,
+              center: targetMarket.centerName,
               radiusKm,
               industryId,
-              townsInRadius,
+              townsInRadius: targetTowns,
               competitorsTracked:
                 liveCompetitorsCount > 0
                   ? liveCompetitorsCount
-                  : metrics.competitorsTracked,
+                  : targetMetrics.competitorsTracked,
               locale,
             },
           },
@@ -577,6 +772,9 @@ export function useDashboardIntelligence() {
     running,
     radiusKm,
     setRadiusKm,
+    cityQuery,
+    isResolvingCity,
+    cityError,
     industryId,
     industryMode,
     customNiche,
@@ -606,6 +804,9 @@ export function useDashboardIntelligence() {
     focusCitySearch,
     toggleLocale,
     toggleDark,
+    handleCityQueryChange,
+    handleAnalyzeCity,
+    handleResetRadomMarket,
     handleMarketChange,
     handleIndustryChange,
     handleCustomNicheChange,

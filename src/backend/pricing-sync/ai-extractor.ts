@@ -32,6 +32,52 @@ import {
   type SiteProfile,
 } from "./types";
 
+const PRESET_PROFILE_DEFAULTS: Record<
+  Exclude<DetectedIndustryMatch, "custom">,
+  {
+    nichePl: string;
+    nicheEn: string;
+    nicheMatchRe: RegExp;
+    queriesPl: string[];
+    queriesEn: string[];
+  }
+> = {
+  upholstery: {
+    nichePl: "Pranie dywanów i tapicerki",
+    nicheEn: "Carpet & Upholstery Cleaning",
+    nicheMatchRe: /dywan|wyk[łl]adzin|tapicerk|carpet|rug|upholster/i,
+    queriesPl: ["pranie dywanów", "pranie tapicerki", "czyszczenie kanapy"],
+    queriesEn: [
+      "carpet cleaning",
+      "upholstery cleaning",
+      "tile and grout cleaning",
+    ],
+  },
+  hvac: {
+    nichePl: "Klimatyzacja i pompy ciepła",
+    nicheEn: "HVAC & Heat Pumps",
+    nicheMatchRe: /klimat|pomp|wentyl|hvac|air\s*cond|heat\s*pump|furnace/i,
+    queriesPl: [
+      "serwis klimatyzacji",
+      "montaż klimatyzacji",
+      "serwis pomp ciepła",
+    ],
+    queriesEn: ["ac tune up", "hvac service", "heat pump repair"],
+  },
+  plumbing: {
+    nichePl: "Hydraulika i awarie 24/7",
+    nicheEn: "Plumbing & 24/7 Emergency",
+    nicheMatchRe:
+      /hydraul|kanal|kot[łl]|plumb|drain|sewer|boiler|water\s*heater/i,
+    queriesPl: [
+      "usługi hydrauliczne",
+      "udrażnianie kanalizacji",
+      "pogotowie hydrauliczne",
+    ],
+    queriesEn: ["plumber service", "drain cleaning", "emergency plumbing"],
+  },
+};
+
 function normalizeSiteProfile(
   raw: RawAiSiteProfile | undefined,
   metadata: HtmlMetadata,
@@ -40,12 +86,13 @@ function normalizeSiteProfile(
   const rawMatch = String(raw?.matchedIndustryId ?? "")
     .trim()
     .toLowerCase();
+  const inferredPreset = inferPresetFromPrices(prices);
   const matchedIndustryId: DetectedIndustryMatch =
     rawMatch === "upholstery" || rawMatch === "hvac" || rawMatch === "plumbing"
       ? rawMatch
-      : rawMatch === "custom"
-        ? "custom"
-        : inferPresetFromPrices(prices);
+      : inferredPreset !== "custom"
+        ? inferredPreset
+        : "custom";
 
   const normalizeQueries = (list: unknown): string[] =>
     Array.isArray(list)
@@ -64,15 +111,30 @@ function normalizeSiteProfile(
   const fallbackNiche =
     titleSummary || metadata.headings[0] || prices[0]?.labelPl || "";
 
-  const nichePl = String(raw?.nichePl ?? "").trim() || fallbackNiche;
-  const nicheEn = String(raw?.nicheEn ?? "").trim() || fallbackNiche;
+  let nichePl = String(raw?.nichePl ?? "").trim() || fallbackNiche;
+  let nicheEn = String(raw?.nicheEn ?? "").trim() || fallbackNiche;
   const businessName =
     String(raw?.businessName ?? "").trim() ||
     metadata.title.split(/[–—|-]/)[0]?.trim() ||
     undefined;
 
-  const queriesPl = normalizeQueries(raw?.searchQueriesPl);
-  const queriesEn = normalizeQueries(raw?.searchQueriesEn);
+  let queriesPl = normalizeQueries(raw?.searchQueriesPl);
+  let queriesEn = normalizeQueries(raw?.searchQueriesEn);
+
+  if (matchedIndustryId !== "custom") {
+    const presetMeta = PRESET_PROFILE_DEFAULTS[matchedIndustryId];
+    const aiText = `${nichePl} ${nicheEn}`;
+    if (
+      (rawMatch === "custom" || !rawMatch) &&
+      !presetMeta.nicheMatchRe.test(aiText)
+    ) {
+      nichePl = presetMeta.nichePl;
+      nicheEn = presetMeta.nicheEn;
+      queriesPl = [...presetMeta.queriesPl];
+      queriesEn = [...presetMeta.queriesEn];
+    }
+  }
+
   if (queriesPl.length === 0) {
     const derived = prices
       .slice(0, 3)
@@ -217,8 +279,7 @@ export function mergeMissingCatalogRows(
       const exSlugPl = toAsciiSlug(existing.labelPl);
       const exSlugEn = toAsciiSlug(existing.labelEn);
       if (exSlugPl === catSlug || exSlugEn === catSlug) return true;
-
-      if (existing.detectedAmount !== cat.detectedAmount) return false;
+      if (catWords.length === 0) return false;
       const exWords = new Set([
         ...normalizeWords(existing.labelPl),
         ...normalizeWords(existing.labelEn),
@@ -245,7 +306,7 @@ export function mergeMissingCatalogRows(
 const AI_SYSTEM_INSTRUCTION =
   "You are a universal pricing-page extractor and business-niche classifier for any local service website.\n" +
   "Given a compact site summary (SITE_TITLE/DESC/HEADINGS, CATALOG_PRICE_ITEMS, KEYED_PRICES, PAGE_PRICE_LINES), return strictly valid JSON:\n" +
-  "1) Populate 'siteProfile': company 'businessName', concise 'nichePl' (Polish, 2-6 words), concise 'nicheEn' (English, 2-6 words), 'matchedIndustryId' ('upholstery' | 'hvac' | 'plumbing' | 'custom' — choose 'custom' unless the business is genuinely carpet/upholstery cleaning, HVAC, or plumbing), and 3-4 short local search query stems WITHOUT city names in 'searchQueriesPl' and 'searchQueriesEn'.\n" +
+  "1) Populate 'siteProfile': company 'businessName', concise 'nichePl' (Polish, 2-6 words), concise 'nicheEn' (English, 2-6 words), 'matchedIndustryId' ('upholstery' | 'hvac' | 'plumbing' | 'custom' — choose 'custom' unless the business is genuinely carpet/upholstery cleaning, HVAC, or plumbing), and 3-4 short local search query stems WITHOUT city names in 'searchQueriesPl' and 'searchQueriesEn'. Base 'nichePl', 'nicheEn', and 'matchedIndustryId' primarily on the majority of services in 'prices' rather than secondary navigation links (for example, if most pricing rows are carpet, rug, upholstery, chair, sofa, or tile cleaning, classify as 'upholstery' even if the site also mentions water damage restoration).\n" +
   "2) Extract EVERY distinct customer service, attraction, tier, or rental option into 'prices' (up to 35 items). CRITICAL: Preserve EVERY item listed under CATALOG_PRICE_ITEMS without merging separate tiers, sizes, or variants (for example keep standard vs oriental carpet, <=50 m2 vs >50 m2 flooring, 2-seat vs 3-seat sofa separate even when prices match). Never emit generic category badge teasers if detailed rows are present.\n" +
   "3) If the website operates on custom B2B quotes or has NO public service prices (for example a printing house, packaging manufacturer, custom workshop, or inquiry-only website), still populate 'siteProfile' accurately from SITE_TITLE/DESC/HEADINGS and page text, and return an empty array 'prices': [] (never invent, guess, or fabricate prices).\n" +
   "Reuse canonical keys ONLY for the exact matching service scope:\n" +

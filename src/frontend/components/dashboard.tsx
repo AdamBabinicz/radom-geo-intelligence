@@ -25,6 +25,9 @@ export function Dashboard() {
     running,
     radiusKm,
     setRadiusKm,
+    cityQuery,
+    isResolvingCity,
+    cityError,
     industryId,
     industryMode,
     customNiche,
@@ -54,7 +57,9 @@ export function Dashboard() {
     focusCitySearch,
     toggleLocale,
     toggleDark,
-    handleMarketChange,
+    handleCityQueryChange,
+    handleAnalyzeCity,
+    handleResetRadomMarket,
     handleIndustryChange,
     handleCustomNicheChange,
     handleWebsiteUrlChange,
@@ -117,8 +122,13 @@ export function Dashboard() {
             <MarketSwitcher
               t={t}
               market={market}
+              cityQuery={cityQuery}
+              onCityQueryChange={handleCityQueryChange}
+              onAnalyzeCity={handleAnalyzeCity}
+              onResetRadomMarket={handleResetRadomMarket}
+              isResolvingCity={isResolvingCity}
+              cityError={cityError}
               industryId={industryId}
-              onMarketChange={handleMarketChange}
               onIndustryChange={handleIndustryChange}
               industryMode={industryMode}
               activeIndustryDisplay={activeIndustryLabel}
