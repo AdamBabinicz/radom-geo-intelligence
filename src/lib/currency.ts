@@ -1,6 +1,6 @@
 import type { Locale } from "@/src/locales";
 
-interface LocaleCurrencyConfig {
+export interface LocaleCurrencyConfig {
   intlLocale: string;
   currency: string;
   plnPerUnit: number;
@@ -22,8 +22,12 @@ const LOCALE_CURRENCY_CONFIG: Record<Locale, LocaleCurrencyConfig> = {
   },
 };
 
+export function getLocaleCurrencyConfig(locale: Locale): LocaleCurrencyConfig {
+  return LOCALE_CURRENCY_CONFIG[locale] ?? LOCALE_CURRENCY_CONFIG.en;
+}
+
 export function convertFromPln(amountPln: number, locale: Locale): number {
-  const { plnPerUnit, allowSmallFractions } = LOCALE_CURRENCY_CONFIG[locale];
+  const { plnPerUnit, allowSmallFractions } = getLocaleCurrencyConfig(locale);
   const converted = amountPln / plnPerUnit;
   if (allowSmallFractions && converted < 5) {
     return Number(converted.toFixed(2));
@@ -33,7 +37,7 @@ export function convertFromPln(amountPln: number, locale: Locale): number {
 
 export function formatCurrencyValue(amount: number, locale: Locale): string {
   const { intlLocale, currency, allowSmallFractions } =
-    LOCALE_CURRENCY_CONFIG[locale];
+    getLocaleCurrencyConfig(locale);
   const hasFraction =
     allowSmallFractions &&
     amount < 10 &&

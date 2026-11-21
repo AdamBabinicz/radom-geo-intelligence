@@ -1,4 +1,5 @@
 import type { IndustryId } from "../../../config/industries";
+import type { Locale } from "../../../locales";
 
 export const GEMINI_ROUND_TIMEOUT_MS = 14_000;
 export const EXTERNAL_MODEL_TIMEOUT_MS = 12_000;
@@ -31,7 +32,7 @@ export interface CouncilRequestInput {
   industryId: IndustryId;
   industryLabel?: string;
   radiusKm: number;
-  locale: "pl" | "en";
+  locale: Locale;
   avgGapPct: number;
   townsInRadius: string[];
   services: CouncilServiceInput[];

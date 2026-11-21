@@ -1,4 +1,10 @@
-import { formatPrice } from "../../../lib/currency";
+import { formatPrice, getLocaleCurrencyConfig } from "../../../lib/currency";
+import {
+  formatTemplate,
+  resolveLocale,
+  translations,
+  type Locale,
+} from "../../../locales";
 import type {
   CouncilDebateResult,
   CouncilDecisionOption,
@@ -9,9 +15,20 @@ import type {
   RawSynthesisOption,
 } from "./types";
 
+export function stripForeignPlnSuffix(text: string): string {
+  return text
+    .replace(
+      /\b~?\d+(?:[.,]\d+)?\s*(?:PLN|zł)\s*\(\s*~?(\$[\d.,]+)(?:\s*USD)?\s*\)/gi,
+      "$1",
+    )
+    .replace(/\s*\(\s*~?\d+(?:[.,]\d+)?\s*(?:PLN|zł)\s*\)/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function buildCompactMarketBrief(input: CouncilRequestInput): string {
+  const locale = resolveLocale(input.locale);
   const resolvedIndustry = input.industryLabel?.trim() || input.industryId;
-  const isEn = input.locale === "en";
   const servicesLines = input.services
     .slice(0, 12)
     .map((s) => {
@@ -19,15 +36,12 @@ export function buildCompactMarketBrief(input: CouncilRequestInput): string {
         s.localPricePln > 0
           ? `${Math.round(((s.ourPricePln - s.localPricePln) / s.localPricePln) * 100)}%`
           : "n/a";
-      if (isEn) {
-        const ourUsd = formatPrice(s.ourPricePln, "en");
-        const localUsd =
-          s.localPricePln > 0 ? formatPrice(s.localPricePln, "en") : "none";
-        return `- [${s.serviceKey}] ${s.label}: our=${ourUsd} (scalePln=${s.ourPricePln}), localAvg=${localUsd}${
-          s.localPricePln > 0 ? ` (scalePln=${s.localPricePln})` : ""
-        } (gap ${gap})`;
-      }
-      return `- [${s.serviceKey}] ${s.label}: our=${s.ourPricePln} PLN, localAvg=${s.localPricePln > 0 ? `${s.localPricePln} PLN` : "none"} (gap ${gap})`;
+      const ourFormatted = formatPrice(s.ourPricePln, locale);
+      const localFormatted =
+        s.localPricePln > 0 ? formatPrice(s.localPricePln, locale) : "none";
+      const localUnitsPart =
+        s.localPricePln > 0 ? ` (baseUnits=${s.localPricePln})` : "";
+      return `- [${s.serviceKey}] ${s.label}: our=${ourFormatted} (baseUnits=${s.ourPricePln}), localAvg=${localFormatted}${localUnitsPart} (gap ${gap})`;
     })
     .join("\n");
 
@@ -109,7 +123,8 @@ export function buildGroundedFallbackCouncil(
   input: CouncilRequestInput,
   fallbackNotice?: string,
 ): CouncilDebateResult {
-  const isPl = input.locale === "pl";
+  const locale = resolveLocale(input.locale);
+  const t = translations[locale];
   const isCustomOrNonUpholstery =
     Boolean(input.industryLabel?.trim()) || input.industryId !== "upholstery";
   const underpriced = input.services
@@ -133,13 +148,15 @@ export function buildGroundedFallbackCouncil(
       label: s.label,
       currentPricePln: s.ourPricePln,
       proposedPricePln: target,
-      rationale: isPl
-        ? s.localPricePln > 0
-          ? `Średnia w mieście ${input.city} to ${s.localPricePln} zł — bezpieczne domknięcie luki cenowej.`
-          : `Korekta marżowa +8% w promieniu ${input.radiusKm} km.`
-        : s.localPricePln > 0
-          ? `${input.city} avg is ${formatPrice(s.localPricePln, "en")} — closing part of the market gap.`
-          : `Modest +8% margin adjustment inside ${input.radiusKm} km zone.`,
+      rationale:
+        s.localPricePln > 0
+          ? formatTemplate(t.councilFallbackRationaleGap, {
+              city: input.city,
+              avg: formatPrice(s.localPricePln, locale),
+            })
+          : formatTemplate(t.councilFallbackRationaleMargin, {
+              radiusKm: input.radiusKm,
+            }),
     };
   });
 
@@ -168,33 +185,24 @@ export function buildGroundedFallbackCouncil(
   }));
 
   const humanSuffix = input.humanNote?.trim()
-    ? isPl
-      ? ` Uwzględniono zasadę operatora: "${input.humanNote.trim()}".`
-      : ` Honored operator rule: "${input.humanNote.trim()}".`
+    ? ` ${formatTemplate(t.councilFallbackHumanRuleSuffix, {
+        note: input.humanNote.trim(),
+      })}`
     : "";
 
   const addOnCounterProposal = isCustomOrNonUpholstery
-    ? isPl
-      ? "Utrzymaj cenę wejściową głównego pakietu, a marżę buduj na usługach dodatkowych oraz pakietach premium."
-      : "Protect flagship entry pricing while monetizing add-on services and priority packages."
-    : isPl
-      ? "Utrzymaj cenę wejściową głównego pakietu, a marżę buduj na usługach dodatkowych (impregnacja, pufa, dosuszanie)."
-      : "Protect flagship entry price while monetizing add-ons (fabric protection, drying, extra pieces).";
+    ? t.councilFallbackCounterAddonsCustom
+    : t.councilFallbackCounterAddonsUpholstery;
 
   const marginActionMiddle = isCustomOrNonUpholstery
-    ? isPl
-      ? "Przygotuj pakiety cross-sell (usługi dodatkowe i gwarancja terminu) dla większych zleceń"
-      : "Bundle high-margin add-on services or priority scheduling for larger bookings"
-    : isPl
-      ? "Przygotuj pakiety cross-sell (impregnacja / dosuszanie) dla zleceń powyżej 200 zł"
-      : "Bundle add-ons (fabric protection / drying) for higher-value bookings";
+    ? t.councilFallbackMarginActionCustom
+    : formatTemplate(t.councilFallbackMarginActionUpholstery, {
+        threshold: formatPrice(200, locale),
+      });
 
-  const sensitivityReasonPl = topPain
-    ? `ryzyka wokół: ${topPain}`
-    : "wrażliwość cenową lokalnego rynku";
-  const sensitivityReasonEn = topPain
-    ? `customer friction around ${topPain}`
-    : "local market price sensitivity";
+  const sensitivityReason = topPain
+    ? formatTemplate(t.councilFallbackSensitivityWithPain, { pain: topPain })
+    : t.councilFallbackSensitivityDefault;
 
   return {
     aiEnhanced: false,
@@ -202,85 +210,74 @@ export function buildGroundedFallbackCouncil(
     fallbackNotice,
     generatedAt: new Date().toISOString(),
     models: {
-      strategist: isPl
-        ? "Silnik Regułowy (Dane Live)"
-        : "Deterministic Engine (Live Data)",
-      critic: isPl ? "Audytor Ryzyka (Dane Live)" : "Risk Auditor (Live Data)",
+      strategist: t.councilFallbackModelStrategist,
+      critic: t.councilFallbackModelCritic,
       criticProvider: "deterministic",
     },
     round1Strategist: {
-      thesis: isPl
-        ? `W strefie ${input.city} (${input.radiusKm} km) średnia różnica cen wynosi ${input.avgGapPct}%. Podniesienie ${topTargets.length} najtańszych usług zmniejszy lukę bez utraty przewagi nad konkurentami.`
-        : `Across ${input.city} (${input.radiusKm} km), our price gap averages ${input.avgGapPct}%. Lifting ${topTargets.length} underpriced services boosts margin while staying below local rivals.`,
-      campaignAngle: isPl
-        ? `Kampania "Pełny cennik z góry — zero dopłat" dla miejscowości: ${secondaryTowns}.`
-        : `"Upfront transparent pricing — zero hidden fees" campaign targeting ${secondaryTowns}.`,
+      thesis: formatTemplate(t.councilFallbackRound1Thesis, {
+        city: input.city,
+        radiusKm: input.radiusKm,
+        avgGapPct: input.avgGapPct,
+        count: topTargets.length,
+      }),
+      campaignAngle: formatTemplate(t.councilFallbackRound1Campaign, {
+        towns: secondaryTowns,
+      }),
       priceMoves,
     },
     round2Critic: {
       verdict: "revise",
       riskScore: 58,
       objections: [
-        isPl
-          ? `Główna skarga klientów (${topPain || "brak jawnych cen"}) oznacza, że podwyżka bez podkreślenia ceny końcowej obniży konwersję.`
-          : `Top customer complaint (${topPain || "opaque pricing"}) warns against raising prices without clearer upfront quotes.`,
-        isPl
-          ? `Jednorazowy skok o >15% przy wysokiej konkurencji w Google Maps może wypchnąć część zapytań do firm z oceną 4.9★.`
-          : `Abrupt >15% hikes risk losing price-sensitive leads to 4.9★ Google Maps competitors.`,
+        formatTemplate(t.councilFallbackCriticObj1, {
+          pain: topPain || t.councilFallbackCriticDefaultPain,
+        }),
+        t.councilFallbackCriticObj2,
       ],
       counterProposals: [
-        isPl
-          ? `Rozbij podwyżkę na łagodniejszy krok (+35% luki zamiast +65%) i wyeksponuj darmowy dojazd w promieniu ${input.radiusKm} km.`
-          : `Phase increases to ~35% of the gap first and highlight free zone travel inside ${input.radiusKm} km.`,
+        formatTemplate(t.councilFallbackCriticCounter1, {
+          radiusKm: input.radiusKm,
+        }),
         addOnCounterProposal,
       ],
     },
     round3Synthesis: {
-      summaryForHuman: isPl
-        ? `Strateg zaproponował domknięcie 65% luki cenowej, ale Krytyk wstrzymał agresywny skok ze względu na ${sensitivityReasonPl}.${humanSuffix} Wybierz wariant do publikacji w Confluence i Jira.`
-        : `Strategist proposed closing 65% of the price gap, but Critic flagged churn risk around ${sensitivityReasonEn}.${humanSuffix} Select an option to ship to Confluence & Jira.`,
+      summaryForHuman: formatTemplate(t.councilFallbackRound3Summary, {
+        reason: sensitivityReason,
+        humanSuffix,
+      }),
       options: [
         {
           id: "safe",
-          title: isPl
-            ? "Wariant A · Zaufanie i Przejrzystość"
-            : "Option A · Trust & Transparency",
-          summary: isPl
-            ? "Łagodna korekta cen (+35% luki), publikacja pełnego cennika i gwarancja braku ukrytych kosztów."
-            : "Gentle price lift (+35% of gap), public itemized rate card, and zero-hidden-fee guarantee.",
+          title: t.councilOptionSafeTitle,
+          summary: t.councilFallbackSafeSummary,
           priceAdjustments: safeAdjustments,
-          actionItems: isPl
-            ? [
-                `Zaktualizuj publiczny cennik WWW dla miasta ${input.city} o jasne stawki końcowe i darmowy dojazd w strefie ${input.radiusKm} km`,
-                `Uruchom kampanię "Cennik z góry" w ${secondaryTowns}`,
-                `Dodaj kalkulator wyceny z dojazdem na górę strony głównej`,
-              ]
-            : [
-                `Publish transparent rate card for ${input.city} with free travel inside ${input.radiusKm} km`,
-                `Launch "Zero hidden fees" local campaign across ${secondaryTowns}`,
-                `Feature instant zone quote calculator above the fold`,
-              ],
+          actionItems: [
+            formatTemplate(t.councilFallbackSafeAction1, {
+              city: input.city,
+              radiusKm: input.radiusKm,
+            }),
+            formatTemplate(t.councilFallbackSafeAction2, {
+              towns: secondaryTowns,
+            }),
+            t.councilFallbackSafeAction3,
+          ],
         },
         {
           id: "margin",
-          title: isPl
-            ? "Wariant B · Maksymalizacja Marży"
-            : "Option B · Margin Expansion",
-          summary: isPl
-            ? "Szybsze wyrównanie do 65% średniej lokalnej na usługach podstawowych + pakietowanie usług dodatkowych."
-            : "Faster lift toward 65% of local average on core services plus high-margin add-on bundles.",
+          title: t.councilOptionMarginTitle,
+          summary: t.councilFallbackMarginSummary,
           priceAdjustments: marginAdjustments,
-          actionItems: isPl
-            ? [
-                `Wdróż wyższe stawki bazowe dla: ${topTargets.map((t) => t.label).join(", ")}`,
-                marginActionMiddle,
-                `Skieruj reklamy na dzielnice o najwyższych ocenach konkurencji w Google Maps`,
-              ]
-            : [
-                `Roll out higher base rates for: ${topTargets.map((t) => t.label).join(", ")}`,
-                marginActionMiddle,
-                `Target high-intent suburbs around ${secondaryTowns}`,
-              ],
+          actionItems: [
+            formatTemplate(t.councilFallbackMarginAction1, {
+              services: topTargets.map((item) => item.label).join(", "),
+            }),
+            marginActionMiddle,
+            formatTemplate(t.councilFallbackMarginAction3, {
+              towns: secondaryTowns,
+            }),
+          ],
         },
       ],
     },
@@ -291,8 +288,14 @@ export function normalizeSynthesisOption(
   raw: RawSynthesisOption | undefined,
   fallback: CouncilDecisionOption,
   forcedId: "safe" | "margin",
+  locale?: Locale,
 ): CouncilDecisionOption {
   if (!raw || !raw.summary) return fallback;
+  const resolved = resolveLocale(locale);
+  const { currency } = getLocaleCurrencyConfig(resolved);
+  const cleanText = (value: string) =>
+    currency !== "PLN" ? stripForeignPlnSuffix(value) : value.trim();
+
   const adj = (raw.priceAdjustments ?? [])
     .filter(
       (a) =>
@@ -309,13 +312,13 @@ export function normalizeSynthesisOption(
       finalPricePln: Math.round(Number(a.finalPricePln)),
     }));
   const items = (raw.actionItems ?? [])
-    .map((s) => String(s).trim())
+    .map((s) => cleanText(String(s)))
     .filter(Boolean)
     .slice(0, 4);
   return {
     id: forcedId,
-    title: String(raw.title || fallback.title).slice(0, 80),
-    summary: String(raw.summary).slice(0, 260),
+    title: cleanText(String(raw.title || fallback.title)).slice(0, 80),
+    summary: cleanText(String(raw.summary)).slice(0, 260),
     priceAdjustments: adj.length > 0 ? adj : fallback.priceAdjustments,
     actionItems: items.length > 0 ? items : fallback.actionItems,
   };
@@ -324,11 +327,12 @@ export function normalizeSynthesisOption(
 export function buildRound3FallbackOptions(
   priceMoves: CouncilPriceMove[],
   fallbackBaseline: CouncilDebateResult,
-  locale: "pl" | "en",
+  locale: Locale,
 ): {
   fallbackSafeOption: CouncilDecisionOption;
   fallbackMarginOption: CouncilDecisionOption;
 } {
+  const t = translations[resolveLocale(locale)];
   const round1MarginAdjustments: CouncilPriceAdjustment[] = priceMoves.map(
     (m) => ({
       serviceKey: m.serviceKey,
@@ -367,9 +371,9 @@ export function buildRound3FallbackOptions(
           ...fallbackBaseline.round3Synthesis.options[1],
           priceAdjustments: round1MarginAdjustments,
           actionItems: [
-            locale === "pl"
-              ? `Wdróż wyższe stawki bazowe dla: ${priceMoves.map((m) => m.label).join(", ")}`
-              : `Roll out higher base rates for: ${priceMoves.map((m) => m.label).join(", ")}`,
+            formatTemplate(t.councilFallbackMarginAction1, {
+              services: priceMoves.map((m) => m.label).join(", "),
+            }),
             ...fallbackBaseline.round3Synthesis.options[1].actionItems.slice(1),
           ],
         }

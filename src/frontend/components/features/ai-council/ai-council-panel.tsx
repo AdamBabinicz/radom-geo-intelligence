@@ -145,6 +145,14 @@ export function AiCouncilPanel({
     }
   }, []);
 
+  useEffect(() => {
+    setDebate(null);
+    setDebateError(null);
+    setPublishedConfluence(null);
+    setPublishedJira(null);
+    setSelectedOptionId("safe");
+  }, [market.id, market.centerName]);
+
   const persistLessons = (next: string[]) => {
     setLessons(next);
     try {

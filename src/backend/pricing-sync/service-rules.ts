@@ -221,7 +221,7 @@ const COUCH_LABEL_RE =
   /(?:^|[^a-ząćęłńóśźż])(sof[a-ząćęłńóśźż]*|kanap[a-ząćęłńóśźż]*|couch[a-z]*|loveseat[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
 
 const UPHOLSTERY_LABEL_HINT_RE =
-  /(?:^|[^a-ząćęłńóśźż])(carpet|rug|upholstery|sofa|couch|loveseat|sectional|chair|recliner|ottoman|pouf|mattress|curtain|drape|grout|tile\s*clean|auto\s*seat|dywan|wyk[łl]adzin|tapicerk|kanap|naro[żz]nik|fotel|krzes[łl]|materac|puf[ayę]?|zas[łl]on)(?:[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
+  /(?:^|[^a-ząćęłńóśźż])(carpet|rug|upholstery|sofa|couch|loveseat|sectional|chair|recliner|ottoman|pouf|mattress|curtain|drape|grout|ceramic\s*tile|tile\s*(?:clean|seal)|in[\s-]*plant|protectant|with\s+urine|pet\s+(?:stain|odor|urine|clean)|auto\s*seat|dywan|wyk[łl]adzin|tapicerk|kanap|naro[żz]nik|fotel|krzes[łl]|materac|puf[ayę]?|zas[łl]on)(?:[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
 const HVAC_LABEL_HINT_RE =
   /(?:^|[^a-ząćęłńóśźż])(hvac|air[\s-]*cond|\bac\b|heat\s*pump|furnace|duct\s*clean|thermostat|refrigerant|klimatyzac|pomp[ayę]\s+ciep[łl]|rekuperac|wentylac)(?:[a-z]*)(?=$|[^a-ząćęłńóśźż])/i;
 const PLUMBING_LABEL_HINT_RE =

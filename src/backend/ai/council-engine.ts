@@ -1,5 +1,6 @@
 import { ThinkingLevel } from "@google/genai";
-import { formatPrice } from "../../lib/currency";
+import { formatPrice, getLocaleCurrencyConfig } from "../../lib/currency";
+import { formatTemplate, resolveLocale, translations } from "../../locales";
 import {
   GEMINI_TEXT_MODEL,
   getGeminiClient,
@@ -11,6 +12,7 @@ import {
   buildRound3FallbackOptions,
   clampPriceMoves,
   normalizeSynthesisOption,
+  stripForeignPlnSuffix,
 } from "./council/fallback-and-normalizers";
 import {
   callOpenAiCompatibleJson,
@@ -48,20 +50,33 @@ export async function runAiCouncil(
 ): Promise<CouncilDebateResult> {
   const ai = getGeminiClient();
   const secondary = getSecondaryProvider();
-  const languageLabel = input.locale === "pl" ? "Polish" : "English";
-  const currencyRule =
-    input.locale === "en"
-      ? " DISPLAY CURRENCY IS STRICTLY USD ($). NEVER write 'PLN', 'zł', or Polish currency names in ANY text field (thesis, campaignAngle, rationale, objections, counterProposals, summaryForHuman, title, summary, actionItems). In prose, cite prices ONLY in USD ($) using 1 USD = 4 scalePln (e.g., $74 = 296, $70 = 280, $50 = 200). For numeric JSON fields (currentPricePln, proposedPricePln, finalPricePln), always output exact integer targetUsd * 4 so USD badges match your prose."
-      : "";
-  const brief = buildCompactMarketBrief(input);
+  const locale = resolveLocale(input.locale);
+  const t = translations[locale];
+  const currencyCfg = getLocaleCurrencyConfig(locale);
+  const isForeignCurrency = currencyCfg.currency !== "PLN";
+
+  let languageLabel = locale.toUpperCase();
+  try {
+    languageLabel =
+      new Intl.DisplayNames(["en"], { type: "language" }).of(locale) ||
+      languageLabel;
+  } catch {
+    // Keep uppercase locale code fallback
+  }
+
+  const sampleTarget = formatPrice(70 * currencyCfg.plnPerUnit, locale);
+  const currencyRule = isForeignCurrency
+    ? ` DISPLAY CURRENCY IS STRICTLY ${currencyCfg.currency}. Cite prices ONLY in ${currencyCfg.currency} in every text field — NEVER write 'PLN', 'zł', or add parenthetical base-unit conversions. For JSON numeric fields (currentPricePln, proposedPricePln, finalPricePln), always output exact integer targetPrice * ${currencyCfg.plnPerUnit} (e.g., ${sampleTarget} -> ${70 * currencyCfg.plnPerUnit}) matching baseUnits.`
+    : "";
+
+  const cleanProse = (value: string) =>
+    isForeignCurrency ? stripForeignPlnSuffix(value) : value.trim();
+
+  const normalizedInput: CouncilRequestInput = { ...input, locale };
+  const brief = buildCompactMarketBrief(normalizedInput);
 
   if (!ai && !secondary) {
-    return buildGroundedFallbackCouncil(
-      input,
-      input.locale === "pl"
-        ? "Brak klucza AI (GEMINI_API_KEY / GROQ_API_KEY) — użyto narady opartej bezpośrednio o dane z rynku."
-        : "No AI API key configured — using deterministic council grounded in your live metrics.",
-    );
+    return buildGroundedFallbackCouncil(normalizedInput, t.councilNoKeyNotice);
   }
 
   let strategistData: RawStrategistPayload | null = null;
@@ -131,39 +146,39 @@ export async function runAiCouncil(
 
   if (!strategistData || !strategistData.thesis) {
     return buildGroundedFallbackCouncil(
-      input,
-      input.locale === "pl"
-        ? "Limit lub chwilowa niedostępność AI — wyświetlono naradę wyliczoną bezpośrednio z Twojego aktualnego cennika i firm z Google Maps."
-        : "AI temporarily unavailable or quota reached — showing structured debate computed directly from your live pricing & competitor scan.",
+      normalizedInput,
+      t.councilUnavailableNotice,
     );
   }
 
   const cleanMoves = clampPriceMoves(
     strategistData.priceMoves ?? [],
-    input.services,
-  );
+    normalizedInput.services,
+  ).map((move) => ({
+    ...move,
+    rationale: cleanProse(move.rationale),
+  }));
   const round1 = {
-    thesis: strategistData.thesis.trim(),
-    campaignAngle: String(strategistData.campaignAngle ?? "").trim(),
+    thesis: cleanProse(strategistData.thesis),
+    campaignAngle: cleanProse(String(strategistData.campaignAngle ?? "")),
     priceMoves: cleanMoves,
   };
 
-  const round1ForAudit =
-    input.locale === "en"
-      ? {
-          thesis: round1.thesis,
-          campaignAngle: round1.campaignAngle,
-          priceMoves: round1.priceMoves.map((m) => ({
-            serviceKey: m.serviceKey,
-            label: m.label,
-            currentUsd: formatPrice(m.currentPricePln, "en"),
-            proposedUsd: formatPrice(m.proposedPricePln, "en"),
-            currentScalePln: m.currentPricePln,
-            proposedScalePln: m.proposedPricePln,
-            rationale: m.rationale,
-          })),
-        }
-      : round1;
+  const round1ForAudit = isForeignCurrency
+    ? {
+        thesis: round1.thesis,
+        campaignAngle: round1.campaignAngle,
+        priceMoves: round1.priceMoves.map((m) => ({
+          serviceKey: m.serviceKey,
+          label: m.label,
+          currentPrice: formatPrice(m.currentPricePln, locale),
+          proposedPrice: formatPrice(m.proposedPricePln, locale),
+          currentUnits: m.currentPricePln,
+          proposedUnits: m.proposedPricePln,
+          rationale: m.rationale,
+        })),
+      }
+    : round1;
 
   let criticData: RawCriticPayload | null = null;
   let criticLabel = "";
@@ -252,7 +267,7 @@ export async function runAiCouncil(
     }
   }
 
-  const fallbackBaseline = buildGroundedFallbackCouncil(input);
+  const fallbackBaseline = buildGroundedFallbackCouncil(normalizedInput);
   const rawVerdict = String(criticData?.verdict ?? "revise").toLowerCase();
   const verdict: "challenge" | "revise" | "caution" =
     rawVerdict === "challenge" || rawVerdict === "caution"
@@ -268,10 +283,12 @@ export async function runAiCouncil(
             95,
             Math.max(20, Math.round(Number(criticData.riskScore) || 62)),
           ),
-          objections: criticData.objections.slice(0, 3).map(String),
+          objections: criticData.objections
+            .slice(0, 3)
+            .map((obj) => cleanProse(String(obj))),
           counterProposals: (criticData.counterProposals ?? [])
             .slice(0, 3)
-            .map(String),
+            .map((cp) => cleanProse(String(cp))),
         }
       : fallbackBaseline.round2Critic;
 
@@ -289,8 +306,8 @@ export async function runAiCouncil(
   const synthesisPrompt = [
     `ROUND 1 STRATEGIST:\n${JSON.stringify(round1ForAudit)}`,
     `ROUND 2 CRITIC:\n${JSON.stringify(round2)}`,
-    input.humanNote?.trim()
-      ? `HUMAN CONSTRAINT: ${input.humanNote.trim()}`
+    normalizedInput.humanNote?.trim()
+      ? `HUMAN CONSTRAINT: ${normalizedInput.humanNote.trim()}`
       : "",
     `Return strict JSON with keys: summaryForHuman (2 crisp sentences), options (array of 2 objects: id "safe" and id "margin", each with title, summary, priceAdjustments [{serviceKey,label,currentPricePln,finalPricePln}], actionItems [3 concise strings for Jira]).`,
   ]
@@ -347,11 +364,7 @@ export async function runAiCouncil(
   }
 
   const { fallbackSafeOption, fallbackMarginOption } =
-    buildRound3FallbackOptions(
-      round1.priceMoves,
-      fallbackBaseline,
-      input.locale,
-    );
+    buildRound3FallbackOptions(round1.priceMoves, fallbackBaseline, locale);
 
   const rawSafe =
     synthesisData?.options?.find((o) => o.id === "safe") ??
@@ -361,15 +374,16 @@ export async function runAiCouncil(
     synthesisData?.options?.[1];
 
   const finalOptions: [CouncilDecisionOption, CouncilDecisionOption] = [
-    normalizeSynthesisOption(rawSafe, fallbackSafeOption, "safe"),
-    normalizeSynthesisOption(rawMargin, fallbackMarginOption, "margin"),
+    normalizeSynthesisOption(rawSafe, fallbackSafeOption, "safe", locale),
+    normalizeSynthesisOption(rawMargin, fallbackMarginOption, "margin", locale),
   ];
 
   const fallbackNotice =
     geminiQuotaExhausted && strategistUsedSecondaryModel
-      ? input.locale === "pl"
-        ? `Limit Gemini API (429) — naradę na żywo przeprowadziły dwa niezależne modele AI (${strategistModelLabel} ↔ ${criticLabel}).`
-        : `Gemini API quota reached (429) — live debate executed across two independent AI models (${strategistModelLabel} ↔ ${criticLabel}).`
+      ? formatTemplate(t.councilQuotaFallbackNotice, {
+          strategist: strategistModelLabel,
+          critic: criticLabel,
+        })
       : undefined;
 
   return {
@@ -385,9 +399,9 @@ export async function runAiCouncil(
     round1Strategist: round1,
     round2Critic: round2,
     round3Synthesis: {
-      summaryForHuman:
-        synthesisData?.summaryForHuman?.trim() ||
-        fallbackBaseline.round3Synthesis.summaryForHuman,
+      summaryForHuman: synthesisData?.summaryForHuman?.trim()
+        ? cleanProse(synthesisData.summaryForHuman)
+        : fallbackBaseline.round3Synthesis.summaryForHuman,
       options: finalOptions,
     },
   };
