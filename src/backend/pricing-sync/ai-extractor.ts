@@ -4,6 +4,7 @@ import {
   getGeminiClient,
   parseJsonSafe,
 } from "@/src/backend/ai/gemini-client";
+import type { ServiceUnitType } from "@/src/config/industries";
 import {
   CANONICAL_SERVICE_KEYS,
   buildUniqueLiveKey,
@@ -31,6 +32,36 @@ import {
   type RawAiSiteProfile,
   type SiteProfile,
 } from "./types";
+
+const NON_M2_PER_UNIT_RE =
+  /\b(?:per\s+(?:area|room|hall|closet|pleat|stair|step|seat|hour|item|piece|unit|visit|window|vent|register)|za\s+(?:pok[oó]j|szt|godz|siedzisk|miejsce))/i;
+const EXPLICIT_M2_UNIT_RE =
+  /(?:\bm2\b|m²|\bmkw\b|\bsq\.?\s*m(?:eters?|etres?)?\b|\bsqm\b|\bsquare\s*met(?:er|re)s?\b)/i;
+const ZIP_OR_TRAVEL_FEE_RE =
+  /(?:\b(?:service|travel|trip|dispatch|minimum\s+order)\s+fee\b.*\b\d{5}\b|\b(?:service|travel|trip|dispatch)\s+fee\s*[-–—:]\s*(?:\d{5}|\d{2}-\d{3})\b|^\s*(?:op[łl]ata\s+za\s+dojazd|koszt\s+dojazdu|travel\s+fee|trip\s+fee|dispatch\s+fee)\b)/i;
+
+function isTravelOrZipFeeLabel(labelPl: string, labelEn: string): boolean {
+  return (
+    ZIP_OR_TRAVEL_FEE_RE.test(labelEn) || ZIP_OR_TRAVEL_FEE_RE.test(labelPl)
+  );
+}
+
+function sanitizeExtractedUnitType(
+  rawUnitType: unknown,
+  labelPl: string,
+  labelEn: string,
+): ServiceUnitType {
+  const normalized = normalizeUnitType(rawUnitType);
+  const text = `${labelPl} ${labelEn}`;
+  if (
+    normalized === "m2" &&
+    NON_M2_PER_UNIT_RE.test(text) &&
+    !EXPLICIT_M2_UNIT_RE.test(text)
+  ) {
+    return "piece";
+  }
+  return normalized;
+}
 
 const PRESET_PROFILE_DEFAULTS: Record<
   Exclude<DetectedIndustryMatch, "custom">,
@@ -186,6 +217,7 @@ function normalizeAiPayload(
     const labelEn = String(item.labelEn ?? item.labelPl ?? "").trim();
     const labelPl = String(item.labelPl ?? item.labelEn ?? "").trim();
     if (!labelPl && !labelEn) continue;
+    if (isTravelOrZipFeeLabel(labelPl, labelEn)) continue;
 
     const amount = Number(item.detectedAmount);
     if (!Number.isFinite(amount) || amount <= 0) continue;
@@ -223,7 +255,7 @@ function normalizeAiPayload(
       serviceKey: key,
       labelPl: labelPl.slice(0, 80),
       labelEn: labelEn.slice(0, 80),
-      unitType: normalizeUnitType(item.unitType),
+      unitType: sanitizeExtractedUnitType(item.unitType, labelPl, labelEn),
       pricePln: toPln(amount, currency),
       detectedAmount: amount,
       detectedCurrency: currency,
@@ -271,6 +303,8 @@ export function mergeMissingCatalogRows(
 
   for (const cat of catalogPrices) {
     if (merged.length >= MAX_EXTRACTED_ITEMS) break;
+    if (isTravelOrZipFeeLabel(cat.labelPl, cat.labelEn)) continue;
+
     const catWords = normalizeWords(cat.labelPl);
     const catSlug = toAsciiSlug(cat.labelPl);
 
@@ -296,7 +330,15 @@ export function mergeMissingCatalogRows(
         suffix += 1;
       }
       existingKeys.add(key);
-      merged.push({ ...cat, serviceKey: key });
+      merged.push({
+        ...cat,
+        serviceKey: key,
+        unitType: sanitizeExtractedUnitType(
+          cat.unitType,
+          cat.labelPl,
+          cat.labelEn,
+        ),
+      });
     }
   }
 
@@ -309,6 +351,7 @@ const AI_SYSTEM_INSTRUCTION =
   "1) Populate 'siteProfile': company 'businessName', concise 'nichePl' (Polish, 2-6 words), concise 'nicheEn' (English, 2-6 words), 'matchedIndustryId' ('upholstery' | 'hvac' | 'plumbing' | 'custom' — choose 'custom' unless the business is genuinely carpet/upholstery cleaning, HVAC, or plumbing), and 3-4 short local search query stems WITHOUT city names in 'searchQueriesPl' and 'searchQueriesEn'. Base 'nichePl', 'nicheEn', and 'matchedIndustryId' primarily on the majority of services in 'prices' rather than secondary navigation links (for example, if most pricing rows are carpet, rug, upholstery, chair, sofa, or tile cleaning, classify as 'upholstery' even if the site also mentions water damage restoration).\n" +
   "2) Extract EVERY distinct customer service, attraction, tier, or rental option into 'prices' (up to 35 items). CRITICAL: Preserve EVERY item listed under CATALOG_PRICE_ITEMS without merging separate tiers, sizes, or variants (for example keep standard vs oriental carpet, <=50 m2 vs >50 m2 flooring, 2-seat vs 3-seat sofa separate even when prices match). Never emit generic category badge teasers if detailed rows are present.\n" +
   "3) If the website operates on custom B2B quotes or has NO public service prices (for example a printing house, packaging manufacturer, custom workshop, or inquiry-only website), still populate 'siteProfile' accurately from SITE_TITLE/DESC/HEADINGS and page text, and return an empty array 'prices': [] (never invent, guess, or fabricate prices).\n" +
+  "Unit rules: Treat US 'per area', 'per room', 'per hall', 'per closet', 'per pleat', 'per stair/step', 'per seat', or 'per hour' as unitType 'piece' (NEVER 'm2'). Use 'm2' ONLY when explicit square-meter units (m2, m², mkw, sq m, sqm) appear.\n" +
   "Reuse canonical keys ONLY for the exact matching service scope:\n" +
   "- carpetArea: standard carpet/rug washing per m2 (NOT oriental/silk rugs and NOT fitted carpet flooring)\n" +
   "- carpetFlooring: fitted wall-to-wall/office carpet flooring per m2 (prefer the standard >50 m2 base tier if multiple tiers exist)\n" +
@@ -317,7 +360,7 @@ const AI_SYSTEM_INSTRUCTION =
   "- cornerSofa: ONLY corner / L-shaped sofa (naroznik/corner sofa)\n" +
   "- acService, heatPumpCheck, ductCleaning, leakRepair, boilerService, drainUnclog: exact HVAC/plumbing equivalents.\n" +
   "For all other services, sizes, or variants (including armchair/fotel, 3-seat sofa, oriental carpet, mattress, pouf, daybed), generate unique descriptive 'live:<slug>' keys (never assign the same serviceKey twice).\n" +
-  "For ranges like '20 - 50 zł' or '15 - 30 zł', use the starting price as 'detectedAmount'. Strictly exclude travel/distance fees (dojazd, PLN/km), security deposits (zadatek, kaucja), and 0 PLN freebies.";
+  "For ranges like '20 - 50 zł' or '15 - 30 zł', use the starting price as 'detectedAmount'. Strictly exclude travel/distance/minimum-order fees by ZIP code or town (e.g. 'Service fee - 78619 Driftwood', dojazd, trip fee, PLN/km), security deposits (zadatek, kaucja), and 0 PLN freebies.";
 
 export async function extractWithGemini(
   websiteUrl: string,

@@ -50,6 +50,20 @@ interface McpQuoteResponse {
   error?: { message?: string };
 }
 
+function getDefaultQuantityForRow(
+  row?: MarketProfile["benchmarks"][number],
+): number {
+  if (!row) return 15;
+  const nextUnit = resolveUnitType(row);
+  if (nextUnit === "piece") {
+    return row.serviceKey === "upholsteryChair" ? 4 : 2;
+  }
+  if (nextUnit === "m2") {
+    return 15;
+  }
+  return 1;
+}
+
 function toSafeHttpUrl(raw?: string): string | null {
   if (!raw) return null;
   try {
@@ -79,9 +93,16 @@ export function PricingCalculator({
   radiusKm,
   selectedTown,
 }: PricingCalculatorProps) {
+  const firstBenchmark = market.benchmarks[0];
+  const firstBenchmarkKey = firstBenchmark?.serviceKey ?? "";
+  const firstBenchmarkUnit = firstBenchmark
+    ? resolveUnitType(firstBenchmark)
+    : "fixed";
+  const defaultFirstQuantity = getDefaultQuantityForRow(firstBenchmark);
+
   const [serviceIndex, setServiceIndex] = useState(0);
   const [townName, setTownName] = useState(market.centerName);
-  const [quantity, setQuantity] = useState(15);
+  const [quantity, setQuantity] = useState(defaultFirstQuantity);
   const [submitting, setSubmitting] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState<QuoteSubmissionState | null>(
     null,
@@ -90,9 +111,15 @@ export function PricingCalculator({
   useEffect(() => {
     setTownName(market.centerName);
     setServiceIndex(0);
-    setQuantity(15);
+    setQuantity(defaultFirstQuantity);
     setQuoteStatus(null);
-  }, [market.id, market.centerName]);
+  }, [
+    market.id,
+    market.centerName,
+    firstBenchmarkKey,
+    firstBenchmarkUnit,
+    defaultFirstQuantity,
+  ]);
 
   useEffect(() => {
     if (selectedTown && !selectedTown.isRegionalHub) {
@@ -116,12 +143,7 @@ export function PricingCalculator({
     setQuoteStatus(null);
     const nextRow = market.benchmarks[nextIndex];
     if (!nextRow) return;
-    const nextUnit = resolveUnitType(nextRow);
-    if (nextUnit === "piece") {
-      setQuantity(nextRow.serviceKey === "upholsteryChair" ? 4 : 2);
-    } else if (nextUnit === "m2") {
-      setQuantity(15);
-    }
+    setQuantity(getDefaultQuantityForRow(nextRow));
   };
 
   const updateQuantity = (nextValue: number) => {
