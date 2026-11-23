@@ -49,7 +49,7 @@ const HEADERS = {
 const MAX_HUB_POPULATION = 4_500_000;
 
 const SKIP_SUPER_ADMIN_REGEX =
-  /powiat|gmina|województwo|diecezj|metropoli|obszar|konurbacj|rzeczpospolita|gubernator|dzielnica|hrabstwo|county|state|diocese|archdiocese|eparchy|exarchate|ordinariate|vicariate|region|parish|aglomeracj|agglomerat|agglomération|communauté|intercommunal|métropole|metropole|urban area|urban unit|built-up|greater |statistical area|landkreis|okres|republic|voivodeship|kingdom|empire|commonwealth|principality|duchy|archduchy|electorate|margraviate|palatinate|federation|confederation|protectorate|dominion|viceroyalty|governorate|macroregion|subregion|nuts|historical|\bformer\b|oblast|krai|autonomous|bundesland|stadtkreis|regierungsbezirk|borough|suburb|arrondissement|canton|département|departement|préfecture|prefecture|commune|comarca|provincia|comunidad|regione|città metropolitana|bezirk|unterbezirk|circoscrizione|municipality|constituency|unitary authority|\bpark$|\//i;
+  /powiat|gmina|województwo|diecezj|metropoli|obszar|konurbacj|rzeczpospolita|gubernator|guberni|okręg|rejon|samorząd|dzielnica|hrabstwo|county|state|diocese|archdiocese|eparchy|exarchate|ordinariate|vicariate|region|parish|aglomeracj|agglomerat|agglomération|communauté|intercommunal|métropole|metropole|urban area|urban unit|built-up|greater |statistical area|landkreis|okres|republic|voivodeship|kingdom|empire|commonwealth|principality|duchy|archduchy|electorate|margraviate|palatinate|federation|confederation|protectorate|dominion|viceroyalty|governorate|macroregion|subregion|nuts|historical|\bformer\b|oblast|krai|autonomous|bundesland|stadtkreis|regierungsbezirk|borough|suburb|arrondissement|canton|département|departement|préfecture|prefecture|commune|comarca|provincia|comunidad|regione|città metropolitana|bezirk|unterbezirk|circoscrizione|municipality|constituency|unitary authority|\bpark$|\//i;
 
 const SKIP_DISTRICT_REGEX = /\bdistrict\b/i;
 
@@ -132,6 +132,18 @@ function parseWktPoint(locValue: string | undefined): GeoPoint | null {
   return { lat, lon };
 }
 
+function buildBoundingBox(center: GeoPoint, radKm: number) {
+  const cosLat = Math.max(0.1, Math.cos((center.lat * Math.PI) / 180));
+  const dLat = radKm / 111.32;
+  const dLon = radKm / (111.32 * cosLat);
+  return {
+    swLat: Math.max(-89.9, center.lat - dLat),
+    neLat: Math.min(89.9, center.lat + dLat),
+    swLon: Math.max(-179.9, center.lon - dLon),
+    neLon: Math.min(179.9, center.lon + dLon),
+  };
+}
+
 async function geocodeCity(
   city: string,
   languageList: string,
@@ -188,7 +200,7 @@ async function geocodeCity(
 }
 
 async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
-  const q = `[out:json][timeout:8];node["place"="town"](around:40000,${center.lat},${center.lon});out body;node["place"="city"](around:95000,${center.lat},${center.lon});out body;node["place"="village"]["population"](around:34000,${center.lat},${center.lon});out body 120;`;
+  const q = `[out:json][timeout:6];(node["place"~"^(city|town)$"](around:42000,${center.lat},${center.lon});node["place"="city"](around:90000,${center.lat},${center.lon}););out body;`;
   const res = await fetch("https://overpass-api.de/api/interpreter", {
     method: "POST",
     headers: {
@@ -196,7 +208,7 @@ async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: `data=${encodeURIComponent(q)}`,
-    signal: AbortSignal.timeout(8500),
+    signal: AbortSignal.timeout(7000),
   });
   if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
   const data = await readJsonSafe<{
@@ -207,6 +219,7 @@ async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
     }>;
   }>(res);
   if (!data) throw new Error("Overpass returned non-JSON payload");
+
   const places: RawPlace[] = [];
   for (const el of data.elements ?? []) {
     const name = el.tags?.name?.trim();
@@ -220,9 +233,7 @@ async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
         ? parsedPop
         : isCity
           ? 120000
-          : placeType === "town"
-            ? 18000
-            : 2500;
+          : 18000;
     places.push({
       name,
       lat: el.lat,
@@ -231,21 +242,70 @@ async function fetchViaOverpass(center: GeoPoint): Promise<RawPlace[]> {
       isCity,
     });
   }
+
+  if (places.length < 5) {
+    try {
+      const villageQuery = `[out:json][timeout:4];node["place"="village"]["population"](around:34000,${center.lat},${center.lon});out body 80;`;
+      const villageRes = await fetch(
+        "https://overpass-api.de/api/interpreter",
+        {
+          method: "POST",
+          headers: {
+            ...HEADERS,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: `data=${encodeURIComponent(villageQuery)}`,
+          signal: AbortSignal.timeout(4500),
+        },
+      );
+      if (villageRes.ok) {
+        const villageData = await readJsonSafe<{
+          elements?: Array<{
+            lat?: number;
+            lon?: number;
+            tags?: { name?: string; place?: string; population?: string };
+          }>;
+        }>(villageRes);
+        for (const el of villageData?.elements ?? []) {
+          const name = el.tags?.name?.trim();
+          if (!name || typeof el.lat !== "number" || typeof el.lon !== "number")
+            continue;
+          const parsedPop = Number(
+            (el.tags?.population ?? "").replace(/[^\d]/g, ""),
+          );
+          const pop =
+            Number.isFinite(parsedPop) && parsedPop > 0 ? parsedPop : 2500;
+          places.push({
+            name,
+            lat: el.lat,
+            lon: el.lon,
+            pop,
+            isCity: false,
+          });
+        }
+      }
+    } catch {
+      // Optional sparse-area fallback; proceed if primary towns already suffice
+    }
+  }
+
   if (places.length < 3) throw new Error("Overpass returned too few places");
   return places;
 }
 
-async function queryWikidataRadius(
-  center: GeoPoint,
-  radKm: number,
+async function queryWikidataBox(
+  swLat: number,
+  swLon: number,
+  neLat: number,
+  neLon: number,
   minPop: number,
   maxPop: number,
   limit: number,
   timeoutMs: number,
   languageList: string,
 ): Promise<RawPlace[]> {
-  // Exclude dissolved historical entities (wdt:P576) globally without hardcoding place names
-  const sparql = `SELECT ?placeLabel ?loc ?pop WHERE { SERVICE wikibase:around { ?place wdt:P625 ?loc . bd:serviceParam wikibase:center "Point(${center.lon.toFixed(4)} ${center.lat.toFixed(4)})"^^geo:wktLiteral . bd:serviceParam wikibase:radius "${radKm}" . } ?place wdt:P1082 ?pop . FILTER(?pop > ${minPop} && ?pop < ${maxPop}) FILTER NOT EXISTS { ?place wdt:P576 ?dissolved . } SERVICE wikibase:label { bd:serviceParam wikibase:language "${languageList}" . } } LIMIT ${limit}`;
+  // Select optional P576 instead of FILTER NOT EXISTS to avoid Blazegraph planner stalls on dense metros
+  const sparql = `SELECT ?placeLabel ?loc ?pop ?dissolved WHERE { SERVICE wikibase:box { ?place wdt:P625 ?loc . bd:serviceParam wikibase:cornerSouthWest "Point(${swLon.toFixed(4)} ${swLat.toFixed(4)})"^^geo:wktLiteral . bd:serviceParam wikibase:cornerNorthEast "Point(${neLon.toFixed(4)} ${neLat.toFixed(4)})"^^geo:wktLiteral . } ?place wdt:P1082 ?pop . FILTER(?pop > ${minPop} && ?pop < ${maxPop}) OPTIONAL { ?place wdt:P576 ?dissolved . } SERVICE wikibase:label { bd:serviceParam wikibase:language "${languageList},mul" . } } LIMIT ${limit}`;
   const url = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
   const res = await fetch(url, {
     headers: { ...HEADERS, Accept: "application/sparql-results+json" },
@@ -258,12 +318,14 @@ async function queryWikidataRadius(
         placeLabel?: { value: string };
         loc?: { value: string };
         pop?: { value: string };
+        dissolved?: { value: string };
       }>;
     };
   }>(res);
   if (!json) throw new Error("Wikidata returned non-JSON payload");
   const out: RawPlace[] = [];
   for (const b of json.results?.bindings ?? []) {
+    if (b.dissolved?.value) continue;
     const name = b.placeLabel?.value?.trim();
     const point = parseWktPoint(b.loc?.value);
     const pop = Number(b.pop?.value);
@@ -284,30 +346,85 @@ async function fetchViaWikidata(
   center: GeoPoint,
   languageList: string,
 ): Promise<RawPlace[]> {
-  const [localRes, hubsRes] = await Promise.allSettled([
-    queryWikidataRadius(
-      center,
-      38,
-      1200,
+  const localBox = buildBoundingBox(center, 42);
+  const hubsBox = buildBoundingBox(center, 95);
+
+  const [northRes, southRes, hubsRes] = await Promise.allSettled([
+    queryWikidataBox(
+      center.lat,
+      localBox.swLon,
+      localBox.neLat,
+      localBox.neLon,
+      3000,
       MAX_HUB_POPULATION,
-      200,
-      9000,
+      140,
+      8500,
       languageList,
     ),
-    queryWikidataRadius(
-      center,
-      95,
+    queryWikidataBox(
+      localBox.swLat,
+      localBox.swLon,
+      center.lat,
+      localBox.neLon,
+      3000,
+      MAX_HUB_POPULATION,
+      140,
+      8500,
+      languageList,
+    ),
+    queryWikidataBox(
+      hubsBox.swLat,
+      hubsBox.swLon,
+      hubsBox.neLat,
+      hubsBox.neLon,
       35000,
       MAX_HUB_POPULATION,
       120,
-      9000,
+      8500,
       languageList,
     ),
   ]);
 
-  const local = localRes.status === "fulfilled" ? localRes.value : [];
+  let northLocal = northRes.status === "fulfilled" ? northRes.value : [];
+  let southLocal = southRes.status === "fulfilled" ? southRes.value : [];
   const hubs = hubsRes.status === "fulfilled" ? hubsRes.value : [];
 
+  // Retry a single dropped hemisphere once to preserve 360-degree coverage
+  if (northRes.status === "rejected" && southLocal.length > 0) {
+    try {
+      northLocal = await queryWikidataBox(
+        center.lat,
+        localBox.swLon,
+        localBox.neLat,
+        localBox.neLon,
+        3000,
+        MAX_HUB_POPULATION,
+        140,
+        6500,
+        languageList,
+      );
+    } catch {
+      northLocal = [];
+    }
+  } else if (southRes.status === "rejected" && northLocal.length > 0) {
+    try {
+      southLocal = await queryWikidataBox(
+        localBox.swLat,
+        localBox.swLon,
+        center.lat,
+        localBox.neLon,
+        3000,
+        MAX_HUB_POPULATION,
+        140,
+        6500,
+        languageList,
+      );
+    } catch {
+      southLocal = [];
+    }
+  }
+
+  const local = [...northLocal, ...southLocal];
   const nonDistrictNearCount = local.filter(
     (p) =>
       !SKIP_SUPER_ADMIN_REGEX.test(p.name) && !SKIP_DISTRICT_REGEX.test(p.name),
@@ -315,28 +432,46 @@ async function fetchViaWikidata(
 
   let extraNear: RawPlace[] = [];
   if (nonDistrictNearCount < 6) {
-    try {
-      extraNear = await queryWikidataRadius(
-        center,
-        45,
+    const [extraNorth, extraSouth] = await Promise.allSettled([
+      queryWikidataBox(
+        center.lat,
+        localBox.swLon,
+        localBox.neLat,
+        localBox.neLon,
         500,
         MAX_HUB_POPULATION,
         120,
-        7500,
+        6500,
         languageList,
-      );
-    } catch {
-      extraNear = [];
-    }
+      ),
+      queryWikidataBox(
+        localBox.swLat,
+        localBox.swLon,
+        center.lat,
+        localBox.neLon,
+        500,
+        MAX_HUB_POPULATION,
+        120,
+        6500,
+        languageList,
+      ),
+    ]);
+    extraNear = [
+      ...(extraNorth.status === "fulfilled" ? extraNorth.value : []),
+      ...(extraSouth.status === "fulfilled" ? extraSouth.value : []),
+    ];
   }
 
   const merged = [...local, ...extraNear, ...hubs];
   if (merged.length >= 3) return merged;
 
-  const fallback = await queryWikidataRadius(
-    center,
-    60,
-    300,
+  const fallbackBox = buildBoundingBox(center, 60);
+  const fallback = await queryWikidataBox(
+    fallbackBox.swLat,
+    fallbackBox.swLon,
+    fallbackBox.neLat,
+    fallbackBox.neLon,
+    250,
     MAX_HUB_POPULATION,
     100,
     8000,
@@ -502,8 +637,8 @@ function buildDynamicTowns(
     arr
       .filter((t) => !t.isRegionalHub)
       .sort((a, b) => {
-        const aSweetSpot = a.distKm >= 8 && a.distKm <= 34 ? 0 : 1;
-        const bSweetSpot = b.distKm >= 8 && b.distKm <= 34 ? 0 : 1;
+        const aSweetSpot = a.distKm >= 12 && a.distKm <= 35 ? 0 : 1;
+        const bSweetSpot = b.distKm >= 12 && b.distKm <= 35 ? 0 : 1;
         if (aSweetSpot !== bSweetSpot) return aSweetSpot - bSweetSpot;
         if (b.pop !== a.pop) return b.pop - a.pop;
         return a.distKm - b.distKm;
@@ -586,12 +721,16 @@ export async function GET(request: Request) {
 
     const towns = buildDynamicTowns(geocoded.name, geocoded.point, rawPlaces);
     const northernPool = towns.filter((t) => t.dyKm > 8);
-    // Preserve hubPool's highest-population sort order before falling back to northernmost point
     const northernHub =
-      northernPool.filter((t) => t.isRegionalHub)[0] ??
-      northernPool.sort((a, b) => b.dyKm - a.dyKm)[0] ??
-      towns.filter((t) => t.dyKm > 0).sort((a, b) => b.dyKm - a.dyKm)[0] ??
-      towns[0];
+      northernPool
+        .filter((t) => t.isRegionalHub)
+        .sort(
+          (a, b) =>
+            (b.competitorsCount ?? 0) - (a.competitorsCount ?? 0) ||
+            b.dyKm - a.dyKm,
+        )[0] ??
+      [...northernPool].sort((a, b) => b.dyKm - a.dyKm)[0] ??
+      towns.filter((t) => t.dyKm > 0).sort((a, b) => b.dyKm - a.dyKm)[0];
 
     const market: MarketProfile = {
       id: `geo-${geocoded.name.toLowerCase().replace(/\s+/g, "-")}`,
