@@ -60,11 +60,13 @@ export function Dashboard() {
     handleCityQueryChange,
     handleAnalyzeCity,
     handleResetRadomMarket,
+    handleMarketChange,
     handleIndustryChange,
     handleCustomNicheChange,
     handleWebsiteUrlChange,
     handleSyncPrices,
     handleScanMarket,
+    handleApplyApprovedPrices,
     runScan,
   } = useDashboardIntelligence();
 
@@ -219,6 +221,7 @@ export function Dashboard() {
               avgGapPct={metrics.avgGapPct}
               townsInRadius={townsInRadius}
               liveScan={liveScan}
+              onApplyPriceAdjustments={handleApplyApprovedPrices}
             />
 
             <DashboardFooter
@@ -230,6 +233,7 @@ export function Dashboard() {
             />
           </div>
         </main>
+
         <CookieConsent t={t} reopenSignal={cookieModalSignal} />
         <ScrollToTop label={t.scrollToTop} />
       </div>

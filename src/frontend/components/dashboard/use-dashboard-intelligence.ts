@@ -128,6 +128,9 @@ export function useDashboardIntelligence() {
   const [scannedBenchmarks, setScannedBenchmarks] = useState<
     Record<string, number>
   >({});
+  const [approvedPriceOverrides, setApprovedPriceOverrides] = useState<
+    Record<string, number>
+  >({});
   const [isScanningMarket, setIsScanningMarket] = useState<boolean>(false);
   const [syncNotice, setSyncNotice] = useState<SyncNotice | null>(null);
 
@@ -185,6 +188,7 @@ export function useDashboardIntelligence() {
     setSiteProfile(null);
     setLiveScan(null);
     setScannedBenchmarks({});
+    setApprovedPriceOverrides({});
     setSyncNotice(null);
   };
 
@@ -204,6 +208,7 @@ export function useDashboardIntelligence() {
     if (options?.preserveCustomWebsite && hasCustomWebsite) {
       setLiveScan(null);
       setScannedBenchmarks({});
+      setApprovedPriceOverrides({});
       setSyncNotice(null);
     } else {
       resetLiveIntelligence();
@@ -249,6 +254,7 @@ export function useDashboardIntelligence() {
     if (nextNiche !== null) {
       setLiveScan(null);
       setScannedBenchmarks({});
+      setApprovedPriceOverrides({});
       if (
         websiteUrl === DEFAULT_WEBSITE_URL &&
         nextNiche.trim().length > 0 &&
@@ -267,6 +273,7 @@ export function useDashboardIntelligence() {
       setSyncedCount(0);
       setLiveScan(null);
       setScannedBenchmarks({});
+      setApprovedPriceOverrides({});
     }
     setWebsiteUrl(next);
     if (syncNotice) setSyncNotice(null);
@@ -334,8 +341,13 @@ export function useDashboardIntelligence() {
           : hasLiveAiScan && (row.isLiveDiscovered || !isCaseStudy)
             ? 0
             : row.localPricePln;
+      const approvedOurPrice = approvedPriceOverrides[row.serviceKey];
       return {
         ...row,
+        ourPricePln:
+          typeof approvedOurPrice === "number" && approvedOurPrice > 0
+            ? approvedOurPrice
+            : row.ourPricePln,
         localPricePln: resolvedLocalPrice,
       };
     }),
@@ -432,6 +444,7 @@ export function useDashboardIntelligence() {
       setSyncedCount(0);
       setLiveScan(null);
       setScannedBenchmarks({});
+      setApprovedPriceOverrides({});
       setSyncNotice({ tone: "error", message: validation.message });
       return;
     }
@@ -449,6 +462,7 @@ export function useDashboardIntelligence() {
 
       setLiveScan(null);
       setScannedBenchmarks({});
+      setApprovedPriceOverrides({});
 
       const response = await fetch(
         `/api/pricing/sync?url=${encodeURIComponent(trimmed)}`,
@@ -752,6 +766,26 @@ export function useDashboardIntelligence() {
     }
   };
 
+  const handleApplyApprovedPrices = (
+    adjustments: Array<{ serviceKey: string; finalPricePln: number }>,
+  ) => {
+    if (!adjustments.length) return;
+    setApprovedPriceOverrides((prev) => {
+      const next = { ...prev };
+      for (const adj of adjustments) {
+        if (
+          typeof adj.serviceKey === "string" &&
+          typeof adj.finalPricePln === "number" &&
+          Number.isFinite(adj.finalPricePln) &&
+          adj.finalPricePln > 0
+        ) {
+          next[adj.serviceKey] = Math.round(adj.finalPricePln);
+        }
+      }
+      return next;
+    });
+  };
+
   const hasComparableBenchmarks = market.benchmarks.some(
     (row) => row.localPricePln > 0,
   );
@@ -813,6 +847,7 @@ export function useDashboardIntelligence() {
     handleWebsiteUrlChange,
     handleSyncPrices,
     handleScanMarket,
+    handleApplyApprovedPrices,
     runScan,
   };
 }

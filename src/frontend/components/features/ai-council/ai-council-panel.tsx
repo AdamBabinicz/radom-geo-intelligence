@@ -49,6 +49,9 @@ interface AiCouncilPanelProps {
   avgGapPct: number;
   townsInRadius: string[];
   liveScan: (LiveMarketScanResult & { detectedIndustryLabel?: string }) | null;
+  onApplyPriceAdjustments?: (
+    adjustments: Array<{ serviceKey: string; finalPricePln: number }>,
+  ) => void;
 }
 
 interface McpJsonRpcResponse<T> {
@@ -112,6 +115,7 @@ export function AiCouncilPanel({
   avgGapPct,
   townsInRadius,
   liveScan,
+  onApplyPriceAdjustments,
 }: AiCouncilPanelProps) {
   const [humanNote, setHumanNote] = useState("");
   const [lessons, setLessons] = useState<string[]>([]);
@@ -399,6 +403,8 @@ export function AiCouncilPanel({
       if (jiraResult) {
         setPublishedJira(jiraResult);
       }
+
+      onApplyPriceAdjustments?.(chosen.priceAdjustments);
 
       const newLessonSummary = trimmedNote
         ? formatTemplate(t.councilLessonWithNote, {
