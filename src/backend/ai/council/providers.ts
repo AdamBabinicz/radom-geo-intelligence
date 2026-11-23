@@ -8,6 +8,7 @@ import {
 
 const GROQ_DEFAULT_MODELS = [
   "openai/gpt-oss-120b",
+  "llama-3.3-70b-versatile",
   "qwen/qwen3.8-27b",
   "openai/gpt-oss-20b",
 ] as const;
@@ -187,7 +188,7 @@ export async function callOpenAiCompatibleJson<T>(
         body: JSON.stringify({
           model,
           temperature: 0.4,
-          max_tokens: 1800,
+          max_tokens: 3200,
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: systemPrompt },
