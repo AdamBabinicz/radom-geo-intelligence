@@ -19,6 +19,7 @@ interface Rect {
   y1: number;
   x2: number;
   y2: number;
+  owner?: string;
 }
 
 interface LabelPlacement {
@@ -40,18 +41,18 @@ function getBasePlacement(
 ): LabelPlacement {
   let anchor: "start" | "end" | "middle" =
     town.dxKm > 2 ? "start" : town.dxKm < -2 ? "end" : "middle";
-  let offsetX = town.dxKm > 2 ? 14 : town.dxKm < -2 ? -14 : 0;
+  let offsetX = town.dxKm > 2 ? 16 : town.dxKm < -2 ? -16 : 0;
 
   if (posX > 635) {
     anchor = "end";
-    offsetX = -14;
+    offsetX = -16;
   } else if (posX < 165) {
     anchor = "start";
-    offsetX = 14;
+    offsetX = 16;
   }
 
   let placeBelow = town.dyKm <= 0;
-  if (posY < 58) {
+  if (posY < 62) {
     placeBelow = true;
   } else if (posY > 695) {
     placeBelow = false;
@@ -59,19 +60,19 @@ function getBasePlacement(
 
   if (posY < 96 && posX < 360) {
     anchor = "start";
-    offsetX = 14;
+    offsetX = 16;
     placeBelow = true;
   } else if (posY > 690 && posX < 380) {
     anchor = "start";
-    offsetX = 14;
+    offsetX = 16;
     placeBelow = false;
   } else if (posY > 690 && posX > 560) {
     anchor = "end";
-    offsetX = -14;
+    offsetX = -16;
     placeBelow = false;
   }
 
-  const offsetY = placeBelow ? 20 : posY > 755 ? -20 : -14;
+  const offsetY = placeBelow ? 22 : posY > 755 ? -22 : -18;
   const subOffsetY = placeBelow ? 16 : -16;
 
   return { anchor, offsetX, offsetY, subOffsetY, nudged: false };
@@ -91,9 +92,9 @@ function estimateLabelRect(
     const boxW = Math.max(hubText.length * 9.2 + 12, 80);
     const x1 =
       anchor === "start"
-        ? posX + offsetX - 4
+        ? posX + offsetX - 2
         : anchor === "end"
-          ? posX + offsetX - boxW + 4
+          ? posX + offsetX - boxW + 2
           : posX + offsetX - boxW / 2;
     const yBase = posY + offsetY;
     return {
@@ -109,13 +110,13 @@ function estimateLabelRect(
   }`;
   const line1W = town.name.length * 8.8 + 10;
   const line2W = subText.length * 7.2 + 8;
-  const boxW = Math.max(line1W, line2W, 74);
+  const boxW = Math.max(line1W, line2W, 76);
 
   const x1 =
     anchor === "start"
-      ? posX + offsetX - 4
+      ? posX + offsetX - 2
       : anchor === "end"
-        ? posX + offsetX - boxW + 4
+        ? posX + offsetX - boxW + 2
         : posX + offsetX - boxW / 2;
 
   const y1Base = posY + offsetY;
@@ -158,55 +159,67 @@ function buildCandidates(
   const base = getBasePlacement(posX, posY, town);
   const raw: LabelPlacement[] = [
     base,
+    // Czysto boczne (idealne przy pionowych klastrach jak Białołęka / Legionowo)
     {
       anchor: "start",
-      offsetX: 14,
-      offsetY: 20,
+      offsetX: 17,
+      offsetY: -2,
+      subOffsetY: 15,
+      nudged: false,
+    },
+    { anchor: "end", offsetX: -17, offsetY: -2, subOffsetY: 15, nudged: false },
+    // Standardowe ukośne i pionowe
+    {
+      anchor: "start",
+      offsetX: 16,
+      offsetY: 22,
       subOffsetY: 16,
       nudged: false,
     },
     {
       anchor: "start",
-      offsetX: 14,
-      offsetY: -14,
-      subOffsetY: -16,
-      nudged: false,
-    },
-    { anchor: "end", offsetX: -14, offsetY: 20, subOffsetY: 16, nudged: false },
-    {
-      anchor: "end",
-      offsetX: -14,
-      offsetY: -14,
-      subOffsetY: -16,
-      nudged: false,
-    },
-    {
-      anchor: "middle",
-      offsetX: 0,
-      offsetY: 26,
-      subOffsetY: 16,
-      nudged: false,
-    },
-    {
-      anchor: "middle",
-      offsetX: 0,
+      offsetX: 16,
       offsetY: -18,
       subOffsetY: -16,
       nudged: false,
     },
-    // Dodatkowe pozycje przy bardzo gęstych klastrach miast (np. Warszawa)
-    { anchor: "start", offsetX: 20, offsetY: 36, subOffsetY: 16, nudged: true },
-    { anchor: "end", offsetX: -20, offsetY: 36, subOffsetY: 16, nudged: true },
+    { anchor: "end", offsetX: -16, offsetY: 22, subOffsetY: 16, nudged: false },
+    {
+      anchor: "end",
+      offsetX: -16,
+      offsetY: -18,
+      subOffsetY: -16,
+      nudged: false,
+    },
+    {
+      anchor: "middle",
+      offsetX: 0,
+      offsetY: 28,
+      subOffsetY: 16,
+      nudged: false,
+    },
+    {
+      anchor: "middle",
+      offsetX: 0,
+      offsetY: -20,
+      subOffsetY: -16,
+      nudged: false,
+    },
+    // Szersze odsunięcia z linią prowadzącą dla bardzo gęstych klastrów
+    { anchor: "start", offsetX: 28, offsetY: -4, subOffsetY: 15, nudged: true },
+    { anchor: "end", offsetX: -28, offsetY: -4, subOffsetY: 15, nudged: true },
+    { anchor: "start", offsetX: 24, offsetY: 34, subOffsetY: 16, nudged: true },
+    { anchor: "end", offsetX: -24, offsetY: 34, subOffsetY: 16, nudged: true },
     {
       anchor: "start",
-      offsetX: 20,
+      offsetX: 24,
       offsetY: -30,
       subOffsetY: -16,
       nudged: true,
     },
     {
       anchor: "end",
-      offsetX: -20,
+      offsetX: -24,
       offsetY: -30,
       subOffsetY: -16,
       nudged: true,
@@ -273,17 +286,17 @@ function computeLabelPlacements(
       return true;
     });
 
-  // Zarezerwuj miejsca samych kropek, aby napisy nie zasłaniały punktów
-  for (const { posX, posY } of visibleTowns) {
+  // Zarezerwuj miejsca kropek — z oznaczeniem właściciela, by etykieta nie karała samej siebie
+  for (const { town, posX, posY } of visibleTowns) {
     occupied.push({
       x1: posX - 11,
       y1: posY - 11,
       x2: posX + 11,
       y2: posY + 11,
+      owner: town.name,
     });
   }
 
-  // Najpierw lokalne miejscowości od centrum, na końcu huby regionalne
   const ordered = [...visibleTowns].sort((a, b) => {
     if (Boolean(a.town.isRegionalHub) !== Boolean(b.town.isRegionalHub)) {
       return a.town.isRegionalHub ? 1 : -1;
@@ -305,7 +318,12 @@ function computeLabelPlacements(
       let score = outOfBoundsPenalty(rect) + i * 3;
 
       for (const occ of occupied) {
-        score += overlapArea(rect, occ) * 100;
+        if (occ.owner === town.name) {
+          // Dla własnej kropki sprawdzamy tylko twarde nachodzenie (bez dodatkowego paddingu)
+          score += overlapArea(rect, occ, 0, 0) * 150;
+        } else {
+          score += overlapArea(rect, occ) * 100;
+        }
       }
 
       if (score < bestScore) {
@@ -508,7 +526,14 @@ export function CoverageSvg({
                 x1={posX}
                 y1={posY}
                 x2={posX + offsetX * 0.75}
-                y2={posY + (offsetY > 0 ? offsetY - 12 : offsetY + 2)}
+                y2={
+                  posY +
+                  (offsetY > 10
+                    ? offsetY - 12
+                    : offsetY < -10
+                      ? offsetY + 2
+                      : 0)
+                }
                 stroke="currentColor"
                 strokeWidth="1"
                 strokeDasharray="2 2"
