@@ -27,6 +27,82 @@ const REFERENCE_RADOM_TOWNS = [
   { name: "Przysucha", distKm: 41.0, driveMin: 42, travelFeePln: 45 },
 ];
 
+const METRO_ZONE_DATASETS = {
+  radom: {
+    displayName: "Radom",
+    dataSource: "built-in-radom-case-study",
+    towns: REFERENCE_RADOM_TOWNS,
+  },
+  austin: {
+    displayName: "Austin",
+    dataSource: "built-in-metro-dataset",
+    towns: [
+      { name: "Austin", distKm: 0, driveMin: 0 },
+      { name: "Sunset Valley", distKm: 9.5, driveMin: 14 },
+      { name: "West Lake Hills", distKm: 10.2, driveMin: 15 },
+      { name: "Pflugerville", distKm: 23.5, driveMin: 25 },
+      { name: "Buda", distKm: 24.1, driveMin: 26 },
+      { name: "Round Rock", distKm: 28.0, driveMin: 28 },
+      { name: "Cedar Park", distKm: 29.4, driveMin: 31 },
+      { name: "Kyle", distKm: 34.8, driveMin: 35 },
+      { name: "Georgetown", distKm: 43.5, driveMin: 42 },
+    ],
+  },
+  sydney: {
+    displayName: "Sydney",
+    dataSource: "built-in-metro-dataset",
+    towns: [
+      { name: "Sydney", distKm: 0, driveMin: 0 },
+      { name: "North Sydney", distKm: 5.2, driveMin: 11 },
+      { name: "Bondi Junction", distKm: 7.4, driveMin: 16 },
+      { name: "Chatswood", distKm: 11.8, driveMin: 18 },
+      { name: "Hurstville", distKm: 16.5, driveMin: 24 },
+      { name: "Parramatta", distKm: 23.4, driveMin: 29 },
+      { name: "Liverpool", distKm: 32.0, driveMin: 36 },
+      { name: "Penrith", distKm: 54.0, driveMin: 52 },
+    ],
+  },
+  "san francisco": {
+    displayName: "San Francisco",
+    dataSource: "built-in-metro-dataset",
+    towns: [
+      { name: "San Francisco", distKm: 0, driveMin: 0 },
+      { name: "Daly City", distKm: 11.5, driveMin: 17 },
+      { name: "South San Francisco", distKm: 15.2, driveMin: 19 },
+      { name: "Oakland", distKm: 18.4, driveMin: 24 },
+      { name: "Berkeley", distKm: 22.6, driveMin: 28 },
+      { name: "San Rafael", distKm: 29.5, driveMin: 33 },
+      { name: "San Mateo", distKm: 31.0, driveMin: 32 },
+    ],
+  },
+  london: {
+    displayName: "London",
+    dataSource: "built-in-metro-dataset",
+    towns: [
+      { name: "London", distKm: 0, driveMin: 0 },
+      { name: "Stratford", distKm: 9.8, driveMin: 22 },
+      { name: "Wimbledon", distKm: 13.4, driveMin: 28 },
+      { name: "Croydon", distKm: 17.2, driveMin: 34 },
+      { name: "Romford", distKm: 23.8, driveMin: 38 },
+      { name: "Watford", distKm: 28.5, driveMin: 40 },
+      { name: "Guildford", distKm: 46.0, driveMin: 55 },
+    ],
+  },
+  krakow: {
+    displayName: "Kraków",
+    dataSource: "built-in-metro-dataset",
+    towns: [
+      { name: "Kraków", distKm: 0, driveMin: 0 },
+      { name: "Wieliczka", distKm: 13.5, driveMin: 20 },
+      { name: "Zabierzów", distKm: 14.6, driveMin: 21 },
+      { name: "Skawina", distKm: 15.8, driveMin: 22 },
+      { name: "Niepołomice", distKm: 24.2, driveMin: 28 },
+      { name: "Myślenice", distKm: 31.5, driveMin: 35 },
+      { name: "Bochnia", distKm: 38.0, driveMin: 41 },
+    ],
+  },
+};
+
 const ZONE_FEE_TIERS_PLN = [
   { maxKm: 0, feePln: 0 },
   { maxKm: 15, feePln: 20 },
@@ -108,6 +184,16 @@ function cleanString(value, fallback = "") {
   return trimmed.length > 0 ? trimmed : fallback;
 }
 
+function normalizeCityLookupKey(rawCity) {
+  return cleanString(rawCity, REFERENCE_CASE_STUDY_CITY)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ł/g, "l")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function clampNumber(raw, min, max, fallback) {
   const num = Number(raw);
   if (!Number.isFinite(num)) return fallback;
@@ -126,7 +212,6 @@ function convertFromPln(amountPln, currencyCfg) {
 function resolveIndustryProfile(raw) {
   const cleaned = cleanString(raw, "upholstery");
   const lower = cleaned.toLowerCase();
-
   if (
     lower === "upholstery" ||
     lower.includes("upholster") ||
@@ -158,7 +243,6 @@ function resolveIndustryProfile(raw) {
   ) {
     return { key: "plumbing", isPreset: true, ...INDUSTRY_BASELINES.plumbing };
   }
-
   return {
     key: "custom",
     isPreset: false,
@@ -226,6 +310,136 @@ function estimateDriveMinutes(distanceKm) {
   return Math.max(5, Math.round(distanceKm * 1.15));
 }
 
+function findKnownMetroTown(townName) {
+  const lookup = normalizeCityLookupKey(townName);
+  for (const dataset of Object.values(METRO_ZONE_DATASETS)) {
+    const match = dataset.towns.find(
+      (t) => normalizeCityLookupKey(t.name) === lookup,
+    );
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function buildZoneTownsForCity(city, radiusKm, currencyCfg) {
+  const cityKey = normalizeCityLookupKey(city);
+  const dataset = METRO_ZONE_DATASETS[cityKey];
+
+  if (dataset) {
+    const filtered = dataset.towns
+      .filter((t) => t.distKm <= radiusKm)
+      .map((t) => {
+        const feePln =
+          typeof t.travelFeePln === "number"
+            ? t.travelFeePln
+            : computeZoneTravelFeePln(t.distKm);
+        return {
+          name: t.name,
+          distKm: t.distKm,
+          driveMin: t.driveMin,
+          travelFee: convertFromPln(feePln, currencyCfg),
+          currency: currencyCfg.code,
+        };
+      });
+
+    return {
+      dataSource: dataset.dataSource,
+      towns: filtered,
+      geoCoverageNote:
+        dataset.dataSource === "built-in-radom-case-study"
+          ? `Reference GPS dataset active for ${REFERENCE_CASE_STUDY_CITY}.`
+          : `Built-in regional zone dataset active for ${dataset.displayName} (${filtered.length} towns within ${radiusKm} km).`,
+    };
+  }
+
+  const tierRings = [
+    { name: `${city} (Base 0 km)`, distKm: 0 },
+    { name: `${city} Inner Ring`, distKm: 10 },
+    { name: `${city} Metro Zone`, distKm: 20 },
+    { name: `${city} Outer Suburbs`, distKm: 30 },
+    { name: `${city} Extended Zone`, distKm: 45 },
+    { name: `${city} Regional Edge`, distKm: 70 },
+    { name: `${city} Outer Corridor`, distKm: 95 },
+  ];
+
+  const generatedTowns = tierRings
+    .filter((ring) => ring.distKm <= radiusKm)
+    .map((ring) => ({
+      name: ring.name,
+      distKm: ring.distKm,
+      driveMin: estimateDriveMinutes(ring.distKm),
+      travelFee: convertFromPln(
+        computeZoneTravelFeePln(ring.distKm),
+        currencyCfg,
+      ),
+      currency: currencyCfg.code,
+    }));
+
+  return {
+    dataSource: "zone-tier-model-plus-atlassian-context",
+    towns: generatedTowns,
+    geoCoverageNote: `Dynamic zone-tier matrix active for ${city} (${generatedTowns.length} bands within ${radiusKm} km). Use the Northstar Ops Web Hub for live OSM town coordinates or pass distanceKm directly to calculate-service-fee.`,
+  };
+}
+
+function buildWorkspaceContextSummary({
+  city,
+  jiraProject,
+  recentJiraIssues,
+  confluenceSpace,
+  recentConfluencePages,
+}) {
+  const quoteIssues = recentJiraIssues.filter((issue) =>
+    /^\[Quote\]/i.test(issue.summary || ""),
+  );
+  const campaignIssues = recentJiraIssues.filter((issue) =>
+    /^\[Northstar Ops/i.test(issue.summary || ""),
+  );
+  const openIssues = recentJiraIssues.filter(
+    (issue) =>
+      !/^(done|gotowe|closed|resolved|zamknięte)$/i.test(issue.status || ""),
+  );
+  const playbookPages = recentConfluencePages.filter((page) =>
+    /(northstar|playbook|strateg|pricing|geo|ekspans|expan|optymalizacj|cennik)/i.test(page.title || ""),
+  );
+
+  const cityNorm = normalizeCityLookupKey(city);
+  const cityPlaybookExists = recentConfluencePages.some((page) =>
+    normalizeCityLookupKey(page.title || "").includes(cityNorm),
+  );
+  const cityJiraCount = recentJiraIssues.filter((issue) =>
+    normalizeCityLookupKey(issue.summary || "").includes(cityNorm),
+  ).length;
+
+  const projectLabel = jiraProject?.key || "Workspace";
+  const spaceLabel = confluenceSpace?.key || "Confluence";
+
+  let summaryText;
+  if (recentJiraIssues.length === 0 && recentConfluencePages.length === 0) {
+    summaryText = `Clean workspace (${projectLabel} / ${spaceLabel}) with no prior Northstar Ops quotes or playbooks yet — ready to publish your first Confluence playbook or Jira quote.`;
+  } else {
+    summaryText = `${projectLabel} tracks ${quoteIssues.length} quote(s), ${campaignIssues.length} Northstar Ops campaign item(s), and ${openIssues.length} open issue(s); Confluence space ${spaceLabel} holds ${playbookPages.length} strategy page(s).`;
+  }
+
+  const recommendedNextAction = !cityPlaybookExists
+    ? `No Confluence playbook detected for ${city} yet — publish a strategy playbook to ${spaceLabel} or create a Jira expansion campaign in ${projectLabel}.`
+    : `Confluence already includes a ${city} playbook (${cityJiraCount} related recent Jira items in ${projectLabel}) — review existing work before creating duplicate tasks.`;
+
+  return {
+    quotesTrackedCount: quoteIssues.length,
+    campaignsTrackedCount: campaignIssues.length,
+    openIssuesCount: openIssues.length,
+    playbooksTrackedCount: playbookPages.length,
+    cityPlaybookExists,
+    cityJiraItemsCount: cityJiraCount,
+    recentQuoteKeys: quoteIssues.slice(0, 3).map((q) => q.key),
+    summaryText,
+    recommendedNextAction,
+  };
+}
+
 async function resolveConfluenceSpace(requestedKey) {
   const explicitKey = cleanString(requestedKey, "");
   const lookupKey = explicitKey || DEFAULT_CONFLUENCE_SPACE_KEY;
@@ -276,12 +490,12 @@ async function resolveConfluenceSpace(requestedKey) {
   );
 }
 
-async function fetchRecentConfluencePages(spaceId) {
+async function loadRecentConfluencePages(spaceId) {
   try {
     const res = await api
       .asUser()
       .requestConfluence(
-        route`/wiki/api/v2/spaces/${spaceId}/pages?limit=5&sort=-modified-date`,
+        route`/wiki/api/v2/spaces/${spaceId}/pages?limit=10&sort=-modified-date`,
         { headers: { Accept: "application/json" } },
       );
     if (!res.ok) {
@@ -358,13 +572,13 @@ async function resolveJiraProject(requestedKey) {
   );
 }
 
-async function fetchRecentJiraIssues(projectKey) {
+async function loadRecentJiraIssues(projectKey) {
   try {
     const jql = `project = "${projectKey}" ORDER BY updated DESC`;
     const res = await api
       .asUser()
       .requestJira(
-        route`/rest/api/3/search/jql?jql=${jql}&maxResults=6&fields=summary,status,issuetype,updated`,
+        route`/rest/api/3/search/jql?jql=${jql}&maxResults=15&fields=summary,status,issuetype,updated`,
         { headers: { Accept: "application/json" } },
       );
     if (!res.ok) {
@@ -407,10 +621,11 @@ export async function getMarketBrief(rawPayload) {
   let confluenceSpace = null;
   let recentConfluencePages = [];
   let confluencePagesNote;
+
   try {
     const space = await resolveConfluenceSpace(input.spaceKey);
     confluenceSpace = { id: space.id, key: space.key, name: space.name };
-    const pageLookup = await fetchRecentConfluencePages(space.id);
+    const pageLookup = await loadRecentConfluencePages(space.id);
     recentConfluencePages = pageLookup.pages;
     confluencePagesNote = pageLookup.note;
   } catch (err) {
@@ -422,6 +637,7 @@ export async function getMarketBrief(rawPayload) {
   let jiraProject = null;
   let recentJiraIssues = [];
   let jiraIssuesNote;
+
   try {
     const proj = await resolveJiraProject(input.projectKey);
     jiraProject = {
@@ -431,7 +647,7 @@ export async function getMarketBrief(rawPayload) {
         ? proj.issueTypes.filter((t) => !t.subtask).map((t) => t.name)
         : [],
     };
-    const issueLookup = await fetchRecentJiraIssues(proj.key);
+    const issueLookup = await loadRecentJiraIssues(proj.key);
     recentJiraIssues = issueLookup.issues;
     jiraIssuesNote = issueLookup.note;
   } catch (err) {
@@ -440,26 +656,7 @@ export async function getMarketBrief(rawPayload) {
     };
   }
 
-  const isReferenceCity =
-    city.toLowerCase() === REFERENCE_CASE_STUDY_CITY.toLowerCase();
-
-  const townsInRadius = isReferenceCity
-    ? REFERENCE_RADOM_TOWNS.filter((t) => t.distKm <= radiusKm).map((t) => ({
-        name: t.name,
-        distKm: t.distKm,
-        driveMin: t.driveMin,
-        travelFee: convertFromPln(t.travelFeePln, currencyCfg),
-        currency: currencyCfg.code,
-      }))
-    : [
-        {
-          name: city,
-          distKm: 0,
-          driveMin: 0,
-          travelFee: 0,
-          currency: currencyCfg.code,
-        },
-      ];
+  const zoneData = buildZoneTownsForCity(city, radiusKm, currencyCfg);
 
   const pricingBenchmarks = industryProfile.services.map((s) => ({
     name: s.name,
@@ -468,6 +665,14 @@ export async function getMarketBrief(rawPayload) {
     currency: currencyCfg.code,
   }));
 
+  const workspaceContext = buildWorkspaceContextSummary({
+    city,
+    jiraProject,
+    recentJiraIssues,
+    confluenceSpace,
+    recentConfluencePages,
+  });
+
   return {
     city,
     industry: industryProfile.key,
@@ -475,24 +680,21 @@ export async function getMarketBrief(rawPayload) {
     isPresetIndustry: industryProfile.isPreset,
     currency: currencyCfg.code,
     targetRadiusKm: radiusKm,
-    geoDataSource: isReferenceCity
-      ? "built-in-radom-case-study"
-      : "zone-model-plus-atlassian-context",
-    geoCoverageNote: isReferenceCity
-      ? `Reference GPS dataset active for ${REFERENCE_CASE_STUDY_CITY}.`
-      : `Dynamic mode for ${city}. Pass distanceKm to calculate-service-fee for surrounding towns or sync live OSM/SERP competitors via the Northstar Ops Web Hub.`,
-    serviceableTownsCount: townsInRadius.length,
-    townsInRadius: townsInRadius.map((t) => t.name),
-    townDetails: townsInRadius,
+    geoDataSource: zoneData.dataSource,
+    geoCoverageNote: zoneData.geoCoverageNote,
+    serviceableTownsCount: zoneData.towns.length,
+    townsInRadius: zoneData.towns.map((t) => t.name),
+    townDetails: zoneData.towns,
     pricingBenchmarks,
     topCustomerPainPoints: industryProfile.painPoints,
+    workspaceContext,
     atlassianWorkspace: {
       runsOnAtlassianZeroEgress: true,
       confluenceSpace,
-      recentConfluencePages,
+      recentConfluencePages: recentConfluencePages.slice(0, 6),
       ...(confluencePagesNote ? { confluencePagesNote } : {}),
       jiraProject,
-      recentJiraIssues,
+      recentJiraIssues: recentJiraIssues.slice(0, 6),
       ...(jiraIssuesNote ? { jiraIssuesNote } : {}),
     },
   };
@@ -507,9 +709,7 @@ export async function calculateServiceFee(rawPayload) {
   const orderValue = clampNumber(rawOrderValue, 0, 500000, 200);
   const radiusKm = clampNumber(input.radiusKm, 10, 100, 30);
 
-  const knownTown = REFERENCE_RADOM_TOWNS.find(
-    (t) => t.name.toLowerCase() === townName.toLowerCase(),
-  );
+  const knownTown = findKnownMetroTown(townName);
 
   const distanceKm =
     typeof input.distanceKm === "number" && Number.isFinite(input.distanceKm)
@@ -519,7 +719,9 @@ export async function calculateServiceFee(rawPayload) {
         : 0;
 
   const travelFeePln =
-    knownTown && input.distanceKm === undefined
+    knownTown &&
+    typeof knownTown.travelFeePln === "number" &&
+    input.distanceKm === undefined
       ? knownTown.travelFeePln
       : computeZoneTravelFeePln(distanceKm);
 

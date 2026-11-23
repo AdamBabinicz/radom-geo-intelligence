@@ -45,6 +45,14 @@ const cardStyle = xcss({
   width: "100%",
 });
 
+const QUICK_MARKET_PRESETS = [
+  { label: "Radom · PLN", city: "Radom", currency: "PLN" },
+  { label: "Austin · USD", city: "Austin", currency: "USD" },
+  { label: "Sydney · USD", city: "Sydney", currency: "USD" },
+  { label: "London · GBP", city: "London", currency: "GBP" },
+  { label: "Kraków · PLN", city: "Kraków", currency: "PLN" },
+];
+
 const COPY = {
   en: {
     title: "Northstar Ops",
@@ -52,6 +60,7 @@ const COPY = {
     runsBadge: "Runs on Atlassian · Zero Egress",
     openWebHub: "Open Full Web Geo Hub",
     refresh: "Refresh Context",
+    quickMarketsLabel: "Quick market presets:",
     cityLabel: "Target City",
     industryLabel: "Service Industry",
     customIndustryLabel: "Custom Industry Name",
@@ -64,10 +73,16 @@ const COPY = {
     tabWorkspace: "Workspace & Benchmarks",
     tabCalculator: "Zone Quote Calculator",
     tabAutomation: "Confluence & Jira Actions",
+    contextMemoryTitle: "Workspace Context Memory",
+    quotesLabel: "Quotes",
+    campaignsLabel: "Campaigns",
+    openIssuesLabel: "Open issues",
+    playbooksLabel: "Playbooks",
+    nextActionTitle: "Context-Aware Next Step",
     jiraSectionTitle: "Live Jira Project Context",
     confluenceSectionTitle: "Live Confluence Space Context",
     coverageTitle: "Active Coverage Zone",
-    coverageTownsLabel: "Serviceable towns in radius",
+    coverageTownsLabel: "Serviceable towns / zone bands in radius",
     noIssues: "No issues found in this project yet.",
     noPages: "No Confluence pages found in this space yet.",
     confluenceUnavailable: "Confluence space unavailable",
@@ -82,7 +97,7 @@ const COPY = {
     benchmarksTitle: "Industry Pricing Benchmarks",
     painPointsTitle: "Priority Customer Pain Points",
     customIndustryNote:
-      "Custom niche mode active — benchmark table will appear once synced via the Web Geo Hub.",
+      "Custom niche mode active — use the Zone Quote Calculator for instant travel-fee quotes, or sync live competitor pricing via the Web Geo Hub.",
     townLabel: "Service Town",
     distanceLabel: "Distance from Center (km)",
     orderValueLabel: "Base Order Value",
@@ -128,6 +143,7 @@ const COPY = {
     runsBadge: "Runs on Atlassian · Zero Egress",
     openWebHub: "Otwórz pełny Web Geo Hub",
     refresh: "Odśwież kontekst",
+    quickMarketsLabel: "Szybki wybór rynku:",
     cityLabel: "Miasto docelowe",
     industryLabel: "Branża usługowa",
     customIndustryLabel: "Nazwa własnej branży",
@@ -140,10 +156,16 @@ const COPY = {
     tabWorkspace: "Kontekst i Benchmarki",
     tabCalculator: "Kalkulator Wyceny Strefowej",
     tabAutomation: "Akcje Confluence i Jira",
+    contextMemoryTitle: "Pamięć Kontekstowa Przestrzeni",
+    quotesLabel: "Wyceny",
+    campaignsLabel: "Kampanie",
+    openIssuesLabel: "Otwarte zadania",
+    playbooksLabel: "Playbooki",
+    nextActionTitle: "Rekomendowany kolejny krok",
     jiraSectionTitle: "Żywy kontekst projektu Jira",
     confluenceSectionTitle: "Żywy kontekst przestrzeni Confluence",
     coverageTitle: "Aktywna strefa zasięgu",
-    coverageTownsLabel: "Miejscowości obsługiwane w promieniu",
+    coverageTownsLabel: "Miejscowości / pasma strefowe w promieniu",
     noIssues: "Brak zgłoszeń w tym projekcie.",
     noPages: "Brak stron w tej przestrzeni Confluence.",
     confluenceUnavailable: "Przestrzeń Confluence niedostępna",
@@ -158,7 +180,7 @@ const COPY = {
     benchmarksTitle: "Benchmarki cenowe branży",
     painPointsTitle: "Główne problemy klientów na rynku",
     customIndustryNote:
-      "Tryb własnej niszy — pełna tabela porównawcza pojawi się po skanowaniu w Web Geo Hubie.",
+      "Tryb własnej niszy — skorzystaj z Kalkulatora Wyceny Strefowej lub zsynchronizuj cennik konkurencji przez Web Geo Hub.",
     townLabel: "Miejscowość usługi",
     distanceLabel: "Odległość od bazy (km)",
     orderValueLabel: "Wartość bazowa zlecenia",
@@ -290,11 +312,23 @@ function App() {
           spaceKey: nextSpaceKey,
         });
         setWorkspaceData(data);
-
         const detectedSpaceKey =
           data?.atlassianWorkspace?.confluenceSpace?.key || "";
         if (!nextSpaceKey && detectedSpaceKey) {
           setSpaceKeyInput(detectedSpaceKey);
+        }
+
+        if (options.syncQuoteTown && Array.isArray(data?.townDetails)) {
+          const sampleTown =
+            data.townDetails.find((item) => item.distKm >= 15) ||
+            data.townDetails.find((item) => item.distKm > 0) ||
+            data.townDetails[0];
+          if (sampleTown) {
+            setQuoteTown(sampleTown.name);
+            setQuoteDistanceKm(String(sampleTown.distKm));
+            setQuoteResult(null);
+            setQuoteCreated(null);
+          }
         }
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : t.loadError);
@@ -323,18 +357,36 @@ function App() {
     }
   }, [productContext, activeProjectKey, fetchWorkspace]);
 
+  const lastSyncedQuoteCityRef = useRef("");
+
+  useEffect(() => {
+    const activeCity = workspaceData?.city;
+    const details = workspaceData?.townDetails;
+    if (!activeCity || !Array.isArray(details) || details.length === 0) return;
+    if (lastSyncedQuoteCityRef.current === activeCity) return;
+    lastSyncedQuoteCityRef.current = activeCity;
+    const sampleTown = details.find((item) => item.distKm >= 20) || details.find((item) => item.distKm >= 10) || details.find((item) => item.distKm > 0) || details[0];
+    if (sampleTown) {
+      setQuoteTown(sampleTown.name);
+      setQuoteDistanceKm(String(sampleTown.distKm));
+      setQuoteResult(null);
+      setQuoteCreated(null);
+    }
+  }, [workspaceData]);
+
   const handleApplyParameters = async () => {
     const cleanCity = city.trim() || "Radom";
-    const isRadom = cleanCity.toLowerCase() === "radom";
-    if (
-      !isRadom &&
-      (quoteTown.trim().toLowerCase() === "pionki" || !quoteTown.trim())
-    ) {
-      setQuoteTown(cleanCity);
-      setQuoteDistanceKm("0");
-      setQuoteResult(null);
-    }
-    await fetchWorkspace({ city: cleanCity });
+    setCity(cleanCity);
+    await fetchWorkspace({ city: cleanCity }, { syncQuoteTown: true });
+  };
+
+  const handleSelectPreset = async (preset) => {
+    setCity(preset.city);
+    setCurrency(preset.currency);
+    await fetchWorkspace(
+      { city: preset.city, currency: preset.currency },
+      { syncQuoteTown: true },
+    );
   };
 
   const handleToggleLocale = (nextLocale) => {
@@ -459,6 +511,7 @@ function App() {
   const benchmarks = workspaceData?.pricingBenchmarks || [];
   const painPoints = workspaceData?.topCustomerPainPoints || [];
   const townDetails = workspaceData?.townDetails || [];
+  const workspaceContext = workspaceData?.workspaceContext;
 
   const issuesHead = {
     cells: [
@@ -633,6 +686,23 @@ function App() {
               {t.applyParams}
             </Button>
           </Inline>
+          <Inline space="space.075" alignBlock="center" shouldWrap>
+            <Text>{t.quickMarketsLabel}</Text>
+            {QUICK_MARKET_PRESETS.map((preset) => (
+              <Button
+                key={preset.city}
+                appearance={
+                  city.trim().toLowerCase() === preset.city.toLowerCase()
+                    ? "primary"
+                    : "subtle"
+                }
+                isDisabled={loading || refreshing}
+                onClick={() => handleSelectPreset(preset)}
+              >
+                {preset.label}
+              </Button>
+            ))}
+          </Inline>
         </Stack>
       </Box>
 
@@ -658,6 +728,39 @@ function App() {
           <TabPanel>
             <Box xcss={fullWidthBox}>
               <Stack space="space.200">
+                {workspaceContext && (
+                  <Box xcss={cardStyle}>
+                    <Stack space="space.100">
+                      <Inline space="space.100" alignBlock="center" shouldWrap>
+                        <Heading as="h2">{t.contextMemoryTitle}</Heading>
+                        <Lozenge appearance="inprogress">
+                          {`${t.quotesLabel}: ${workspaceContext.quotesTrackedCount}`}
+                        </Lozenge>
+                        <Lozenge appearance="default">
+                          {`${t.campaignsLabel}: ${workspaceContext.campaignsTrackedCount}`}
+                        </Lozenge>
+                        <Lozenge appearance="moved">
+                          {`${t.openIssuesLabel}: ${workspaceContext.openIssuesCount}`}
+                        </Lozenge>
+                        <Lozenge appearance="success">
+                          {`${t.playbooksLabel}: ${workspaceContext.playbooksTrackedCount}`}
+                        </Lozenge>
+                      </Inline>
+                      <Text>{workspaceContext.summaryText}</Text>
+                      <SectionMessage
+                        appearance={
+                          workspaceContext.cityPlaybookExists
+                            ? "success"
+                            : "information"
+                        }
+                        title={t.nextActionTitle}
+                      >
+                        <Text>{workspaceContext.recommendedNextAction}</Text>
+                      </SectionMessage>
+                    </Stack>
+                  </Box>
+                )}
+
                 <Box xcss={cardStyle}>
                   <Stack space="space.100">
                     <Inline spread="space-between" alignBlock="center">
@@ -790,7 +893,7 @@ function App() {
                       <Stack space="space.050">
                         <Label labelFor="q-town">{t.townLabel}</Label>
                         <Textfield
-                          id="q-town"
+                          key={`q-town-${workspaceData?.city || "default"}`} id="q-town"
                           value={quoteTown}
                           onChange={(e) => setQuoteTown(e.target.value)}
                         />
@@ -798,7 +901,7 @@ function App() {
                       <Stack space="space.050">
                         <Label labelFor="q-dist">{t.distanceLabel}</Label>
                         <Textfield
-                          id="q-dist"
+                          key={`q-dist-${workspaceData?.city || "default"}`} id="q-dist"
                           type="number"
                           value={quoteDistanceKm}
                           onChange={(e) => setQuoteDistanceKm(e.target.value)}
