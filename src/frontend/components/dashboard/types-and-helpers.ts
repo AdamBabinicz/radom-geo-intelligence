@@ -7,6 +7,7 @@ import {
 } from "@/src/config/industries";
 import {
   RADOM_UPHOLSTERY_MARKET,
+  type MarketDataSource,
   type MarketProfile,
 } from "@/src/config/markets";
 import {
@@ -21,6 +22,8 @@ export const LOCALE_KEY = "northstar_locale";
 export const THEME_KEY = "northstar_theme";
 export const DEFAULT_WEBSITE_URL = "https://pranie-dywanow.j.pl/";
 export const CLIENT_SYNC_TIMEOUT_MS = 55_000;
+export const GEO_RESOLVE_TIMEOUT_MS = 28_000;
+export const MCP_SCAN_TIMEOUT_MS = 30_000;
 
 export const LEGAL_ROUTE_OVERRIDES: Partial<
   Record<Locale, { privacy: string; terms: string }>
@@ -30,6 +33,20 @@ export const LEGAL_ROUTE_OVERRIDES: Partial<
     terms: "/regulamin",
   },
 };
+
+export type GeoErrorCode =
+  | "CITY_EMPTY"
+  | "CITY_NOT_FOUND"
+  | "GEO_TIMEOUT"
+  | "GEO_FAILED";
+
+export interface GeoResolvePayload {
+  source?: MarketDataSource;
+  market?: MarketProfile;
+  centerGps?: { lat: number; lon: number };
+  code?: GeoErrorCode;
+  error?: string;
+}
 
 export type PricingSyncCode =
   | "MISSING_URL"
@@ -79,6 +96,29 @@ export interface WorkspaceProfile {
   isDomainBound: boolean;
 }
 
+export interface McpAnalysisSummary {
+  center: string;
+  radiusKm: number;
+  serviceableTownsCount: number;
+  competitorsTracked: number;
+  completedAtIso: string;
+}
+
+export interface McpAnalyzeJsonRpcResponse {
+  result?: {
+    structuredContent?: {
+      center?: string;
+      radiusKm?: number;
+      serviceableTownsCount?: number;
+      competitorsTracked?: number;
+    };
+  };
+  error?: {
+    code?: number;
+    message?: string;
+  };
+}
+
 export function isSupportedLocale(value: string | null): value is Locale {
   if (!value) return false;
   return (SUPPORTED_LOCALES as readonly string[]).includes(value);
@@ -104,6 +144,15 @@ export function isTimeoutFailure(err: unknown, status?: number): boolean {
   if (status === 408 || status === 504) return true;
   if (err instanceof DOMException) {
     return err.name === "TimeoutError" || err.name === "AbortError";
+  }
+  if (err instanceof Error) {
+    const message = err.message.toLowerCase();
+    return (
+      err.name === "TimeoutError" ||
+      err.name === "AbortError" ||
+      message.includes("timed out") ||
+      message.includes("timeout")
+    );
   }
   return false;
 }
@@ -159,7 +208,6 @@ export function validateClientWebsiteUrl(
   if (isBlockedLocalHostname(host)) {
     return { valid: false, message: t.syncPrivateHostError };
   }
-
   if (
     !host ||
     !host.includes(".") ||
@@ -192,11 +240,13 @@ export function resolveSyncErrorMessage(
     default:
       break;
   }
+
   if (!data) {
     return isTimeoutFailure(null, status)
       ? t.syncWebsiteTimeoutError
       : formatTemplate(t.syncWebsiteHttpError, { status });
   }
+
   return data.error ?? data.warning ?? t.syncWebsiteError;
 }
 
@@ -284,7 +334,6 @@ export function buildSyncedCatalog(
         : preset
           ? resolveUnitType(preset)
           : "fixed";
-
     const presetUnit = preset ? resolveUnitType(preset) : null;
     const isUnitCompatible =
       presetUnit === null || (unitType === "m2") === (presetUnit === "m2");
@@ -316,6 +365,5 @@ export function buildSyncedCatalog(
       isLiveDiscovered: true,
     });
   }
-
   return nextCatalog;
 }

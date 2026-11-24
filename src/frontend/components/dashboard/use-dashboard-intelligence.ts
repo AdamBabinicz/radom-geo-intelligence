@@ -1,101 +1,63 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  INDUSTRY_TEMPLATES,
-  resolveServiceLabel,
-  resolveUnitType,
-  type IndustryId,
-  type IndustryServiceItem,
-} from "@/src/config/industries";
+import type { IndustryId, IndustryServiceItem } from "@/src/config/industries";
 import {
   applyIndustryToMarket,
   getMarketMetrics,
   RADOM_UPHOLSTERY_MARKET,
-  type MarketDataSource,
   type MarketProfile,
   type TownGeo,
 } from "@/src/config/markets";
+import { SUPPORTED_LOCALES, translations, type Locale } from "@/src/locales";
+import type { SyncNotice } from "../features/market-controls/market-switcher";
 import {
-  formatTemplate,
-  SUPPORTED_LOCALES,
-  translations,
-  type AppDictionary,
-  type Locale,
-} from "@/src/locales";
-import type {
-  IndustryControlMode,
-  SyncNotice,
-} from "../features/market-controls/market-switcher";
+  fetchGeoCityMarket,
+  fetchLiveMarketScan,
+  fetchSyncedPricing,
+  invokeMcpAnalyzeCompetitors,
+} from "./intelligence-api";
 import {
-  buildSyncedCatalog,
-  CLIENT_SYNC_TIMEOUT_MS,
+  buildActiveMarketProfile,
+  collectTownsInRadius,
+  computeGapSummary,
+  deriveIndustryPresentation,
+} from "./intelligence-selectors";
+import {
   DEFAULT_WEBSITE_URL,
-  isPresetIndustryId,
   isSupportedLocale,
-  isTimeoutFailure,
   LEGAL_ROUTE_OVERRIDES,
   LOCALE_KEY,
-  readJsonSafe,
-  resolveSyncErrorMessage,
   resolveWorkspaceProfile,
   THEME_KEY,
   validateClientWebsiteUrl,
   type LiveScanWithNiche,
-  type PricingSyncResponse,
+  type McpAnalysisSummary,
   type SiteProfile,
 } from "./types-and-helpers";
 
-type GeoErrorCode =
-  | "CITY_EMPTY"
-  | "CITY_NOT_FOUND"
-  | "GEO_TIMEOUT"
-  | "GEO_FAILED";
-
-const GEO_RESOLVE_TIMEOUT_MS = 28_000;
-
-interface GeoResolvePayload {
-  source?: MarketDataSource;
-  market?: MarketProfile;
-  centerGps?: { lat: number; lon: number };
-  code?: GeoErrorCode;
-  error?: string;
+interface SyncPricesInternalResult {
+  ok: boolean;
+  resolvedBaseMarket?: MarketProfile;
+  catalog?: IndustryServiceItem[] | null;
+  siteProfile?: SiteProfile | null;
+  industryId?: IndustryId;
+  notice?: SyncNotice | null;
 }
 
-function isGeoTimeoutFailure(error: unknown, status?: number): boolean {
-  if (isTimeoutFailure(error, status)) return true;
-  if (error instanceof Error) {
-    const message = error.message.toLowerCase();
-    return (
-      error.name === "TimeoutError" ||
-      error.name === "AbortError" ||
-      message.includes("timed out") ||
-      message.includes("timeout")
-    );
-  }
-  return false;
+interface ScanMarketInternalOptions {
+  resolvedBaseMarket?: MarketProfile;
+  catalogOverride?: IndustryServiceItem[] | null;
+  siteProfileOverride?: SiteProfile | null;
+  industryIdOverride?: IndustryId;
+  preserveNotice?: SyncNotice | null;
 }
 
-function resolveGeoErrorMessage(
-  t: AppDictionary,
-  city: string,
-  status?: number,
-  payload?: GeoResolvePayload | null,
-  err?: unknown,
-): string {
-  if (payload?.code === "CITY_EMPTY") {
-    return t.cityEmptyError;
-  }
-  if (payload?.code === "CITY_NOT_FOUND" || status === 404) {
-    return formatTemplate(t.cityNotFoundError, { city });
-  }
-  if (payload?.code === "GEO_TIMEOUT" || isGeoTimeoutFailure(err, status)) {
-    return t.cityTimeoutError;
-  }
-  if (typeof status === "number" && status >= 400) {
-    return formatTemplate(t.cityHttpError, { status });
-  }
-  return t.cityErrorFallback;
+interface ScanMarketInternalResult {
+  ok: boolean;
+  competitorsCount: number;
+  resolvedBaseMarket?: MarketProfile;
+  effectiveIndustryId?: IndustryId;
 }
 
 export function useDashboardIntelligence() {
@@ -110,12 +72,10 @@ export function useDashboardIntelligence() {
   const [isResolvingCity, setIsResolvingCity] = useState<boolean>(false);
   const [cityError, setCityError] = useState<string | null>(null);
   const lastResolvedCityQueryRef = useRef<string>("");
-
   const [industryId, setIndustryId] = useState<IndustryId>("upholstery");
   const [customNiche, setCustomNiche] = useState<string | null>(null);
   const [selectedTown, setSelectedTown] = useState<TownGeo | null>(null);
   const [cookieModalSignal, setCookieModalSignal] = useState(0);
-
   const [websiteUrl, setWebsiteUrl] = useState<string>(DEFAULT_WEBSITE_URL);
   const [syncedCatalog, setSyncedCatalog] = useState<
     IndustryServiceItem[] | null
@@ -123,7 +83,6 @@ export function useDashboardIntelligence() {
   const [syncedCount, setSyncedCount] = useState<number>(0);
   const [siteProfile, setSiteProfile] = useState<SiteProfile | null>(null);
   const [isSyncingPrices, setIsSyncingPrices] = useState<boolean>(false);
-
   const [liveScan, setLiveScan] = useState<LiveScanWithNiche | null>(null);
   const [scannedBenchmarks, setScannedBenchmarks] = useState<
     Record<string, number>
@@ -133,6 +92,8 @@ export function useDashboardIntelligence() {
   >({});
   const [isScanningMarket, setIsScanningMarket] = useState<boolean>(false);
   const [syncNotice, setSyncNotice] = useState<SyncNotice | null>(null);
+  const [mcpSummary, setMcpSummary] = useState<McpAnalysisSummary | null>(null);
+  const [mcpError, setMcpError] = useState<string | null>(null);
 
   const focusCitySearch = () => {
     const input = document.getElementById(
@@ -153,6 +114,7 @@ export function useDashboardIntelligence() {
     } else if (isSupportedLocale(savedLocale)) {
       setLocale(savedLocale);
     }
+
     const savedTheme = window.localStorage.getItem(THEME_KEY);
     if (savedTheme === "dark") setDark(true);
   }, []);
@@ -190,6 +152,8 @@ export function useDashboardIntelligence() {
     setScannedBenchmarks({});
     setApprovedPriceOverrides({});
     setSyncNotice(null);
+    setMcpSummary(null);
+    setMcpError(null);
   };
 
   const handleCityQueryChange = (nextQuery: string) => {
@@ -203,6 +167,7 @@ export function useDashboardIntelligence() {
   ) => {
     setBaseMarket(nextMarket);
     setSelectedTown(null);
+
     const hasCustomWebsite =
       websiteUrl.trim().length > 0 && websiteUrl.trim() !== DEFAULT_WEBSITE_URL;
     if (options?.preserveCustomWebsite && hasCustomWebsite) {
@@ -210,9 +175,12 @@ export function useDashboardIntelligence() {
       setScannedBenchmarks({});
       setApprovedPriceOverrides({});
       setSyncNotice(null);
+      setMcpSummary(null);
+      setMcpError(null);
     } else {
       resetLiveIntelligence();
     }
+
     if (
       nextMarket.id === RADOM_UPHOLSTERY_MARKET.id &&
       industryId === "upholstery" &&
@@ -222,6 +190,7 @@ export function useDashboardIntelligence() {
     } else if (websiteUrl === DEFAULT_WEBSITE_URL) {
       setWebsiteUrl("");
     }
+
     if (nextMarket.id === RADOM_UPHOLSTERY_MARKET.id) {
       lastResolvedCityQueryRef.current = "";
     }
@@ -255,6 +224,8 @@ export function useDashboardIntelligence() {
       setLiveScan(null);
       setScannedBenchmarks({});
       setApprovedPriceOverrides({});
+      setMcpSummary(null);
+      setMcpError(null);
       if (
         websiteUrl === DEFAULT_WEBSITE_URL &&
         nextNiche.trim().length > 0 &&
@@ -274,92 +245,53 @@ export function useDashboardIntelligence() {
       setLiveScan(null);
       setScannedBenchmarks({});
       setApprovedPriceOverrides({});
+      setMcpSummary(null);
+      setMcpError(null);
     }
     setWebsiteUrl(next);
     if (syncNotice) setSyncNotice(null);
   };
 
   const t = translations[locale];
-  const trimmedCustomNiche = (customNiche ?? "").trim();
-  const hasManualCustomNiche = trimmedCustomNiche.length > 0;
+  const {
+    trimmedCustomNiche,
+    hasManualCustomNiche,
+    isWebsiteAutoNiche,
+    industryMode,
+    activeIndustryLabel,
+    detectedIndustryLabel,
+  } = deriveIndustryPresentation({
+    locale,
+    t,
+    industryId,
+    customNiche,
+    siteProfile,
+    liveScan,
+  });
 
-  const isWebsiteAutoNiche =
-    Boolean(liveScan?.detectedIndustryLabel) ||
-    Boolean(
-      siteProfile &&
-      (siteProfile.matchedIndustryId === "custom" ||
-        (siteProfile.matchedIndustryId &&
-          siteProfile.matchedIndustryId !== industryId)),
-    );
-
-  const industryMode: IndustryControlMode = hasManualCustomNiche
-    ? "custom"
-    : isWebsiteAutoNiche
-      ? "auto"
-      : "preset";
-
-  const detectedSiteNicheLabel =
-    liveScan?.detectedIndustryLabel ||
-    (siteProfile
-      ? locale === "pl"
-        ? siteProfile.nichePl
-        : siteProfile.nicheEn
-      : "");
-
-  const activeIndustryLabel = hasManualCustomNiche
-    ? trimmedCustomNiche
-    : isWebsiteAutoNiche && detectedSiteNicheLabel
-      ? detectedSiteNicheLabel
-      : t[INDUSTRY_TEMPLATES[industryId].labelKey];
-
-  const detectedIndustryLabel =
-    isWebsiteAutoNiche || hasManualCustomNiche
-      ? activeIndustryLabel
-      : undefined;
+  useEffect(() => {
+    setMcpSummary(null);
+    setMcpError(null);
+  }, [baseMarket.id, radiusKm, industryId, trimmedCustomNiche]);
 
   const workspaceProfile = resolveWorkspaceProfile(websiteUrl, t.accountName);
-  const baseIndustryMarket = applyIndustryToMarket(baseMarket, industryId);
-  const isCaseStudy =
-    (baseIndustryMarket.source ?? "case-study") === "case-study";
-
-  const activeBenchmarksSource = hasManualCustomNiche
-    ? []
-    : syncedCatalog !== null
-      ? syncedCatalog
-      : isWebsiteAutoNiche
-        ? []
-        : baseIndustryMarket.benchmarks;
-
-  const hasLiveAiScan = Boolean(liveScan?.aiEnhanced);
-  const market: MarketProfile = {
-    ...baseIndustryMarket,
-    benchmarks: activeBenchmarksSource.map((row) => {
-      const scanned = scannedBenchmarks[row.serviceKey];
-      const resolvedLocalPrice =
-        typeof scanned === "number" && scanned > 0
-          ? scanned
-          : hasLiveAiScan && (row.isLiveDiscovered || !isCaseStudy)
-            ? 0
-            : row.localPricePln;
-      const approvedOurPrice = approvedPriceOverrides[row.serviceKey];
-      return {
-        ...row,
-        ourPricePln:
-          typeof approvedOurPrice === "number" && approvedOurPrice > 0
-            ? approvedOurPrice
-            : row.ourPricePln,
-        localPricePln: resolvedLocalPrice,
-      };
-    }),
-  };
+  const { isCaseStudy, market } = buildActiveMarketProfile({
+    baseMarket,
+    industryId,
+    hasManualCustomNiche,
+    isWebsiteAutoNiche,
+    syncedCatalog,
+    liveScan,
+    scannedBenchmarks,
+    approvedPriceOverrides,
+  });
 
   const metrics = getMarketMetrics(market, radiusKm);
-  const townsInRadius = [
-    market.centerName,
-    ...metrics.localTowns
-      .filter((town) => town.distKm <= radiusKm)
-      .map((town) => town.name),
-  ];
+  const townsInRadius = collectTownsInRadius(market, radiusKm);
+  const { hasComparableBenchmarks, gapMetricLabel } = computeGapSummary(
+    market,
+    metrics.avgGapPct,
+  );
 
   const currentYear = new Date().getFullYear();
   const copyrightRange = currentYear >= 2027 ? `2026 - ${currentYear}` : "2026";
@@ -386,26 +318,14 @@ export function useDashboardIntelligence() {
     setIsResolvingCity(true);
     setCityError(null);
     try {
-      const response = await fetch(
-        `/api/geo/resolve?city=${encodeURIComponent(trimmed)}`,
-        { signal: AbortSignal.timeout(GEO_RESOLVE_TIMEOUT_MS) },
-      );
-      const data = await readJsonSafe<GeoResolvePayload>(response);
-      if (!response.ok || !data?.market) {
-        setCityError(resolveGeoErrorMessage(t, trimmed, response.status, data));
+      const result = await fetchGeoCityMarket(trimmed, t);
+      if (!result.ok) {
+        setCityError(result.errorMessage);
         return null;
       }
-      const nextMarket: MarketProfile = {
-        ...data.market,
-        source: data.source === "case-study" ? "case-study" : "live-geo",
-        centerGps: data.centerGps,
-      };
       lastResolvedCityQueryRef.current = trimmed.toLowerCase();
-      handleMarketChange(nextMarket, options);
-      return nextMarket;
-    } catch (err) {
-      setCityError(resolveGeoErrorMessage(t, trimmed, undefined, null, err));
-      return null;
+      handleMarketChange(result.market, options);
+      return result.market;
     } finally {
       setIsResolvingCity(false);
     }
@@ -433,9 +353,11 @@ export function useDashboardIntelligence() {
     return resolveCityByQuery(trimmed, options);
   };
 
-  const handleSyncPrices = async () => {
+  const syncPricesInternal = async (
+    resolvedBaseMarketOverride?: MarketProfile,
+  ): Promise<SyncPricesInternalResult> => {
     const trimmed = websiteUrl.trim();
-    if (!trimmed) return;
+    if (!trimmed) return { ok: false };
 
     const validation = validateClientWebsiteUrl(trimmed, t);
     if (!validation.valid) {
@@ -445,324 +367,273 @@ export function useDashboardIntelligence() {
       setLiveScan(null);
       setScannedBenchmarks({});
       setApprovedPriceOverrides({});
-      setSyncNotice({ tone: "error", message: validation.message });
-      return;
+      const notice: SyncNotice = { tone: "error", message: validation.message };
+      setSyncNotice(notice);
+      return { ok: false, notice };
     }
 
     setIsSyncingPrices(true);
     setSyncNotice(null);
 
     try {
-      const resolvedBaseMarket = await ensureCityResolved({
-        preserveCustomWebsite: true,
-      });
-      if (!resolvedBaseMarket) {
-        return;
-      }
+      const resolvedBaseMarket =
+        resolvedBaseMarketOverride ??
+        (await ensureCityResolved({ preserveCustomWebsite: true }));
+      if (!resolvedBaseMarket) return { ok: false };
 
       setLiveScan(null);
       setScannedBenchmarks({});
       setApprovedPriceOverrides({});
 
-      const response = await fetch(
-        `/api/pricing/sync?url=${encodeURIComponent(trimmed)}`,
-        {
-          signal: AbortSignal.timeout(CLIENT_SYNC_TIMEOUT_MS),
-        },
-      );
-      const data = await readJsonSafe<PricingSyncResponse>(response);
-
-      if (!data || !response.ok) {
-        setSiteProfile(null);
-        setSyncedCatalog(null);
-        setSyncedCount(0);
-        setSyncNotice({
-          tone: "error",
-          message: resolveSyncErrorMessage(
-            data,
-            response.status,
-            validation.host,
-            t,
-          ),
-        });
-        return;
-      }
-
-      const resolvedHost = data.host || validation.host;
-      const detectedNiche = (
-        (locale === "pl"
-          ? data.siteProfile?.nichePl
-          : data.siteProfile?.nicheEn) ||
-        data.siteProfile?.nichePl ||
-        data.siteProfile?.nicheEn ||
-        ""
-      ).trim();
-
-      if (
-        data.hasPublicPrices === false ||
-        data.code === "NO_PUBLIC_PRICES" ||
-        !Array.isArray(data.prices) ||
-        data.prices.length === 0
-      ) {
-        if (detectedNiche && data.siteProfile) {
-          setCustomNiche(null);
-          const detectedPreset = data.siteProfile.matchedIndustryId;
-          if (isPresetIndustryId(detectedPreset)) {
-            setIndustryId(detectedPreset);
-          }
-          setSiteProfile(data.siteProfile);
-          setSyncedCatalog([]);
-          setSyncedCount(0);
-          setSyncNotice({
-            tone: "info",
-            message: formatTemplate(t.syncNoPublicPricesInfo, {
-              niche: detectedNiche,
-              host: resolvedHost,
-            }),
-          });
-          return;
-        }
-
-        setSiteProfile(null);
-        setSyncedCatalog(null);
-        setSyncedCount(0);
-        setSyncNotice({
-          tone: "error",
-          message: formatTemplate(t.syncNoPublicPricesNoNicheError, {
-            host: resolvedHost,
-          }),
-        });
-        return;
-      }
-
-      const detectedPreset = data.siteProfile?.matchedIndustryId;
-      const effectiveIndustryId: IndustryId = isPresetIndustryId(detectedPreset)
-        ? detectedPreset
-        : industryId;
-      if (effectiveIndustryId !== industryId) {
-        setIndustryId(effectiveIndustryId);
-      }
-
-      const nextCatalog = buildSyncedCatalog(
-        data.prices,
-        effectiveIndustryId,
+      const result = await fetchSyncedPricing({
+        url: trimmed,
+        host: validation.host,
+        locale,
+        currentIndustryId: industryId,
         resolvedBaseMarket,
-      );
-
-      if (nextCatalog.length === 0) {
-        if (detectedNiche && data.siteProfile) {
-          setCustomNiche(null);
-          setSiteProfile(data.siteProfile);
-          setSyncedCatalog([]);
-          setSyncedCount(0);
-          setSyncNotice({
-            tone: "info",
-            message: formatTemplate(t.syncNoPublicPricesInfo, {
-              niche: detectedNiche,
-              host: resolvedHost,
-            }),
-          });
-        } else {
-          setSiteProfile(null);
-          setSyncedCatalog(null);
-          setSyncedCount(0);
-          setSyncNotice({ tone: "error", message: t.syncWebsiteError });
-        }
-        return;
-      }
-
-      setCustomNiche(null);
-      setSiteProfile(data.siteProfile ?? null);
-      setSyncedCatalog(nextCatalog);
-      setSyncedCount(nextCatalog.length);
-      if (data.code === "AI_FALLBACK_USED") {
-        setSyncNotice({
-          tone: "warning",
-          message: t.syncFallbackParserNotice,
-        });
-      } else if (data.aiEnhanced === false && data.warning) {
-        setSyncNotice({
-          tone: "warning",
-          message: data.warning,
-        });
-      }
-    } catch (err) {
-      setSyncNotice({
-        tone: "error",
-        message: isTimeoutFailure(err)
-          ? t.syncWebsiteTimeoutError
-          : t.syncWebsiteError,
+        t,
       });
+
+      if (!result.ok) {
+        setSiteProfile(null);
+        setSyncedCatalog(null);
+        setSyncedCount(0);
+        setSyncNotice(result.notice);
+        return { ok: false, notice: result.notice };
+      }
+
+      if (result.industryId !== industryId) {
+        setIndustryId(result.industryId);
+      }
+      setCustomNiche(null);
+      setSiteProfile(result.siteProfile);
+      setSyncedCatalog(result.catalog);
+      setSyncedCount(result.hasPublicPrices ? result.catalog.length : 0);
+      if (result.notice) {
+        setSyncNotice(result.notice);
+      }
+
+      return {
+        ok: true,
+        resolvedBaseMarket,
+        catalog: result.catalog,
+        siteProfile: result.siteProfile,
+        industryId: result.industryId,
+        notice: result.notice,
+      };
     } finally {
       setIsSyncingPrices(false);
     }
   };
 
-  const handleScanMarket = async () => {
+  const handleSyncPrices = async () => {
+    await syncPricesInternal();
+  };
+
+  const scanMarketInternal = async (
+    options?: ScanMarketInternalOptions,
+  ): Promise<ScanMarketInternalResult> => {
     setIsScanningMarket(true);
-    setSyncNotice(null);
+    if (!options?.preserveNotice) {
+      setSyncNotice(null);
+    }
 
     try {
-      const resolvedBaseMarket = await ensureCityResolved({
-        preserveCustomWebsite: true,
-      });
+      const resolvedBaseMarket =
+        options?.resolvedBaseMarket ??
+        (await ensureCityResolved({ preserveCustomWebsite: true }));
       if (!resolvedBaseMarket) {
-        return;
+        return { ok: false, competitorsCount: 0 };
       }
 
+      const effectiveIndustryId = options?.industryIdOverride ?? industryId;
+      const effectiveSiteProfileState =
+        options?.siteProfileOverride !== undefined
+          ? options.siteProfileOverride
+          : siteProfile;
+      const hasEffectiveCustomNiche =
+        options?.catalogOverride !== undefined ? false : hasManualCustomNiche;
+      const effectiveAutoNiche =
+        Boolean(
+          options?.siteProfileOverride === undefined &&
+          liveScan?.detectedIndustryLabel,
+        ) ||
+        Boolean(
+          effectiveSiteProfileState &&
+          (effectiveSiteProfileState.matchedIndustryId === "custom" ||
+            (effectiveSiteProfileState.matchedIndustryId &&
+              effectiveSiteProfileState.matchedIndustryId !==
+                effectiveIndustryId)),
+        );
+
       const cityChanged = resolvedBaseMarket.id !== baseMarket.id;
-      const effectiveTargetMarket = cityChanged
-        ? applyIndustryToMarket(resolvedBaseMarket, industryId)
-        : market;
+      const industryChanged = effectiveIndustryId !== industryId;
+      const effectiveTargetMarket =
+        cityChanged || industryChanged
+          ? applyIndustryToMarket(resolvedBaseMarket, effectiveIndustryId)
+          : market;
       const hasCustomSiteForNewCity =
         websiteUrl.trim().length > 0 &&
         websiteUrl.trim() !== DEFAULT_WEBSITE_URL;
-      const targetServices = hasManualCustomNiche
+
+      const targetServices = hasEffectiveCustomNiche
         ? []
-        : cityChanged
-          ? hasCustomSiteForNewCity && syncedCatalog !== null
-            ? syncedCatalog
-            : isWebsiteAutoNiche
-              ? []
-              : effectiveTargetMarket.benchmarks
-          : market.benchmarks;
+        : options?.catalogOverride !== undefined
+          ? (options.catalogOverride ?? [])
+          : cityChanged || industryChanged
+            ? hasCustomSiteForNewCity && syncedCatalog !== null
+              ? syncedCatalog
+              : effectiveAutoNiche
+                ? []
+                : effectiveTargetMarket.benchmarks
+            : market.benchmarks;
 
-      const effectiveSiteProfile: SiteProfile | undefined = hasManualCustomNiche
-        ? {
-            businessName: siteProfile?.businessName,
-            nichePl: trimmedCustomNiche,
-            nicheEn: trimmedCustomNiche,
-            matchedIndustryId: "custom",
-            searchQueriesPl: [trimmedCustomNiche],
-            searchQueriesEn: [trimmedCustomNiche],
-          }
-        : (siteProfile ?? undefined);
+      const effectiveSiteProfile: SiteProfile | undefined =
+        hasEffectiveCustomNiche
+          ? {
+              businessName: effectiveSiteProfileState?.businessName,
+              nichePl: trimmedCustomNiche,
+              nicheEn: trimmedCustomNiche,
+              matchedIndustryId: "custom",
+              searchQueriesPl: [trimmedCustomNiche],
+              searchQueriesEn: [trimmedCustomNiche],
+            }
+          : (effectiveSiteProfileState ?? undefined);
 
-      const response = await fetch("/api/market/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          city: effectiveTargetMarket.centerName,
-          country: effectiveTargetMarket.country,
-          countryCode: effectiveTargetMarket.countryCode,
-          industryId,
-          radiusKm,
-          locale,
-          excludeUrl: websiteUrl.trim() || undefined,
-          siteProfile: effectiveSiteProfile,
-          services: targetServices.map((row) => ({
-            serviceKey: row.serviceKey,
-            label: resolveServiceLabel(row, t, locale),
-            unitType: resolveUnitType(row),
-            ourPricePln: row.ourPricePln,
-          })),
-        }),
-        signal: AbortSignal.timeout(CLIENT_SYNC_TIMEOUT_MS),
+      const result = await fetchLiveMarketScan({
+        city: effectiveTargetMarket.centerName,
+        country: effectiveTargetMarket.country,
+        countryCode: effectiveTargetMarket.countryCode,
+        industryId: effectiveIndustryId,
+        radiusKm,
+        locale,
+        excludeUrl: websiteUrl.trim() || undefined,
+        siteProfile: effectiveSiteProfile,
+        services: targetServices,
+        t,
       });
-      const data = await readJsonSafe<
-        LiveScanWithNiche & {
-          error?: string;
-          warning?: string;
-        }
-      >(response);
 
-      if (!data) {
-        setSyncNotice({
-          tone: "error",
-          message: isTimeoutFailure(null, response.status)
-            ? t.scanMarketTimeoutError
-            : formatTemplate(t.scanMarketHttpError, {
-                status: response.status,
-              }),
-        });
-        return;
+      if (!result.ok) {
+        setSyncNotice(result.notice);
+        return {
+          ok: false,
+          competitorsCount: 0,
+          resolvedBaseMarket,
+          effectiveIndustryId,
+        };
       }
 
-      if (!response.ok) {
-        setSyncNotice({
-          tone: "error",
-          message: data.error ?? data.warning ?? t.scanMarketError,
-        });
-        return;
+      setLiveScan(result.data);
+      setScannedBenchmarks(result.scannedBenchmarks);
+      if (result.warningNotice) {
+        setSyncNotice(result.warningNotice);
       }
 
-      setLiveScan(data);
-      const nextBenchmarks: Record<string, number> = {};
-      for (const item of data.marketBenchmarks ?? []) {
-        if (
-          typeof item.serviceKey === "string" &&
-          typeof item.avgPricePln === "number" &&
-          Number.isFinite(item.avgPricePln) &&
-          item.avgPricePln > 0
-        ) {
-          nextBenchmarks[item.serviceKey] = Math.round(item.avgPricePln);
-        }
-      }
-      setScannedBenchmarks(nextBenchmarks);
-      if (!data.aiEnhanced && data.warning) {
-        setSyncNotice({
-          tone: "warning",
-          message: data.warning,
-        });
-      }
-    } catch (err) {
-      setSyncNotice({
-        tone: "error",
-        message: isTimeoutFailure(err)
-          ? t.scanMarketTimeoutError
-          : t.scanMarketError,
-      });
+      return {
+        ok: true,
+        competitorsCount: result.data.competitors.length,
+        resolvedBaseMarket,
+        effectiveIndustryId,
+      };
     } finally {
       setIsScanningMarket(false);
     }
   };
 
+  const handleScanMarket = async () => {
+    await scanMarketInternal();
+  };
+
+  const runMcpScanInternal = async (options?: {
+    resolvedBaseMarket?: MarketProfile;
+    industryIdOverride?: IndustryId;
+    competitorsCountOverride?: number;
+  }) => {
+    setMcpError(null);
+    const resolvedBaseMarket =
+      options?.resolvedBaseMarket ??
+      (await ensureCityResolved({ preserveCustomWebsite: true }));
+    if (!resolvedBaseMarket) return;
+
+    const effectiveIndustryId = options?.industryIdOverride ?? industryId;
+    const targetMarket =
+      resolvedBaseMarket.id !== baseMarket.id ||
+      effectiveIndustryId !== industryId
+        ? applyIndustryToMarket(resolvedBaseMarket, effectiveIndustryId)
+        : market;
+    const targetMetrics = getMarketMetrics(targetMarket, radiusKm);
+    const targetTowns = collectTownsInRadius(targetMarket, radiusKm);
+    const effectiveCompetitors =
+      typeof options?.competitorsCountOverride === "number" &&
+      options.competitorsCountOverride > 0
+        ? options.competitorsCountOverride
+        : liveCompetitorsCount > 0
+          ? liveCompetitorsCount
+          : targetMetrics.competitorsTracked;
+
+    const result = await invokeMcpAnalyzeCompetitors({
+      center: targetMarket.centerName,
+      radiusKm,
+      industryId: effectiveIndustryId,
+      townsInRadius: targetTowns,
+      competitorsTracked: effectiveCompetitors,
+      locale,
+      t,
+    });
+
+    if (!result.ok) {
+      setMcpError(result.errorMessage);
+      return;
+    }
+    setMcpSummary(result.summary);
+  };
+
+  const runMcpScan = async () => {
+    setRunning(true);
+    try {
+      await runMcpScanInternal();
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const runScan = async () => {
     setRunning(true);
+    setMcpError(null);
     try {
       const resolvedBaseMarket = await ensureCityResolved({
         preserveCustomWebsite: true,
       });
-      if (!resolvedBaseMarket) {
-        return;
-      }
-      const targetMarket =
-        resolvedBaseMarket.id !== baseMarket.id
-          ? applyIndustryToMarket(resolvedBaseMarket, industryId)
-          : market;
-      const targetMetrics = getMarketMetrics(targetMarket, radiusKm);
-      const targetTowns = [
-        targetMarket.centerName,
-        ...targetMetrics.localTowns
-          .filter((town) => town.distKm <= radiusKm)
-          .map((town) => town.name),
-      ];
+      if (!resolvedBaseMarket) return;
 
-      await fetch("/api/mcp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: Date.now(),
-          method: "tools/call",
-          params: {
-            name: "analyzeCompetitors",
-            arguments: {
-              center: targetMarket.centerName,
-              radiusKm,
-              industryId,
-              townsInRadius: targetTowns,
-              competitorsTracked:
-                liveCompetitorsCount > 0
-                  ? liveCompetitorsCount
-                  : targetMetrics.competitorsTracked,
-              locale,
-            },
-          },
-        }),
+      let syncResult: SyncPricesInternalResult | null = null;
+      const hasWebsite = websiteUrl.trim().length > 0;
+      if (hasWebsite && syncedCatalog === null && !hasManualCustomNiche) {
+        syncResult = await syncPricesInternal(resolvedBaseMarket);
+        if (!syncResult.ok) return;
+      }
+
+      const activeBaseMarket =
+        syncResult?.resolvedBaseMarket ?? resolvedBaseMarket;
+      const scanResult = await scanMarketInternal({
+        resolvedBaseMarket: activeBaseMarket,
+        catalogOverride: syncResult?.catalog,
+        siteProfileOverride: syncResult?.siteProfile,
+        industryIdOverride: syncResult?.industryId,
+        preserveNotice: syncResult?.notice,
+      });
+
+      await runMcpScanInternal({
+        resolvedBaseMarket: scanResult.resolvedBaseMarket ?? activeBaseMarket,
+        industryIdOverride:
+          scanResult.effectiveIndustryId ?? syncResult?.industryId,
+        competitorsCountOverride:
+          scanResult.competitorsCount > 0
+            ? scanResult.competitorsCount
+            : undefined,
       });
     } finally {
-      window.setTimeout(() => setRunning(false), 600);
+      setRunning(false);
     }
   };
 
@@ -785,17 +656,6 @@ export function useDashboardIntelligence() {
       return next;
     });
   };
-
-  const hasComparableBenchmarks = market.benchmarks.some(
-    (row) => row.localPricePln > 0,
-  );
-  const gapMetricLabel = !hasComparableBenchmarks
-    ? "—"
-    : metrics.avgGapPct < 0
-      ? `−${Math.abs(metrics.avgGapPct)}%`
-      : metrics.avgGapPct === 0
-        ? "0%"
-        : `+${metrics.avgGapPct}%`;
 
   const openCookieSettings = () => setCookieModalSignal((v) => v + 1);
 
@@ -822,6 +682,8 @@ export function useDashboardIntelligence() {
     liveScan,
     isScanningMarket,
     syncNotice,
+    mcpSummary,
+    mcpError,
     market,
     metrics,
     townsInRadius,
@@ -849,5 +711,6 @@ export function useDashboardIntelligence() {
     handleScanMarket,
     handleApplyApprovedPrices,
     runScan,
+    runMcpScan,
   };
 }

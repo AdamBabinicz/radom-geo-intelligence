@@ -41,6 +41,8 @@ export function Dashboard() {
     liveScan,
     isScanningMarket,
     syncNotice,
+    mcpSummary,
+    mcpError,
     market,
     metrics,
     townsInRadius,
@@ -68,9 +70,12 @@ export function Dashboard() {
     handleScanMarket,
     handleApplyApprovedPrices,
     runScan,
+    runMcpScan,
   } = useDashboardIntelligence();
 
   const hasPricingCalculator = market.benchmarks.length > 0;
+  const isTopScanBusy =
+    running || isSyncingPrices || isScanningMarket || isResolvingCity;
 
   return (
     <div className={dark ? "dark" : ""}>
@@ -110,14 +115,15 @@ export function Dashboard() {
                   {t.pageSubtitle}
                 </p>
               </div>
+
               <button
                 type="button"
                 onClick={runScan}
-                disabled={running}
+                disabled={isTopScanBusy}
                 className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:opacity-70"
               >
                 <Sparkles size={15} />
-                {running ? t.scanRunning : t.runScan}
+                {isTopScanBusy ? t.scanRunning : t.runScan}
               </button>
             </div>
 
@@ -194,11 +200,13 @@ export function Dashboard() {
                 locale={locale}
                 radiusKm={radiusKm}
                 running={running}
-                onRun={runScan}
+                onRun={runMcpScan}
                 industryId={industryId}
                 liveCompetitorsCount={liveCompetitorsCount}
                 detectedIndustryLabel={detectedIndustryLabel}
                 topPainPoint={topLivePainPoint}
+                mcpSummary={mcpSummary}
+                mcpError={mcpError}
               />
               {hasPricingCalculator && (
                 <PricingCalculator

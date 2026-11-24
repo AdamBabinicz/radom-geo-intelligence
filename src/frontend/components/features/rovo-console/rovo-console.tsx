@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { resolveServiceLabel, type IndustryId } from "@/src/config/industries";
 import { getMarketMetrics, type MarketProfile } from "@/src/config/markets";
+import type { McpAnalysisSummary } from "@/src/frontend/components/dashboard/types-and-helpers";
 import { formatTemplate, type AppDictionary, type Locale } from "@/src/locales";
 import type {
   ConfluenceExportResult,
@@ -33,6 +34,8 @@ interface RovoConsoleProps {
   liveCompetitorsCount?: number;
   detectedIndustryLabel?: string;
   topPainPoint?: string;
+  mcpSummary?: McpAnalysisSummary | null;
+  mcpError?: string | null;
 }
 
 interface McpJsonRpcPayload<T> {
@@ -120,6 +123,8 @@ export function RovoConsole({
   liveCompetitorsCount,
   detectedIndustryLabel,
   topPainPoint,
+  mcpSummary = null,
+  mcpError = null,
 }: RovoConsoleProps) {
   const [busyAction, setBusyAction] = useState<"confluence" | "jira" | null>(
     null,
@@ -137,9 +142,25 @@ export function RovoConsole({
 
   const metrics = getMarketMetrics(market, radiusKm);
   const effectiveCompetitorsCount =
-    typeof liveCompetitorsCount === "number" && liveCompetitorsCount > 0
-      ? liveCompetitorsCount
-      : metrics.competitorsTracked;
+    mcpSummary && mcpSummary.competitorsTracked > 0
+      ? mcpSummary.competitorsTracked
+      : typeof liveCompetitorsCount === "number" && liveCompetitorsCount > 0
+        ? liveCompetitorsCount
+        : metrics.competitorsTracked;
+
+  const effectiveTownsCount =
+    mcpSummary && mcpSummary.serviceableTownsCount > 0
+      ? mcpSummary.serviceableTownsCount
+      : metrics.serviceableTownsCount;
+
+  const completedTimeLabel = mcpSummary
+    ? new Date(mcpSummary.completedAtIso).toLocaleTimeString(
+        locale === "pl" ? "pl-PL" : "en-US",
+        { hour: "2-digit", minute: "2-digit", second: "2-digit" },
+      )
+    : null;
+
+  const visibleError = actionError ?? mcpError;
 
   const townsInRadius = [
     market.centerName,
@@ -241,14 +262,16 @@ export function RovoConsole({
           {t.rovoAgentLabel}
         </span>
       </div>
+
       <div className="mx-5 rounded-lg border border-slate-200/80 bg-slate-50 p-4 font-mono text-[11px] text-slate-700 dark:border-white/10 dark:bg-[#111a1c] dark:text-slate-300">
         <div className="mb-3 flex items-center justify-between border-b border-slate-200/80 pb-2 text-[9px] text-slate-500 dark:border-white/10 dark:text-slate-400">
           <span className="font-semibold tracking-wider">{t.executionLog}</span>
           <span className="flex items-center gap-1">
             <Clock3 size={10} />
-            {running ? t.running : t.completedAt}
+            {running ? t.running : (completedTimeLabel ?? t.completedAt)}
           </span>
         </div>
+
         <div className="flex flex-col gap-2.5">
           <LogLine
             icon={<Check size={12} />}
@@ -268,7 +291,7 @@ export function RovoConsole({
                 <Check size={12} />
               )
             }
-            text={`${t.logPricingPrefix} ${metrics.serviceableTownsCount} ${t.logPricingSuffix}`}
+            text={`${t.logPricingPrefix} ${effectiveTownsCount} ${t.logPricingSuffix}`}
             status={running ? "active" : "done"}
           />
           <LogLine
@@ -277,11 +300,17 @@ export function RovoConsole({
             status={running ? "pending" : "done"}
           />
         </div>
+
         <div className="mt-3 border-t border-slate-200/80 pt-2.5 text-[10px] font-medium text-emerald-700 dark:border-white/10 dark:text-emerald-300">
           <span className="text-slate-400 dark:text-slate-500">{"> "}</span>
-          {running ? t.agentWorking : t.runSuccessful}
+          {running
+            ? t.agentWorking
+            : mcpSummary
+              ? `${t.runSuccessful} · ${mcpSummary.center} (${mcpSummary.radiusKm} ${t.kmUnit}, ${mcpSummary.serviceableTownsCount}, ${mcpSummary.competitorsTracked} ${t.logCompetitorsSuffix})`
+              : t.runSuccessful}
         </div>
       </div>
+
       <RovoActionPreview
         t={t}
         confluenceResult={confluenceResult}
@@ -291,11 +320,13 @@ export function RovoConsole({
           setJiraResult(null);
         }}
       />
-      {actionError && (
+
+      {visibleError && (
         <div className="mx-5 mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
-          {actionError}
+          {visibleError}
         </div>
       )}
+
       <div className="flex flex-wrap items-center gap-2 px-5 pt-4">
         <button
           type="button"
@@ -318,6 +349,7 @@ export function RovoConsole({
           {busyAction === "jira" ? t.creatingJiraEpics : t.createJiraEpics}
         </button>
       </div>
+
       <div className="flex flex-col gap-3 p-5 pt-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-[280px] text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">
           {t.agentDescription}
@@ -329,7 +361,7 @@ export function RovoConsole({
           className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-teal-700 px-3.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:opacity-60 dark:bg-teal-700 dark:hover:bg-teal-600"
         >
           <Play size={12} fill="currentColor" />
-          {t.runScanShort}
+          {running ? t.running : t.runScanShort}
           <Sparkles size={12} />
         </button>
       </div>
