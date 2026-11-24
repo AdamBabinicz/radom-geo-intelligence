@@ -306,7 +306,7 @@ export function RovoConsole({
           {running
             ? t.agentWorking
             : mcpSummary
-              ? `${t.runSuccessful} · ${mcpSummary.center} (${mcpSummary.radiusKm} ${t.kmUnit}, ${mcpSummary.serviceableTownsCount}, ${mcpSummary.competitorsTracked} ${t.logCompetitorsSuffix})`
+              ? `${t.runSuccessful} · ${mcpSummary.center} (${mcpSummary.radiusKm} ${t.kmUnit}, ${mcpSummary.serviceableTownsCount} ${t.logPricingSuffix}, ${mcpSummary.competitorsTracked} ${t.logCompetitorsSuffix})`
               : t.runSuccessful}
         </div>
       </div>
