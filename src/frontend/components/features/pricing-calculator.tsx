@@ -20,6 +20,7 @@ import {
   convertFromPln,
   formatCurrencyValue,
   formatPrice,
+  type DisplayCurrency,
 } from "@/src/lib/currency";
 import type { AppDictionary, Locale } from "@/src/locales";
 
@@ -29,6 +30,7 @@ interface PricingCalculatorProps {
   t: AppDictionary;
   market: MarketProfile;
   locale: Locale;
+  currency?: DisplayCurrency;
   radiusKm: number;
   selectedTown: TownGeo | null;
 }
@@ -90,6 +92,7 @@ export function PricingCalculator({
   t,
   market,
   locale,
+  currency,
   radiusKm,
   selectedTown,
 }: PricingCalculatorProps) {
@@ -165,17 +168,21 @@ export function PricingCalculator({
   const effectiveUnits = isPerUnit ? quantity : 1;
   const serviceTotalPln = activeBenchmark.ourPricePln * effectiveUnits;
   const grandTotalPln = serviceTotalPln + travelFeePln;
-  const convertedUnit = convertFromPln(activeBenchmark.ourPricePln, locale);
-  const convertedTravel = convertFromPln(travelFeePln, locale);
-  const totalConverted = convertFromPln(grandTotalPln, locale);
+  const convertedUnit = convertFromPln(
+    activeBenchmark.ourPricePln,
+    locale,
+    currency,
+  );
+  const convertedTravel = convertFromPln(travelFeePln, locale, currency);
+  const totalConverted = convertFromPln(grandTotalPln, locale, currency);
   const serviceName = resolveServiceLabel(activeBenchmark, t, locale);
 
   const handleSubmitQuote = async () => {
     setSubmitting(true);
     setQuoteStatus(null);
     const summaryText = isPerUnit
-      ? `${serviceName} (${quantity} ${unitLabel}) · ${effectiveTownName} · ${formatCurrencyValue(totalConverted, locale)}`
-      : `${serviceName} · ${effectiveTownName} · ${formatCurrencyValue(totalConverted, locale)}`;
+      ? `${serviceName} (${quantity} ${unitLabel}) · ${effectiveTownName} · ${formatCurrencyValue(totalConverted, locale, currency)}`
+      : `${serviceName} · ${effectiveTownName} · ${formatCurrencyValue(totalConverted, locale, currency)}`;
 
     try {
       const response = await fetch("/api/mcp", {
@@ -200,6 +207,7 @@ export function PricingCalculator({
               totalPln: grandTotalPln,
               inZone: isInZone,
               locale,
+              ...(currency ? { currency } : {}),
             },
           },
         }),
@@ -271,7 +279,7 @@ export function PricingCalculator({
             {market.benchmarks.map((row, idx) => (
               <option key={row.serviceKey} value={idx}>
                 {resolveServiceLabel(row, t, locale)} (
-                {formatPrice(row.ourPricePln, locale)})
+                {formatPrice(row.ourPricePln, locale, currency)})
               </option>
             ))}
           </select>
@@ -342,7 +350,7 @@ export function PricingCalculator({
           </span>
           <span className="font-semibold text-slate-800 dark:text-slate-100">
             {travelFeePln > 0
-              ? formatCurrencyValue(convertedTravel, locale)
+              ? formatCurrencyValue(convertedTravel, locale, currency)
               : t.included}
           </span>
         </div>
@@ -354,15 +362,15 @@ export function PricingCalculator({
             {t.estimatedTotal}
           </p>
           <p className="mt-0.5 text-lg font-semibold text-teal-950 dark:text-teal-100">
-            {formatCurrencyValue(totalConverted, locale)}
+            {formatCurrencyValue(totalConverted, locale, currency)}
           </p>
           {(isPerUnit || travelFeePln > 0) && (
             <p className="mt-0.5 text-[10px] text-teal-800/80 dark:text-teal-300/80">
               {isPerUnit
-                ? `${quantity} ${unitLabel} × ${formatCurrencyValue(convertedUnit, locale)}`
-                : formatCurrencyValue(convertedUnit, locale)}
+                ? `${quantity} ${unitLabel} × ${formatCurrencyValue(convertedUnit, locale, currency)}`
+                : formatCurrencyValue(convertedUnit, locale, currency)}
               {travelFeePln > 0
-                ? ` + ${formatCurrencyValue(convertedTravel, locale)} ${t.plusTravel}`
+                ? ` + ${formatCurrencyValue(convertedTravel, locale, currency)} ${t.plusTravel}`
                 : ""}
             </p>
           )}

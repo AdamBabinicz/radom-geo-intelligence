@@ -1,4 +1,9 @@
 import type { IndustryId } from "../../config/industries";
+import {
+  isSupportedDisplayCurrency,
+  SUPPORTED_DISPLAY_CURRENCIES,
+  type DisplayCurrency,
+} from "../../lib/currency";
 import { resolveLocale, SUPPORTED_LOCALES } from "../../locales";
 import {
   analyzeCompetitors,
@@ -28,6 +33,12 @@ function parseStringArray(value: unknown): string[] | undefined {
 function parseOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
+    : undefined;
+}
+
+function parseOptionalCurrency(value: unknown): DisplayCurrency | undefined {
+  return isSupportedDisplayCurrency(value)
+    ? (value.trim().toUpperCase() as DisplayCurrency)
     : undefined;
 }
 
@@ -66,6 +77,25 @@ function parseCouncilContext(
       ? obj.selectedOptionTitle.trim()
       : "";
   if (!selectedOptionTitle) return undefined;
+
+  let policyMeasurement: CouncilExecutionContext["policyMeasurement"];
+  if (obj.policyMeasurement && typeof obj.policyMeasurement === "object") {
+    const pm = obj.policyMeasurement as Record<string, unknown>;
+    if (
+      typeof pm.passed === "boolean" &&
+      typeof pm.checksPassed === "number" &&
+      typeof pm.checksTotal === "number" &&
+      typeof pm.enforcedCorrections === "number"
+    ) {
+      policyMeasurement = {
+        passed: pm.passed,
+        checksPassed: pm.checksPassed,
+        checksTotal: pm.checksTotal,
+        enforcedCorrections: pm.enforcedCorrections,
+      };
+    }
+  }
+
   return {
     selectedOptionTitle,
     selectedOptionSummary:
@@ -85,6 +115,7 @@ function parseCouncilContext(
         ? obj.humanConstraint.trim()
         : undefined,
     actionItems: parseStringArray(obj.actionItems),
+    policyMeasurement,
   };
 }
 
@@ -99,6 +130,15 @@ const councilContextSchema = {
     criticObjections: { type: "array", items: { type: "string" } },
     humanConstraint: { type: "string" },
     actionItems: { type: "array", items: { type: "string" } },
+    policyMeasurement: {
+      type: "object",
+      properties: {
+        passed: { type: "boolean" },
+        checksPassed: { type: "number" },
+        checksTotal: { type: "number" },
+        enforcedCorrections: { type: "number" },
+      },
+    },
   },
 } as const;
 
@@ -119,6 +159,10 @@ export const mcpTools = [
         townsInRadius: { type: "array", items: { type: "string" } },
         competitorsTracked: { type: "number", minimum: 0 },
         locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
+        currency: {
+          type: "string",
+          enum: [...SUPPORTED_DISPLAY_CURRENCIES],
+        },
       },
       required: ["center", "radiusKm"],
     },
@@ -187,6 +231,10 @@ export const mcpTools = [
         },
         councilContext: councilContextSchema,
         locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
+        currency: {
+          type: "string",
+          enum: [...SUPPORTED_DISPLAY_CURRENCIES],
+        },
       },
       required: ["center", "radiusKm", "season"],
     },
@@ -208,6 +256,10 @@ export const mcpTools = [
         competitorsTracked: { type: "number", minimum: 0 },
         councilContext: councilContextSchema,
         locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
+        currency: {
+          type: "string",
+          enum: [...SUPPORTED_DISPLAY_CURRENCIES],
+        },
       },
       required: ["center", "radiusKm"],
     },
@@ -230,6 +282,10 @@ export const mcpTools = [
         totalPln: { type: "number", minimum: 0 },
         inZone: { type: "boolean" },
         locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
+        currency: {
+          type: "string",
+          enum: [...SUPPORTED_DISPLAY_CURRENCIES],
+        },
       },
       required: [
         "center",
@@ -252,6 +308,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       townsInRadius: parseStringArray(args.townsInRadius),
       competitorsTracked: parseOptionalNumber(args.competitorsTracked),
       locale: resolveLocale(args.locale),
+      currency: parseOptionalCurrency(args.currency),
     });
   }
   if (name === "calculateServiceFee") {
@@ -284,6 +341,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       benchmarks: parseBenchmarks(args.benchmarks),
       councilContext: parseCouncilContext(args.councilContext),
       locale: resolveLocale(args.locale),
+      currency: parseOptionalCurrency(args.currency),
     });
   }
   if (name === "createJiraMarketingEpics") {
@@ -295,6 +353,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       competitorsTracked: parseOptionalNumber(args.competitorsTracked),
       councilContext: parseCouncilContext(args.councilContext),
       locale: resolveLocale(args.locale),
+      currency: parseOptionalCurrency(args.currency),
     });
   }
   if (name === "createCustomerQuote") {
@@ -312,6 +371,7 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       totalPln: Number(args.totalPln ?? 0),
       inZone: typeof args.inZone === "boolean" ? args.inZone : true,
       locale: resolveLocale(args.locale),
+      currency: parseOptionalCurrency(args.currency),
     });
   }
   throw new Error(`Unknown MCP tool: ${name}`);
@@ -324,7 +384,6 @@ export async function handleMcpJsonRpc(body: {
   params?: Record<string, unknown>;
 }) {
   const id = body.id ?? null;
-
   if (body.method === "initialize") {
     return {
       jsonrpc: "2.0",
@@ -336,11 +395,9 @@ export async function handleMcpJsonRpc(body: {
       },
     };
   }
-
   if (body.method === "tools/list") {
     return { jsonrpc: "2.0", id, result: { tools: mcpTools } };
   }
-
   if (body.method === "tools/call") {
     const name = String(body.params?.name ?? "");
     const args = (body.params?.arguments ?? {}) as Record<string, unknown>;
@@ -354,7 +411,6 @@ export async function handleMcpJsonRpc(body: {
       },
     };
   }
-
   return {
     jsonrpc: "2.0",
     id,

@@ -5,6 +5,7 @@ import {
   type IndustryServiceItem,
 } from "@/src/config/industries";
 import type { MarketProfile } from "@/src/config/markets";
+import type { DisplayCurrency } from "@/src/lib/currency";
 import { formatTemplate, type AppDictionary, type Locale } from "@/src/locales";
 import type { SyncNotice } from "../features/market-controls/market-switcher";
 import {
@@ -381,6 +382,7 @@ export async function invokeMcpAnalyzeCompetitors(params: {
   townsInRadius: string[];
   competitorsTracked: number;
   locale: Locale;
+  currency?: DisplayCurrency;
   t: AppDictionary;
 }): Promise<
   | { ok: true; summary: McpAnalysisSummary }
@@ -393,8 +395,11 @@ export async function invokeMcpAnalyzeCompetitors(params: {
     townsInRadius,
     competitorsTracked,
     locale,
+    currency,
     t,
   } = params;
+
+  const startedAt = performance.now();
 
   try {
     const response = await fetch("/api/mcp", {
@@ -414,11 +419,13 @@ export async function invokeMcpAnalyzeCompetitors(params: {
             townsInRadius,
             competitorsTracked,
             locale,
+            ...(currency ? { currency } : {}),
           },
         },
       }),
     });
 
+    const durationMs = Math.max(1, Math.round(performance.now() - startedAt));
     const payload = await readJsonSafe<McpAnalyzeJsonRpcResponse>(response);
     if (!response.ok) {
       return {
@@ -439,6 +446,12 @@ export async function invokeMcpAnalyzeCompetitors(params: {
       return { ok: false, errorMessage: t.mcpEmptyError };
     }
 
+    const sourceStatus =
+      structured.sourceStatus === "connected" ||
+      structured.sourceStatus === "demo"
+        ? structured.sourceStatus
+        : undefined;
+
     return {
       ok: true,
       summary: {
@@ -456,6 +469,8 @@ export async function invokeMcpAnalyzeCompetitors(params: {
             ? structured.competitorsTracked
             : competitorsTracked,
         completedAtIso: new Date().toISOString(),
+        durationMs,
+        ...(sourceStatus ? { sourceStatus } : {}),
       },
     };
   } catch (err) {

@@ -20,6 +20,7 @@ import { RovoConsole } from "./features/rovo-console/rovo-console";
 export function Dashboard() {
   const {
     locale,
+    currency,
     dark,
     t,
     running,
@@ -58,6 +59,7 @@ export function Dashboard() {
     gapMetricLabel,
     focusCitySearch,
     toggleLocale,
+    handleCurrencyChange,
     toggleDark,
     handleCityQueryChange,
     handleAnalyzeCity,
@@ -93,10 +95,12 @@ export function Dashboard() {
           <DashboardHeader
             t={t}
             locale={locale}
+            currency={currency}
             dark={dark}
             onFocusSearch={focusCitySearch}
             onToggleDark={toggleDark}
             onToggleLocale={toggleLocale}
+            onCurrencyChange={handleCurrencyChange}
           />
 
           <div className="mx-auto max-w-[1450px] px-4 py-6 sm:px-5 md:px-9 md:py-9">
@@ -178,6 +182,7 @@ export function Dashboard() {
                 t={t}
                 market={market}
                 locale={locale}
+                currency={currency}
                 industryId={industryId}
                 syncedCount={syncedCount}
                 liveScan={liveScan}
@@ -198,6 +203,7 @@ export function Dashboard() {
                 t={t}
                 market={market}
                 locale={locale}
+                currency={currency}
                 radiusKm={radiusKm}
                 running={running}
                 onRun={runMcpScan}
@@ -213,6 +219,7 @@ export function Dashboard() {
                   t={t}
                   market={market}
                   locale={locale}
+                  currency={currency}
                   radiusKm={radiusKm}
                   selectedTown={selectedTown}
                 />
@@ -223,6 +230,7 @@ export function Dashboard() {
               t={t}
               market={market}
               locale={locale}
+              currency={currency}
               industryId={industryId}
               detectedIndustryLabel={detectedIndustryLabel}
               radiusKm={radiusKm}

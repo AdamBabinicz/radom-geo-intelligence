@@ -8,13 +8,17 @@ import {
   type CouncilServiceInput,
 } from "@/src/backend/ai/council-engine";
 import { INDUSTRY_TEMPLATES, type IndustryId } from "@/src/config/industries";
+import {
+  getLocaleCurrencyConfig,
+  normalizeDisplayCurrency,
+} from "@/src/lib/currency";
+import { resolveLocale } from "@/src/locales";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const COUNCIL_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 100;
-
 const councilCache = new Map<
   string,
   { expiresAt: number; result: CouncilDebateResult }
@@ -150,7 +154,11 @@ export async function POST(req: NextRequest) {
     const radiusKm = Number.isFinite(parsedRadius)
       ? Math.min(100, Math.max(10, Math.round(parsedRadius)))
       : 30;
-    const locale = body.locale === "en" ? "en" : "pl";
+    const locale = resolveLocale(body.locale);
+    const currency = normalizeDisplayCurrency(
+      body.currency,
+      getLocaleCurrencyConfig(locale).currency,
+    );
     const parsedGap = Number(body.avgGapPct);
     const avgGapPct = Number.isFinite(parsedGap)
       ? Math.min(200, Math.max(-100, Math.round(parsedGap)))
@@ -182,6 +190,7 @@ export async function POST(req: NextRequest) {
       industryLabel,
       radiusKm,
       locale,
+      currency,
       avgGapPct,
       townsInRadius,
       services: sanitizeServices(body.services),
@@ -197,6 +206,7 @@ export async function POST(req: NextRequest) {
       input.industryLabel ?? "",
       input.radiusKm,
       input.locale,
+      input.currency,
       input.avgGapPct,
       input.townsInRadius.slice(0, 8),
       input.services.map(
@@ -225,7 +235,6 @@ export async function POST(req: NextRequest) {
         result,
       });
     }
-
     return NextResponse.json(result);
   } catch (err) {
     console.error("[/api/council POST] error:", err);

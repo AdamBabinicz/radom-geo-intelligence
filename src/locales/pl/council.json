@@ -84,5 +84,15 @@
   "councilFallbackSafeAction3": "Dodaj kalkulator wyceny z dojazdem na górę strony głównej",
   "councilFallbackMarginSummary": "Szybsze wyrównanie do 65% średniej lokalnej na usługach podstawowych + pakietowanie usług dodatkowych.",
   "councilFallbackMarginAction1": "Wdróż wyższe stawki bazowe dla: {services}",
-  "councilFallbackMarginAction3": "Skieruj reklamy na dzielnice o najwyższych ocenach konkurencji wokół: {towns}"
+  "councilFallbackMarginAction3": "Skieruj reklamy na dzielnice o najwyższych ocenach konkurencji wokół: {towns}",
+  "councilMeasureBadge": "WERYFIKACJA REGUŁ (MEASURE)",
+  "councilMeasurePassedTemplate": "{passed}/{total} reguł spójności spełnionych",
+  "councilMeasureEnforcedTemplate": "Wymuszono {count} korekt(y) polityki przed zatwierdzeniem",
+  "councilMeasureClean": "Wszystkie proponowane ceny spełniają limity skoku i reguły operatora.",
+  "councilMeasureAdjustmentTemplate": "{option} · {service}: {before} -> {after} ({rule})",
+  "councilRuleHumanCap": "Limit górny operatora",
+  "councilRuleHumanFloor": "Limit dolny operatora",
+  "councilRuleMaxStep": "Limit zmiany ceny",
+  "councilRulePositivePrice": "Dodatnia stawka bazowa",
+  "councilMeasureConfluenceLabel": "Deterministyczna weryfikacja polityki"
 }

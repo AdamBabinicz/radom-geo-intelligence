@@ -1,4 +1,5 @@
 import type { IndustryId } from "../../config/industries";
+import type { DisplayCurrency } from "../../lib/currency";
 import type { AppDictionary, Locale } from "../../locales";
 import type { CompetitorAnalysisInput } from "../../types/market";
 
@@ -11,6 +12,13 @@ export interface ServiceBenchmarkInput {
   localPricePln: number;
 }
 
+export interface CouncilExecutionPolicySummary {
+  passed: boolean;
+  checksPassed: number;
+  checksTotal: number;
+  enforcedCorrections: number;
+}
+
 export interface CouncilExecutionContext {
   selectedOptionTitle: string;
   selectedOptionSummary?: string;
@@ -20,6 +28,7 @@ export interface CouncilExecutionContext {
   criticObjections?: string[];
   humanConstraint?: string;
   actionItems?: string[];
+  policyMeasurement?: CouncilExecutionPolicySummary;
 }
 
 export interface ExtendedAnalysisInput extends CompetitorAnalysisInput {
@@ -27,6 +36,7 @@ export interface ExtendedAnalysisInput extends CompetitorAnalysisInput {
   townsInRadius?: string[];
   competitorsTracked?: number;
   locale?: Locale;
+  currency?: DisplayCurrency;
 }
 
 export interface CustomerQuoteInput {
@@ -41,6 +51,7 @@ export interface CustomerQuoteInput {
   totalPln: number;
   inZone?: boolean;
   locale?: Locale;
+  currency?: DisplayCurrency;
 }
 
 export interface CustomerQuoteResult {
@@ -121,11 +132,9 @@ export function buildConfluenceCouncilSection(
   const modelsText = [ctx.strategistModel, ctx.criticModel]
     .filter(Boolean)
     .join(" ↔ ");
-
   const metaLines: string[] = [
     `<p><strong>${escapeHtml(t.councilApprovedOptionLabel)}:</strong> ${escapeHtml(ctx.selectedOptionTitle)}${ctx.selectedOptionSummary ? ` — ${escapeHtml(ctx.selectedOptionSummary)}` : ""}</p>`,
   ];
-
   if (modelsText) {
     const riskPart =
       typeof ctx.riskScore === "number"
@@ -135,13 +144,11 @@ export function buildConfluenceCouncilSection(
       `<p><strong>${escapeHtml(t.councilDebateModelsLabel)}:</strong> ${escapeHtml(modelsText)}${escapeHtml(riskPart)}</p>`,
     );
   }
-
   if (ctx.humanConstraint?.trim()) {
     metaLines.push(
       `<p><strong>${escapeHtml(t.councilHumanRuleLabel)}:</strong> ${escapeHtml(ctx.humanConstraint.trim())}</p>`,
     );
   }
-
   const objectionsBlock =
     ctx.criticObjections && ctx.criticObjections.length > 0
       ? `<h3>${escapeHtml(t.councilKeyCriticObjectionsHeading)}</h3><ul>${ctx.criticObjections
@@ -149,7 +156,6 @@ export function buildConfluenceCouncilSection(
           .map((item) => `<li>${escapeHtml(item)}</li>`)
           .join("")}</ul>`
       : "";
-
   const actionsBlock =
     ctx.actionItems && ctx.actionItems.length > 0
       ? `<h3>${escapeHtml(t.councilApprovedActionPlanHeading)}</h3><ol>${ctx.actionItems
@@ -211,11 +217,13 @@ export async function resolveJiraProject(atlassian: AtlassianConfig): Promise<{
 
   const fallbackRes = await fetchProject(fallbackKey);
   if (!fallbackRes.ok) return null;
+
   const fallbackProject = await readJsonSafe<{
     key?: string;
     issueTypes?: JiraIssueTypeInfo[];
   }>(fallbackRes);
   if (!fallbackProject) return null;
+
   return {
     projectKey: fallbackProject.key ?? fallbackKey,
     issueTypes: fallbackProject.issueTypes ?? [],

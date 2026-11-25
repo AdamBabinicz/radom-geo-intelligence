@@ -15,7 +15,7 @@ import {
   type IndustryId,
 } from "@/src/config/industries";
 import type { MarketProfile } from "@/src/config/markets";
-import { formatPrice } from "@/src/lib/currency";
+import { formatPrice, type DisplayCurrency } from "@/src/lib/currency";
 import type { AppDictionary, Locale } from "@/src/locales";
 
 export interface LiveCompetitorItem {
@@ -65,6 +65,7 @@ interface CompetitorTableProps {
   t: AppDictionary;
   market: MarketProfile;
   locale: Locale;
+  currency?: DisplayCurrency;
   industryId?: IndustryId;
   syncedCount?: number;
   liveScan?: LiveMarketScanResult | null;
@@ -130,6 +131,7 @@ export function CompetitorTable({
   t,
   market,
   locale,
+  currency,
   industryId = "upholstery",
   syncedCount = 0,
   liveScan = null,
@@ -251,7 +253,7 @@ export function CompetitorTable({
                     </td>
                     <td className="px-3 py-3.5 text-xs text-slate-600 dark:text-slate-400">
                       {hasLocalAvg ? (
-                        formatPrice(row.localPricePln, locale)
+                        formatPrice(row.localPricePln, locale, currency)
                       ) : (
                         <span className="text-slate-600 dark:text-slate-400">
                           —
@@ -259,7 +261,7 @@ export function CompetitorTable({
                       )}
                     </td>
                     <td className="px-3 py-3.5 text-xs font-semibold text-slate-900 dark:text-white">
-                      {formatPrice(row.ourPricePln, locale)}
+                      {formatPrice(row.ourPricePln, locale, currency)}
                     </td>
                     <td className="px-5 py-3.5 text-right">
                       {hasLocalAvg ? (

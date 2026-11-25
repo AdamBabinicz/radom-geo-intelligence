@@ -1,4 +1,5 @@
 import type { IndustryId } from "../../../config/industries";
+import type { DisplayCurrency } from "../../../lib/currency";
 import type { Locale } from "../../../locales";
 
 export const GEMINI_ROUND_TIMEOUT_MS = 14_000;
@@ -33,6 +34,7 @@ export interface CouncilRequestInput {
   industryLabel?: string;
   radiusKm: number;
   locale: Locale;
+  currency?: DisplayCurrency;
   avgGapPct: number;
   townsInRadius: string[];
   services: CouncilServiceInput[];
@@ -65,11 +67,36 @@ export interface CouncilDecisionOption {
   actionItems: string[];
 }
 
+export type CouncilPolicyViolationRule =
+  | "human_cap"
+  | "human_floor"
+  | "max_step_pct"
+  | "positive_price";
+
+export interface CouncilInvariantViolation {
+  optionId: "safe" | "margin";
+  serviceKey: string;
+  rule: CouncilPolicyViolationRule;
+  requestedPricePln: number;
+  enforcedPricePln: number;
+}
+
+export interface CouncilMeasurementReport {
+  passed: boolean;
+  checksTotal: number;
+  checksPassed: number;
+  enforcedCorrections: number;
+  parsedMaxCapPln?: number;
+  parsedMinFloorPln?: number;
+  violations: CouncilInvariantViolation[];
+}
+
 export interface CouncilDebateResult {
   aiEnhanced: boolean;
   crossProviderUsed: boolean;
   fallbackNotice?: string;
   generatedAt: string;
+  currency?: DisplayCurrency;
   models: {
     strategist: string;
     critic: string;
@@ -90,6 +117,7 @@ export interface CouncilDebateResult {
     summaryForHuman: string;
     options: [CouncilDecisionOption, CouncilDecisionOption];
   };
+  policyMeasurement?: CouncilMeasurementReport;
 }
 
 export interface ExternalProviderConfig {

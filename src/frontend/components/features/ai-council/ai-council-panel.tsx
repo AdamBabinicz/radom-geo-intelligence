@@ -27,7 +27,7 @@ import {
   type IndustryId,
 } from "@/src/config/industries";
 import type { MarketProfile } from "@/src/config/markets";
-import { formatPrice } from "@/src/lib/currency";
+import { formatPrice, type DisplayCurrency } from "@/src/lib/currency";
 import { formatTemplate, type AppDictionary, type Locale } from "@/src/locales";
 import type {
   ConfluenceExportResult,
@@ -43,6 +43,7 @@ interface AiCouncilPanelProps {
   t: AppDictionary;
   market: MarketProfile;
   locale: Locale;
+  currency?: DisplayCurrency;
   industryId: IndustryId;
   detectedIndustryLabel?: string;
   radiusKm: number;
@@ -109,6 +110,7 @@ export function AiCouncilPanel({
   t,
   market,
   locale,
+  currency,
   industryId,
   detectedIndustryLabel,
   radiusKm,
@@ -220,6 +222,7 @@ export function AiCouncilPanel({
           industryLabel: resolvedDetectedLabel || t[activeIndustry.labelKey],
           radiusKm,
           locale,
+          ...(currency ? { currency } : {}),
           avgGapPct,
           townsInRadius,
           services: market.benchmarks.map((row) => ({
@@ -304,6 +307,16 @@ export function AiCouncilPanel({
       criticObjections: debate.round2Critic.objections,
       humanConstraint: trimmedNote || undefined,
       actionItems: chosen.actionItems,
+      ...(debate.policyMeasurement
+        ? {
+            policyMeasurement: {
+              passed: debate.policyMeasurement.enforcedCorrections === 0,
+              checksPassed: debate.policyMeasurement.checksPassed,
+              checksTotal: debate.policyMeasurement.checksTotal,
+              enforcedCorrections: debate.policyMeasurement.enforcedCorrections,
+            },
+          }
+        : {}),
     };
 
     try {
@@ -332,6 +345,7 @@ export function AiCouncilPanel({
                 benchmarks: updatedBenchmarks,
                 councilContext,
                 locale,
+                ...(currency ? { currency } : {}),
               },
             },
           }),
@@ -354,6 +368,7 @@ export function AiCouncilPanel({
                 competitorsTracked: competitorsCount,
                 councilContext,
                 locale,
+                ...(currency ? { currency } : {}),
               },
             },
           }),
@@ -565,6 +580,35 @@ export function AiCouncilPanel({
             </span>
           </div>
 
+          {debate.policyMeasurement && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 text-[11px] dark:border-slate-800 dark:bg-slate-900/50">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded bg-teal-50 px-2 py-0.5 text-[10px] font-bold tracking-wider text-teal-800 dark:bg-teal-950/70 dark:text-teal-200">
+                  {t.councilMeasureBadge}
+                </span>
+                <span className="font-semibold text-slate-800 dark:text-slate-100">
+                  {formatTemplate(t.councilMeasurePassedTemplate, {
+                    passed: debate.policyMeasurement.checksPassed,
+                    total: debate.policyMeasurement.checksTotal,
+                  })}
+                </span>
+              </div>
+              <span
+                className={
+                  debate.policyMeasurement.enforcedCorrections > 0
+                    ? "font-medium text-amber-800 dark:text-amber-300"
+                    : "font-medium text-emerald-700 dark:text-emerald-300"
+                }
+              >
+                {debate.policyMeasurement.enforcedCorrections > 0
+                  ? formatTemplate(t.councilMeasureEnforcedTemplate, {
+                      count: debate.policyMeasurement.enforcedCorrections,
+                    })
+                  : t.councilMeasureClean}
+              </span>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <article className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-900/30">
               <div className="flex items-center justify-between gap-2">
@@ -596,8 +640,9 @@ export function AiCouncilPanel({
                           {move.label}
                         </span>
                         <span className="shrink-0 text-teal-700 dark:text-teal-300">
-                          {formatPrice(move.currentPricePln, locale)} →{" "}
-                          {formatPrice(move.proposedPricePln, locale)}
+                          {formatPrice(move.currentPricePln, locale, currency)}{" "}
+                          →{" "}
+                          {formatPrice(move.proposedPricePln, locale, currency)}
                         </span>
                       </div>
                       <p className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">
@@ -715,8 +760,19 @@ export function AiCouncilPanel({
                               className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-800 dark:bg-slate-800 dark:text-slate-200"
                             >
                               {adj.label}:{" "}
-                              {formatPrice(adj.currentPricePln, locale)} →{" "}
-                              <b>{formatPrice(adj.finalPricePln, locale)}</b>
+                              {formatPrice(
+                                adj.currentPricePln,
+                                locale,
+                                currency,
+                              )}{" "}
+                              →{" "}
+                              <b>
+                                {formatPrice(
+                                  adj.finalPricePln,
+                                  locale,
+                                  currency,
+                                )}
+                              </b>
                             </span>
                           ))}
                         </div>

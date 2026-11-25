@@ -1,5 +1,10 @@
 import { resolveServiceLabel, type IndustryId } from "../../config/industries";
-import { formatPrice } from "../../lib/currency";
+import {
+  formatPrice,
+  getLocaleCurrencyConfig,
+  normalizeDisplayCurrency,
+  type DisplayCurrency,
+} from "../../lib/currency";
 import {
   formatTemplate,
   resolveLocale,
@@ -27,8 +32,13 @@ export async function createJiraMarketingEpics(input: {
   competitorsTracked?: number;
   councilContext?: CouncilExecutionContext;
   locale?: Locale;
+  currency?: DisplayCurrency;
 }): Promise<JiraEpicResult> {
   const locale = resolveLocale(input.locale);
+  const currency = normalizeDisplayCurrency(
+    input.currency,
+    getLocaleCurrencyConfig(locale).currency,
+  );
   const t = translations[locale];
   const analysis = await analyzeCompetitors({
     center: input.center,
@@ -37,6 +47,7 @@ export async function createJiraMarketingEpics(input: {
     townsInRadius: input.townsInRadius,
     competitorsTracked: input.competitorsTracked,
     locale,
+    currency,
   });
 
   const ctx = input.councilContext;
@@ -252,6 +263,10 @@ export async function createCustomerQuote(
   input: CustomerQuoteInput,
 ): Promise<CustomerQuoteResult> {
   const locale = resolveLocale(input.locale);
+  const currency = normalizeDisplayCurrency(
+    input.currency,
+    getLocaleCurrencyConfig(locale).currency,
+  );
   const t = translations[locale];
   const serviceName =
     input.serviceLabel?.trim() ||
@@ -260,9 +275,9 @@ export async function createCustomerQuote(
     input.unitLabel && typeof input.quantity === "number"
       ? ` (${input.quantity} ${input.unitLabel})`
       : "";
-  const formattedUnit = formatPrice(input.unitPricePln, locale);
-  const formattedTravel = formatPrice(input.travelFeePln, locale);
-  const formattedTotal = formatPrice(input.totalPln, locale);
+  const formattedUnit = formatPrice(input.unitPricePln, locale, currency);
+  const formattedTravel = formatPrice(input.travelFeePln, locale, currency);
+  const formattedTotal = formatPrice(input.totalPln, locale, currency);
   const summary = `${t.jiraQuotePrefix} ${serviceName}${qtySuffix} · ${input.town} · ${formattedTotal}`;
 
   const atlassian = getAtlassianConfig();

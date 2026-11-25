@@ -19,6 +19,7 @@ import {
 import type { LiveMarketScanResult } from "../features/competitor-table/competitor-table";
 
 export const LOCALE_KEY = "northstar_locale";
+export const CURRENCY_KEY = "northstar_currency";
 export const THEME_KEY = "northstar_theme";
 export const DEFAULT_WEBSITE_URL = "https://pranie-dywanow.j.pl/";
 export const CLIENT_SYNC_TIMEOUT_MS = 55_000;
@@ -102,6 +103,8 @@ export interface McpAnalysisSummary {
   serviceableTownsCount: number;
   competitorsTracked: number;
   completedAtIso: string;
+  durationMs?: number;
+  sourceStatus?: "demo" | "connected";
 }
 
 export interface McpAnalyzeJsonRpcResponse {
@@ -111,6 +114,7 @@ export interface McpAnalyzeJsonRpcResponse {
       radiusKm?: number;
       serviceableTownsCount?: number;
       competitorsTracked?: number;
+      sourceStatus?: "demo" | "connected";
     };
   };
   error?: {
@@ -208,6 +212,7 @@ export function validateClientWebsiteUrl(
   if (isBlockedLocalHostname(host)) {
     return { valid: false, message: t.syncPrivateHostError };
   }
+
   if (
     !host ||
     !host.includes(".") ||
@@ -262,6 +267,7 @@ export function resolveWorkspaceProfile(
       isDomainBound: false,
     };
   }
+
   try {
     const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
     const host = new URL(withProtocol).hostname
@@ -274,12 +280,14 @@ export function resolveWorkspaceProfile(
         isDomainBound: false,
       };
     }
+
     const primaryLabel = host.split(".")[0] ?? host;
     const parts = primaryLabel.split(/[-_]+/).filter(Boolean);
     const initials =
       parts.length >= 2
         ? `${parts[0][0]}${parts[1][0]}`.toUpperCase()
         : primaryLabel.slice(0, 2).toUpperCase();
+
     return {
       initials: initials || "NO",
       displayName: host,
@@ -311,6 +319,7 @@ export function buildSyncedCatalog(
 
   const nextCatalog: IndustryServiceItem[] = [];
   const seenKeys = new Set<string>();
+
   for (const item of prices) {
     if (
       typeof item.serviceKey !== "string" ||
@@ -334,6 +343,7 @@ export function buildSyncedCatalog(
         : preset
           ? resolveUnitType(preset)
           : "fixed";
+
     const presetUnit = preset ? resolveUnitType(preset) : null;
     const isUnitCompatible =
       presetUnit === null || (unitType === "m2") === (presetUnit === "m2");
@@ -365,5 +375,6 @@ export function buildSyncedCatalog(
       isLiveDiscovered: true,
     });
   }
+
   return nextCatalog;
 }

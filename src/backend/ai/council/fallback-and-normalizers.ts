@@ -1,4 +1,10 @@
-import { formatPrice, getLocaleCurrencyConfig } from "../../../lib/currency";
+import {
+  convertToPln,
+  formatPrice,
+  getLocaleCurrencyConfig,
+  normalizeDisplayCurrency,
+  type DisplayCurrency,
+} from "../../../lib/currency";
 import {
   formatTemplate,
   resolveLocale,
@@ -8,6 +14,8 @@ import {
 import type {
   CouncilDebateResult,
   CouncilDecisionOption,
+  CouncilInvariantViolation,
+  CouncilMeasurementReport,
   CouncilPriceAdjustment,
   CouncilPriceMove,
   CouncilRequestInput,
@@ -28,6 +36,7 @@ export function stripForeignPlnSuffix(text: string): string {
 
 export function buildCompactMarketBrief(input: CouncilRequestInput): string {
   const locale = resolveLocale(input.locale);
+  const currency = input.currency;
   const resolvedIndustry = input.industryLabel?.trim() || input.industryId;
   const servicesLines = input.services
     .slice(0, 12)
@@ -36,9 +45,11 @@ export function buildCompactMarketBrief(input: CouncilRequestInput): string {
         s.localPricePln > 0
           ? `${Math.round(((s.ourPricePln - s.localPricePln) / s.localPricePln) * 100)}%`
           : "n/a";
-      const ourFormatted = formatPrice(s.ourPricePln, locale);
+      const ourFormatted = formatPrice(s.ourPricePln, locale, currency);
       const localFormatted =
-        s.localPricePln > 0 ? formatPrice(s.localPricePln, locale) : "none";
+        s.localPricePln > 0
+          ? formatPrice(s.localPricePln, locale, currency)
+          : "none";
       const localUnitsPart =
         s.localPricePln > 0 ? ` (baseUnits=${s.localPricePln})` : "";
       return `- [${s.serviceKey}] ${s.label}: our=${ourFormatted} (baseUnits=${s.ourPricePln}), localAvg=${localFormatted}${localUnitsPart} (gap ${gap})`;
@@ -119,11 +130,218 @@ export function clampPriceMoves(
   return out;
 }
 
+interface ParsedRuleBound {
+  amountPln: number;
+  rawText: string;
+}
+
+function detectRuleCurrency(
+  snippet: string,
+  fallbackCurrency: DisplayCurrency,
+): DisplayCurrency {
+  if (/(\$|usd\b)/i.test(snippet)) return "USD";
+  if (/(€|eur\b)/i.test(snippet)) return "EUR";
+  if (/(£|gbp\b)/i.test(snippet)) return "GBP";
+  if (/(zł|zl\b|pln\b)/i.test(snippet)) return "PLN";
+  return fallbackCurrency;
+}
+
+function extractNumericBound(
+  rulesText: string[],
+  pattern: RegExp,
+  fallbackCurrency: DisplayCurrency,
+): ParsedRuleBound | undefined {
+  for (const text of rulesText) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const numericToken = (match[1] || match[2] || "").replace(",", ".");
+    const parsedVal = Number.parseFloat(numericToken);
+    if (!Number.isFinite(parsedVal) || parsedVal <= 0) continue;
+    const detectedCurrency = detectRuleCurrency(match[0], fallbackCurrency);
+    return {
+      amountPln: Math.max(1, convertToPln(parsedVal, detectedCurrency)),
+      rawText: text,
+    };
+  }
+  return undefined;
+}
+
+function doesRuleTargetService(
+  ruleText: string,
+  serviceLabel: string,
+  serviceKey: string,
+): boolean {
+  const normalizedRule = ruleText.toLowerCase();
+  const tokens = `${serviceLabel} ${serviceKey}`
+    .toLowerCase()
+    .split(/[^a-z0-9ąćęłńóśźż]+/i)
+    .filter((tok) => tok.length >= 4);
+  if (tokens.length === 0) return false;
+  return tokens.some((tok) => normalizedRule.includes(tok));
+}
+
+export function measureAndEnforceCouncilPolicy(
+  options: [CouncilDecisionOption, CouncilDecisionOption],
+  input: CouncilRequestInput,
+): {
+  options: [CouncilDecisionOption, CouncilDecisionOption];
+  policyMeasurement: CouncilMeasurementReport;
+} {
+  const locale = resolveLocale(input.locale);
+  const activeCurrency =
+    input.currency ?? getLocaleCurrencyConfig(locale).currency;
+
+  const rulesPool = [
+    ...(input.humanNote?.trim() ? [input.humanNote.trim()] : []),
+    ...(input.lessonsLearned ?? []).map((l) => l.trim()).filter(Boolean),
+  ];
+
+  const capRule = extractNumericBound(
+    rulesPool,
+    /(?:cap|max(?:imum)?|under|below|at most|limit|nie przekraczaj|nie podnoś(?:[^0-9]{0,24})?(?:powyżej|nad)|maks(?:ymalnie)?|do\s+kwoty|poniżej)\D{0,24}(?:[$€£]\s*)?(\d+(?:[.,]\d+)?)\s*(?:pln|zł|zl|usd|eur|gbp|\$|€|£)?/i,
+    activeCurrency,
+  );
+  const floorRule = extractNumericBound(
+    rulesPool,
+    /(?:floor|min(?:imum)?|at least|above|co najmniej|nie mniej niż|powyżej)\D{0,24}(?:[$€£]\s*)?(\d+(?:[.,]\d+)?)\s*(?:pln|zł|zl|usd|eur|gbp|\$|€|£)?/i,
+    activeCurrency,
+  );
+
+  const violations: CouncilInvariantViolation[] = [];
+  let checksTotal = 0;
+
+  const anyCapTargetMatch = capRule
+    ? options.some((opt) =>
+        opt.priceAdjustments.some((adj) =>
+          doesRuleTargetService(capRule.rawText, adj.label, adj.serviceKey),
+        ),
+      )
+    : false;
+  const anyFloorTargetMatch = floorRule
+    ? options.some((opt) =>
+        opt.priceAdjustments.some((adj) =>
+          doesRuleTargetService(floorRule.rawText, adj.label, adj.serviceKey),
+        ),
+      )
+    : false;
+
+  const enforceOption = (opt: CouncilDecisionOption): CouncilDecisionOption => {
+    const adjusted = opt.priceAdjustments.map((adj) => {
+      let price = Math.round(adj.finalPricePln);
+      const base = Math.max(1, Math.round(adj.currentPricePln));
+
+      checksTotal += 1;
+      if (!Number.isFinite(price) || price <= 0) {
+        const enforced = base;
+        violations.push({
+          optionId: opt.id,
+          serviceKey: adj.serviceKey,
+          rule: "positive_price",
+          requestedPricePln: Number.isFinite(price) ? price : 0,
+          enforcedPricePln: enforced,
+        });
+        price = enforced;
+      }
+
+      checksTotal += 1;
+      const minStepBound = Math.max(1, Math.round(base * 0.6));
+      const maxStepBound = Math.max(minStepBound, Math.round(base * 1.65));
+      if (price > maxStepBound || price < minStepBound) {
+        const clamped = Math.min(maxStepBound, Math.max(minStepBound, price));
+        violations.push({
+          optionId: opt.id,
+          serviceKey: adj.serviceKey,
+          rule: "max_step_pct",
+          requestedPricePln: price,
+          enforcedPricePln: clamped,
+        });
+        price = clamped;
+      }
+
+      if (capRule) {
+        const appliesToService = anyCapTargetMatch
+          ? doesRuleTargetService(capRule.rawText, adj.label, adj.serviceKey)
+          : base <= capRule.amountPln * 1.4;
+        if (appliesToService) {
+          checksTotal += 1;
+          if (price > capRule.amountPln) {
+            violations.push({
+              optionId: opt.id,
+              serviceKey: adj.serviceKey,
+              rule: "human_cap",
+              requestedPricePln: price,
+              enforcedPricePln: capRule.amountPln,
+            });
+            price = capRule.amountPln;
+          }
+        }
+      }
+
+      if (floorRule) {
+        const appliesToService = anyFloorTargetMatch
+          ? doesRuleTargetService(floorRule.rawText, adj.label, adj.serviceKey)
+          : true;
+        if (appliesToService) {
+          checksTotal += 1;
+          const safeFloor =
+            capRule && capRule.amountPln < floorRule.amountPln
+              ? capRule.amountPln
+              : floorRule.amountPln;
+          if (price < safeFloor) {
+            violations.push({
+              optionId: opt.id,
+              serviceKey: adj.serviceKey,
+              rule: "human_floor",
+              requestedPricePln: price,
+              enforcedPricePln: safeFloor,
+            });
+            price = safeFloor;
+          }
+        }
+      }
+
+      return {
+        ...adj,
+        finalPricePln: price,
+      };
+    });
+
+    return {
+      ...opt,
+      priceAdjustments: adjusted,
+    };
+  };
+
+  const enforcedOptions: [CouncilDecisionOption, CouncilDecisionOption] = [
+    enforceOption(options[0]),
+    enforceOption(options[1]),
+  ];
+
+  const checksPassed = Math.max(0, checksTotal - violations.length);
+
+  return {
+    options: enforcedOptions,
+    policyMeasurement: {
+      passed: violations.length === 0,
+      checksTotal,
+      checksPassed,
+      enforcedCorrections: violations.length,
+      parsedMaxCapPln: capRule?.amountPln,
+      parsedMinFloorPln: floorRule?.amountPln,
+      violations,
+    },
+  };
+}
+
 export function buildGroundedFallbackCouncil(
   input: CouncilRequestInput,
   fallbackNotice?: string,
 ): CouncilDebateResult {
   const locale = resolveLocale(input.locale);
+  const currency = normalizeDisplayCurrency(
+    input.currency,
+    getLocaleCurrencyConfig(locale).currency,
+  );
   const t = translations[locale];
   const isCustomOrNonUpholstery =
     Boolean(input.industryLabel?.trim()) || input.industryId !== "upholstery";
@@ -152,7 +370,7 @@ export function buildGroundedFallbackCouncil(
         s.localPricePln > 0
           ? formatTemplate(t.councilFallbackRationaleGap, {
               city: input.city,
-              avg: formatPrice(s.localPricePln, locale),
+              avg: formatPrice(s.localPricePln, locale, currency),
             })
           : formatTemplate(t.councilFallbackRationaleMargin, {
               radiusKm: input.radiusKm,
@@ -197,18 +415,58 @@ export function buildGroundedFallbackCouncil(
   const marginActionMiddle = isCustomOrNonUpholstery
     ? t.councilFallbackMarginActionCustom
     : formatTemplate(t.councilFallbackMarginActionUpholstery, {
-        threshold: formatPrice(200, locale),
+        threshold: formatPrice(200, locale, currency),
       });
 
   const sensitivityReason = topPain
     ? formatTemplate(t.councilFallbackSensitivityWithPain, { pain: topPain })
     : t.councilFallbackSensitivityDefault;
 
+  const rawOptions: [CouncilDecisionOption, CouncilDecisionOption] = [
+    {
+      id: "safe",
+      title: t.councilOptionSafeTitle,
+      summary: t.councilFallbackSafeSummary,
+      priceAdjustments: safeAdjustments,
+      actionItems: [
+        formatTemplate(t.councilFallbackSafeAction1, {
+          city: input.city,
+          radiusKm: input.radiusKm,
+        }),
+        formatTemplate(t.councilFallbackSafeAction2, {
+          towns: secondaryTowns,
+        }),
+        t.councilFallbackSafeAction3,
+      ],
+    },
+    {
+      id: "margin",
+      title: t.councilOptionMarginTitle,
+      summary: t.councilFallbackMarginSummary,
+      priceAdjustments: marginAdjustments,
+      actionItems: [
+        formatTemplate(t.councilFallbackMarginAction1, {
+          services: topTargets.map((item) => item.label).join(", "),
+        }),
+        marginActionMiddle,
+        formatTemplate(t.councilFallbackMarginAction3, {
+          towns: secondaryTowns,
+        }),
+      ],
+    },
+  ];
+
+  const measured = measureAndEnforceCouncilPolicy(rawOptions, {
+    ...input,
+    currency,
+  });
+
   return {
     aiEnhanced: false,
     crossProviderUsed: false,
     fallbackNotice,
     generatedAt: new Date().toISOString(),
+    currency,
     models: {
       strategist: t.councilFallbackModelStrategist,
       critic: t.councilFallbackModelCritic,
@@ -247,40 +505,9 @@ export function buildGroundedFallbackCouncil(
         reason: sensitivityReason,
         humanSuffix,
       }),
-      options: [
-        {
-          id: "safe",
-          title: t.councilOptionSafeTitle,
-          summary: t.councilFallbackSafeSummary,
-          priceAdjustments: safeAdjustments,
-          actionItems: [
-            formatTemplate(t.councilFallbackSafeAction1, {
-              city: input.city,
-              radiusKm: input.radiusKm,
-            }),
-            formatTemplate(t.councilFallbackSafeAction2, {
-              towns: secondaryTowns,
-            }),
-            t.councilFallbackSafeAction3,
-          ],
-        },
-        {
-          id: "margin",
-          title: t.councilOptionMarginTitle,
-          summary: t.councilFallbackMarginSummary,
-          priceAdjustments: marginAdjustments,
-          actionItems: [
-            formatTemplate(t.councilFallbackMarginAction1, {
-              services: topTargets.map((item) => item.label).join(", "),
-            }),
-            marginActionMiddle,
-            formatTemplate(t.councilFallbackMarginAction3, {
-              towns: secondaryTowns,
-            }),
-          ],
-        },
-      ],
+      options: measured.options,
     },
+    policyMeasurement: measured.policyMeasurement,
   };
 }
 
@@ -289,10 +516,11 @@ export function normalizeSynthesisOption(
   fallback: CouncilDecisionOption,
   forcedId: "safe" | "margin",
   locale?: Locale,
+  currencyOverride?: DisplayCurrency,
 ): CouncilDecisionOption {
   if (!raw || !raw.summary) return fallback;
   const resolved = resolveLocale(locale);
-  const { currency } = getLocaleCurrencyConfig(resolved);
+  const { currency } = getLocaleCurrencyConfig(resolved, currencyOverride);
   const cleanText = (value: string) =>
     currency !== "PLN" ? stripForeignPlnSuffix(value) : value.trim();
 

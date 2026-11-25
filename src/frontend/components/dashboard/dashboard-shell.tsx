@@ -15,6 +15,11 @@ import {
   TrendingUp,
   Waves,
 } from "lucide-react";
+import {
+  isSupportedDisplayCurrency,
+  SUPPORTED_DISPLAY_CURRENCIES,
+  type DisplayCurrency,
+} from "@/src/lib/currency";
 import type { AppDictionary, Locale } from "@/src/locales";
 import type { WorkspaceProfile } from "./types-and-helpers";
 
@@ -145,19 +150,23 @@ export function DashboardSidebar({
 interface DashboardHeaderProps {
   t: AppDictionary;
   locale: Locale;
+  currency?: DisplayCurrency;
   dark: boolean;
   onFocusSearch: () => void;
   onToggleDark: () => void;
   onToggleLocale: () => void;
+  onCurrencyChange?: (nextCurrency: DisplayCurrency) => void;
 }
 
 export function DashboardHeader({
   t,
   locale,
+  currency,
   dark,
   onFocusSearch,
   onToggleDark,
   onToggleLocale,
+  onCurrencyChange,
 }: DashboardHeaderProps) {
   return (
     <header className="sticky top-0 z-[5] flex h-[68px] items-center justify-between border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-md dark:border-slate-800 dark:bg-[#141c1e]/90 sm:px-5 md:px-9">
@@ -189,6 +198,33 @@ export function DashboardHeader({
         >
           {dark ? <Sun size={17} /> : <Moon size={17} />}
         </button>
+        {onCurrencyChange && currency ? (
+          <label className="flex h-9 items-center rounded-lg border border-slate-200 px-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+            <span className="sr-only">{t.displayCurrencyLabel}</span>
+            <select
+              aria-label={t.displayCurrencyLabel}
+              title={t.displayCurrencyLabel}
+              value={currency}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (isSupportedDisplayCurrency(next)) {
+                  onCurrencyChange(next);
+                }
+              }}
+              className="cursor-pointer bg-transparent text-xs font-semibold text-slate-700 focus:outline-none dark:bg-[#141c1e] dark:text-slate-200"
+            >
+              {SUPPORTED_DISPLAY_CURRENCIES.map((code) => (
+                <option
+                  key={code}
+                  value={code}
+                  className="bg-white text-slate-900 dark:bg-[#141c1e] dark:text-slate-100"
+                >
+                  {code}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <button
           type="button"
           onClick={onToggleLocale}

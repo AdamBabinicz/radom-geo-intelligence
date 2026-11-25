@@ -33,5 +33,8 @@
   "avgMarketGap": "Average market gap",
   "belowMarketAverage": "Our prices vs. local average",
   "footerLeft": "GeoIntelligence & Service Operations Hub",
-  "footerRight": "Radom case study · Verified baseline + live data"
+  "footerRight": "Radom case study · Verified baseline + live data",
+  "displayCurrencyLabel": "Display currency",
+  "currencyAutoMarketHint": "Auto from market",
+  "resetCurrencyToMarket": "Match market currency"
 }

@@ -14,6 +14,7 @@ import {
 import { resolveServiceLabel, type IndustryId } from "@/src/config/industries";
 import { getMarketMetrics, type MarketProfile } from "@/src/config/markets";
 import type { McpAnalysisSummary } from "@/src/frontend/components/dashboard/types-and-helpers";
+import type { DisplayCurrency } from "@/src/lib/currency";
 import { formatTemplate, type AppDictionary, type Locale } from "@/src/locales";
 import type {
   ConfluenceExportResult,
@@ -27,6 +28,7 @@ interface RovoConsoleProps {
   t: AppDictionary;
   market: MarketProfile;
   locale: Locale;
+  currency?: DisplayCurrency;
   radiusKm: number;
   running: boolean;
   onRun: () => void;
@@ -116,6 +118,7 @@ export function RovoConsole({
   t,
   market,
   locale,
+  currency,
   radiusKm,
   running,
   onRun,
@@ -138,7 +141,7 @@ export function RovoConsole({
     setConfluenceResult(null);
     setJiraResult(null);
     setActionError(null);
-  }, [market.id, radiusKm, industryId, detectedIndustryLabel]);
+  }, [market.id, radiusKm, industryId, detectedIndustryLabel, currency]);
 
   const metrics = getMarketMetrics(market, radiusKm);
   const effectiveCompetitorsCount =
@@ -160,6 +163,7 @@ export function RovoConsole({
       )
     : null;
 
+  const hasExecuted = Boolean(mcpSummary) && !running;
   const visibleError = actionError ?? mcpError;
 
   const townsInRadius = [
@@ -191,6 +195,7 @@ export function RovoConsole({
             localPricePln: b.localPricePln,
           })),
           locale,
+          ...(currency ? { currency } : {}),
         },
         t,
       );
@@ -222,6 +227,7 @@ export function RovoConsole({
           townsInRadius,
           competitorsTracked: effectiveCompetitorsCount,
           locale,
+          ...(currency ? { currency } : {}),
         },
         t,
       );
@@ -240,6 +246,38 @@ export function RovoConsole({
     }
   };
 
+  const stepStatusDoneOrPending = (
+    step: "first" | "later",
+  ): "done" | "active" | "pending" => {
+    if (running) {
+      return step === "first" ? "active" : "pending";
+    }
+    return hasExecuted ? "done" : "pending";
+  };
+
+  const renderStepIcon = (status: "done" | "active" | "pending") => {
+    if (status === "done") return <Check size={12} />;
+    if (status === "active")
+      return <Circle size={11} className="animate-pulse" />;
+    return <Circle size={11} />;
+  };
+
+  const firstGroupStatus = running ? "done" : stepStatusDoneOrPending("first");
+  const thirdStepStatus = stepStatusDoneOrPending("first");
+  const fourthStepStatus = stepStatusDoneOrPending("later");
+
+  const latencyLabel =
+    hasExecuted && typeof mcpSummary?.durationMs === "number"
+      ? formatTemplate(t.mcpLatencyTemplate, { ms: mcpSummary.durationMs })
+      : null;
+
+  const sourceLabel =
+    hasExecuted && mcpSummary?.sourceStatus
+      ? mcpSummary.sourceStatus === "connected"
+        ? t.mcpSourceLive
+        : t.mcpSourceBaseline
+      : null;
+
   return (
     <section
       id="agent"
@@ -253,7 +291,15 @@ export function RovoConsole({
           <div>
             <h2 className="text-sm font-semibold">{t.agentTitle}</h2>
             <p className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
+              <span
+                className={`size-1.5 rounded-full ${
+                  hasExecuted
+                    ? "bg-emerald-500"
+                    : running
+                      ? "animate-pulse bg-amber-500"
+                      : "bg-slate-400 dark:bg-slate-500"
+                }`}
+              />
               {t.agentConnected}
             </p>
           </div>
@@ -264,50 +310,72 @@ export function RovoConsole({
       </div>
 
       <div className="mx-5 rounded-lg border border-slate-200/80 bg-slate-50 p-4 font-mono text-[11px] text-slate-700 dark:border-white/10 dark:bg-[#111a1c] dark:text-slate-300">
-        <div className="mb-3 flex items-center justify-between border-b border-slate-200/80 pb-2 text-[9px] text-slate-500 dark:border-white/10 dark:text-slate-400">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-2 text-[9px] text-slate-500 dark:border-white/10 dark:text-slate-400">
           <span className="font-semibold tracking-wider">{t.executionLog}</span>
-          <span className="flex items-center gap-1">
+          <span className="flex items-center gap-1.5">
+            {hasExecuted && (
+              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300">
+                {t.mcpStatusVerified}
+              </span>
+            )}
             <Clock3 size={10} />
-            {running ? t.running : (completedTimeLabel ?? t.completedAt)}
+            {running
+              ? t.running
+              : hasExecuted
+                ? (completedTimeLabel ?? t.completedAt)
+                : t.mcpStatusIdle}
           </span>
         </div>
 
         <div className="flex flex-col gap-2.5">
           <LogLine
-            icon={<Check size={12} />}
+            icon={renderStepIcon(firstGroupStatus)}
             text={`${t.logConnectedPrefix} ${market.centerName} (${radiusKm} ${t.kmUnit})`}
-            status="done"
+            status={firstGroupStatus}
           />
           <LogLine
-            icon={<Check size={12} />}
+            icon={renderStepIcon(firstGroupStatus)}
             text={`${t.logCompetitorsPrefix} ${effectiveCompetitorsCount} ${t.logCompetitorsSuffix}`}
-            status="done"
+            status={firstGroupStatus}
           />
           <LogLine
-            icon={
-              running ? (
-                <Circle size={11} className="animate-pulse" />
-              ) : (
-                <Check size={12} />
-              )
-            }
+            icon={renderStepIcon(thirdStepStatus)}
             text={`${t.logPricingPrefix} ${effectiveTownsCount} ${t.logPricingSuffix}`}
-            status={running ? "active" : "done"}
+            status={thirdStepStatus}
           />
           <LogLine
-            icon={running ? <Circle size={11} /> : <Check size={12} />}
-            text={t.logConfluence}
-            status={running ? "pending" : "done"}
+            icon={renderStepIcon(fourthStepStatus)}
+            text={
+              hasExecuted || running
+                ? t.logConfluence
+                : `${t.logConfluence} (${t.mcpStepReadySuffix})`
+            }
+            status={fourthStepStatus}
           />
         </div>
 
-        <div className="mt-3 border-t border-slate-200/80 pt-2.5 text-[10px] font-medium text-emerald-700 dark:border-white/10 dark:text-emerald-300">
+        <div
+          className={`mt-3 border-t border-slate-200/80 pt-2.5 text-[10px] font-medium dark:border-white/10 ${
+            running
+              ? "text-amber-700 dark:text-amber-300"
+              : hasExecuted
+                ? "text-emerald-700 dark:text-emerald-300"
+                : "text-slate-600 dark:text-slate-400"
+          }`}
+        >
           <span className="text-slate-400 dark:text-slate-500">{"> "}</span>
           {running
             ? t.agentWorking
             : mcpSummary
               ? `${t.runSuccessful} · ${mcpSummary.center} (${mcpSummary.radiusKm} ${t.kmUnit}, ${mcpSummary.serviceableTownsCount} ${t.logPricingSuffix}, ${mcpSummary.competitorsTracked} ${t.logCompetitorsSuffix})`
-              : t.runSuccessful}
+              : t.mcpIdleHint}
+          {(latencyLabel || sourceLabel) && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[9px] font-normal text-slate-500 dark:text-slate-400">
+              {latencyLabel && <span>{latencyLabel}</span>}
+              {latencyLabel && sourceLabel && <span>·</span>}
+              {sourceLabel && <span>{sourceLabel}</span>}
+            </div>
+          )}
         </div>
       </div>
 
@@ -393,7 +461,7 @@ function LogLine({
       </span>
       <span
         className={
-          status === "pending" ? "text-slate-400 dark:text-slate-500" : ""
+          status === "pending" ? "text-slate-500 dark:text-slate-400" : ""
         }
       >
         {text}

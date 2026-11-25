@@ -9,6 +9,11 @@ import {
   type MarketProfile,
   type TownGeo,
 } from "@/src/config/markets";
+import {
+  isSupportedDisplayCurrency,
+  resolveMarketCurrency,
+  type DisplayCurrency,
+} from "@/src/lib/currency";
 import { SUPPORTED_LOCALES, translations, type Locale } from "@/src/locales";
 import type { SyncNotice } from "../features/market-controls/market-switcher";
 import {
@@ -24,6 +29,7 @@ import {
   deriveIndustryPresentation,
 } from "./intelligence-selectors";
 import {
+  CURRENCY_KEY,
   DEFAULT_WEBSITE_URL,
   isSupportedLocale,
   LEGAL_ROUTE_OVERRIDES,
@@ -62,6 +68,10 @@ interface ScanMarketInternalResult {
 
 export function useDashboardIntelligence() {
   const [locale, setLocale] = useState<Locale>("en");
+  const [currency, setCurrencyState] = useState<DisplayCurrency>(() =>
+    resolveMarketCurrency(RADOM_UPHOLSTERY_MARKET.countryCode, "en"),
+  );
+  const hasManualCurrencyOverrideRef = useRef(false);
   const [dark, setDark] = useState(false);
   const [running, setRunning] = useState(false);
   const [radiusKm, setRadiusKm] = useState<number>(30);
@@ -115,6 +125,12 @@ export function useDashboardIntelligence() {
       setLocale(savedLocale);
     }
 
+    const savedCurrency = window.localStorage.getItem(CURRENCY_KEY);
+    if (isSupportedDisplayCurrency(savedCurrency)) {
+      hasManualCurrencyOverrideRef.current = true;
+      setCurrencyState(savedCurrency);
+    }
+
     const savedTheme = window.localStorage.getItem(THEME_KEY);
     if (savedTheme === "dark") setDark(true);
   }, []);
@@ -136,6 +152,18 @@ export function useDashboardIntelligence() {
     const next = SUPPORTED_LOCALES[nextIndex];
     setLocale(next);
     window.localStorage.setItem(LOCALE_KEY, next);
+  };
+
+  const handleCurrencyChange = (nextCurrency: DisplayCurrency) => {
+    hasManualCurrencyOverrideRef.current = true;
+    setCurrencyState(nextCurrency);
+    window.localStorage.setItem(CURRENCY_KEY, nextCurrency);
+  };
+
+  const resetCurrencyToMarket = () => {
+    hasManualCurrencyOverrideRef.current = false;
+    window.localStorage.removeItem(CURRENCY_KEY);
+    setCurrencyState(resolveMarketCurrency(baseMarket.countryCode, locale));
   };
 
   const toggleDark = () => {
@@ -167,6 +195,9 @@ export function useDashboardIntelligence() {
   ) => {
     setBaseMarket(nextMarket);
     setSelectedTown(null);
+    if (!hasManualCurrencyOverrideRef.current) {
+      setCurrencyState(resolveMarketCurrency(nextMarket.countryCode, locale));
+    }
 
     const hasCustomWebsite =
       websiteUrl.trim().length > 0 && websiteUrl.trim() !== DEFAULT_WEBSITE_URL;
@@ -272,7 +303,7 @@ export function useDashboardIntelligence() {
   useEffect(() => {
     setMcpSummary(null);
     setMcpError(null);
-  }, [baseMarket.id, radiusKm, industryId, trimmedCustomNiche]);
+  }, [baseMarket.id, radiusKm, industryId, trimmedCustomNiche, currency]);
 
   const workspaceProfile = resolveWorkspaceProfile(websiteUrl, t.accountName);
   const { isCaseStudy, market } = buildActiveMarketProfile({
@@ -578,6 +609,7 @@ export function useDashboardIntelligence() {
       townsInRadius: targetTowns,
       competitorsTracked: effectiveCompetitors,
       locale,
+      currency,
       t,
     });
 
@@ -661,6 +693,7 @@ export function useDashboardIntelligence() {
 
   return {
     locale,
+    currency,
     dark,
     t,
     running,
@@ -699,6 +732,8 @@ export function useDashboardIntelligence() {
     gapMetricLabel,
     focusCitySearch,
     toggleLocale,
+    handleCurrencyChange,
+    resetCurrencyToMarket,
     toggleDark,
     handleCityQueryChange,
     handleAnalyzeCity,

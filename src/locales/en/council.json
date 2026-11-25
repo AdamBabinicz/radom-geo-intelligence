@@ -84,5 +84,15 @@
   "councilFallbackSafeAction3": "Feature instant zone quote calculator above the fold",
   "councilFallbackMarginSummary": "Faster lift toward 65% of local average on core services plus high-margin add-on bundles.",
   "councilFallbackMarginAction1": "Roll out higher base rates for: {services}",
-  "councilFallbackMarginAction3": "Target high-intent suburbs around {towns}"
+  "councilFallbackMarginAction3": "Target high-intent suburbs around {towns}",
+  "councilMeasureBadge": "DETERMINISTIC MEASURE",
+  "councilMeasurePassedTemplate": "{passed}/{total} invariant checks passed",
+  "councilMeasureEnforcedTemplate": "{count} policy correction(s) enforced before approval",
+  "councilMeasureClean": "All proposed prices comply with step limits & operator rules.",
+  "councilMeasureAdjustmentTemplate": "{option} · {service}: {before} -> {after} ({rule})",
+  "councilRuleHumanCap": "Operator cap",
+  "councilRuleHumanFloor": "Operator floor",
+  "councilRuleMaxStep": "Max step bound",
+  "councilRulePositivePrice": "Positive rate floor",
+  "councilMeasureConfluenceLabel": "Deterministic policy check"
 }

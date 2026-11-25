@@ -93,6 +93,63 @@ test("currency conversion and formatting handle PLN/EN precision rules", async (
   assert.ok(plFormatted.includes("zł"), `Expected zł in ${plFormatted}`);
 });
 
+test("display currency decouples from UI locale and resolves from market country", async () => {
+  const {
+    convertFromPln,
+    convertToPln,
+    formatPrice,
+    isSupportedDisplayCurrency,
+    normalizeDisplayCurrency,
+    resolveMarketCurrency,
+  } = await loadTsModule("src/lib/currency.ts");
+
+  assert.equal(resolveMarketCurrency("pl", "en"), "PLN");
+  assert.equal(resolveMarketCurrency("DE", "pl"), "EUR");
+  assert.equal(resolveMarketCurrency("GB", "en"), "GBP");
+  assert.equal(resolveMarketCurrency("US", "pl"), "USD");
+  assert.equal(resolveMarketCurrency(undefined, "en"), "USD");
+  assert.equal(resolveMarketCurrency(undefined, "pl"), "PLN");
+
+  assert.equal(isSupportedDisplayCurrency("PLN"), true);
+  assert.equal(isSupportedDisplayCurrency("GBP"), true);
+  assert.equal(isSupportedDisplayCurrency("CHF"), false);
+  assert.equal(normalizeDisplayCurrency("eur"), "EUR");
+  assert.equal(normalizeDisplayCurrency("usd"), "USD");
+  assert.equal(normalizeDisplayCurrency("unknown"), "PLN");
+
+  assert.equal(convertToPln(249, "PLN"), 249);
+  assert.equal(convertToPln(25, "USD"), 100);
+  const eurToPln = convertToPln(100, "EUR");
+  assert.ok(
+    eurToPln > 350 && eurToPln < 500,
+    `Unexpected EUR->PLN: ${eurToPln}`,
+  );
+
+  assert.equal(convertFromPln(249, "en", "PLN"), 249);
+  const radomInEnglishPln = formatPrice(249, "en", "PLN");
+  assert.ok(
+    radomInEnglishPln.includes("249"),
+    `Expected 249 in ${radomInEnglishPln}`,
+  );
+  assert.equal(
+    radomInEnglishPln.includes("$"),
+    false,
+    `PLN override must not format as USD: ${radomInEnglishPln}`,
+  );
+  assert.match(radomInEnglishPln, /PLN|zł/i);
+
+  const eurAmount = convertFromPln(100, "en", "EUR");
+  const gbpAmount = convertFromPln(100, "en", "GBP");
+  assert.ok(
+    eurAmount > 15 && eurAmount < 35,
+    `Unexpected EUR amount: ${eurAmount}`,
+  );
+  assert.ok(
+    gbpAmount > 15 && gbpAmount < 35,
+    `Unexpected GBP amount: ${gbpAmount}`,
+  );
+});
+
 test("industry templates and service unit resolvers handle preset and live niches", async () => {
   const { INDUSTRY_TEMPLATES, resolveServiceLabel, resolveUnitType } =
     await loadTsModule("src/config/industries.ts");

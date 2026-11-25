@@ -1,5 +1,9 @@
 import { ThinkingLevel } from "@google/genai";
-import { formatPrice, getLocaleCurrencyConfig } from "../../lib/currency";
+import {
+  formatPrice,
+  getLocaleCurrencyConfig,
+  normalizeDisplayCurrency,
+} from "../../lib/currency";
 import { formatTemplate, resolveLocale, translations } from "../../locales";
 import {
   GEMINI_TEXT_MODEL,
@@ -11,6 +15,7 @@ import {
   buildGroundedFallbackCouncil,
   buildRound3FallbackOptions,
   clampPriceMoves,
+  measureAndEnforceCouncilPolicy,
   normalizeSynthesisOption,
   stripForeignPlnSuffix,
 } from "./council/fallback-and-normalizers";
@@ -38,7 +43,10 @@ export type {
   CouncilCompetitorInput,
   CouncilDebateResult,
   CouncilDecisionOption,
+  CouncilInvariantViolation,
+  CouncilMeasurementReport,
   CouncilPainPointInput,
+  CouncilPolicyViolationRule,
   CouncilPriceAdjustment,
   CouncilPriceMove,
   CouncilRequestInput,
@@ -52,7 +60,11 @@ export async function runAiCouncil(
   const secondary = getSecondaryProvider();
   const locale = resolveLocale(input.locale);
   const t = translations[locale];
-  const currencyCfg = getLocaleCurrencyConfig(locale);
+  const currency = normalizeDisplayCurrency(
+    input.currency,
+    getLocaleCurrencyConfig(locale).currency,
+  );
+  const currencyCfg = getLocaleCurrencyConfig(locale, currency);
   const isForeignCurrency = currencyCfg.currency !== "PLN";
 
   let languageLabel = locale.toUpperCase();
@@ -64,7 +76,11 @@ export async function runAiCouncil(
     // Keep uppercase locale code fallback
   }
 
-  const sampleTarget = formatPrice(70 * currencyCfg.plnPerUnit, locale);
+  const sampleTarget = formatPrice(
+    70 * currencyCfg.plnPerUnit,
+    locale,
+    currency,
+  );
   const currencyRule = isForeignCurrency
     ? ` DISPLAY CURRENCY IS STRICTLY ${currencyCfg.currency}. Cite prices ONLY in ${currencyCfg.currency} in every text field — NEVER write 'PLN', 'zł', or add parenthetical base-unit conversions. For JSON numeric fields (currentPricePln, proposedPricePln, finalPricePln), always output exact integer targetPrice * ${currencyCfg.plnPerUnit} (e.g., ${sampleTarget} -> ${70 * currencyCfg.plnPerUnit}) matching baseUnits.`
     : "";
@@ -72,7 +88,11 @@ export async function runAiCouncil(
   const cleanProse = (value: string) =>
     isForeignCurrency ? stripForeignPlnSuffix(value) : value.trim();
 
-  const normalizedInput: CouncilRequestInput = { ...input, locale };
+  const normalizedInput: CouncilRequestInput = {
+    ...input,
+    locale,
+    currency,
+  };
   const brief = buildCompactMarketBrief(normalizedInput);
 
   if (!ai && !secondary) {
@@ -171,8 +191,8 @@ export async function runAiCouncil(
         priceMoves: round1.priceMoves.map((m) => ({
           serviceKey: m.serviceKey,
           label: m.label,
-          currentPrice: formatPrice(m.currentPricePln, locale),
-          proposedPrice: formatPrice(m.proposedPricePln, locale),
+          currentPrice: formatPrice(m.currentPricePln, locale, currency),
+          proposedPrice: formatPrice(m.proposedPricePln, locale, currency),
           currentUnits: m.currentPricePln,
           proposedUnits: m.proposedPricePln,
           rationale: m.rationale,
@@ -373,10 +393,27 @@ export async function runAiCouncil(
     synthesisData?.options?.find((o) => o.id === "margin") ??
     synthesisData?.options?.[1];
 
-  const finalOptions: [CouncilDecisionOption, CouncilDecisionOption] = [
-    normalizeSynthesisOption(rawSafe, fallbackSafeOption, "safe", locale),
-    normalizeSynthesisOption(rawMargin, fallbackMarginOption, "margin", locale),
+  const normalizedOptions: [CouncilDecisionOption, CouncilDecisionOption] = [
+    normalizeSynthesisOption(
+      rawSafe,
+      fallbackSafeOption,
+      "safe",
+      locale,
+      currency,
+    ),
+    normalizeSynthesisOption(
+      rawMargin,
+      fallbackMarginOption,
+      "margin",
+      locale,
+      currency,
+    ),
   ];
+
+  const measured = measureAndEnforceCouncilPolicy(
+    normalizedOptions,
+    normalizedInput,
+  );
 
   const fallbackNotice =
     geminiQuotaExhausted && strategistUsedSecondaryModel
@@ -391,6 +428,7 @@ export async function runAiCouncil(
     crossProviderUsed,
     fallbackNotice,
     generatedAt: new Date().toISOString(),
+    currency,
     models: {
       strategist: strategistModelLabel,
       critic: criticLabel,
@@ -402,7 +440,8 @@ export async function runAiCouncil(
       summaryForHuman: synthesisData?.summaryForHuman?.trim()
         ? cleanProse(synthesisData.summaryForHuman)
         : fallbackBaseline.round3Synthesis.summaryForHuman,
-      options: finalOptions,
+      options: measured.options,
     },
+    policyMeasurement: measured.policyMeasurement,
   };
 }

@@ -190,5 +190,12 @@
   "jiraQuoteUnitPriceLabel": "Cena bazowa",
   "jiraQuoteTravelLabel": "Dojazd",
   "jiraQuoteTotalLabel": "Szacowana kwota",
-  "jiraQuoteCreatedNote": "Utworzono z podglądu cen klienta Northstar Ops."
+  "jiraQuoteCreatedNote": "Utworzono z podglądu cen klienta Northstar Ops.",
+  "mcpStatusIdle": "GOTOWY",
+  "mcpStatusVerified": "ZWERYFIKOWANO",
+  "mcpIdleHint": "Gotowy — kliknij „Uruchom skan MCP”, aby wywołać /api/mcp",
+  "mcpLatencyTemplate": "{ms} ms · /api/mcp na żywo",
+  "mcpSourceLive": "Dane live (OSM / rynek)",
+  "mcpSourceBaseline": "Indeks bazowy (demo)",
+  "mcpStepReadySuffix": "gotowe"
 }

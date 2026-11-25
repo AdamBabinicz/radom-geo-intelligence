@@ -33,5 +33,8 @@
   "avgMarketGap": "Średnia różnica cen",
   "belowMarketAverage": "Nasze ceny względem średniej lokalnej",
   "footerLeft": "Centrum GeoAnalityki i Operacji Usługowych",
-  "footerRight": "Studium przypadku Radom · Model bazowy + dane live"
+  "footerRight": "Studium przypadku Radom · Model bazowy + dane live",
+  "displayCurrencyLabel": "Waluta wyświetlania",
+  "currencyAutoMarketHint": "Automatycznie z rynku",
+  "resetCurrencyToMarket": "Dopasuj do waluty rynku"
 }

@@ -190,5 +190,12 @@
   "jiraQuoteUnitPriceLabel": "Unit price",
   "jiraQuoteTravelLabel": "Travel",
   "jiraQuoteTotalLabel": "Estimated total",
-  "jiraQuoteCreatedNote": "Created from Northstar Ops Customer Price Preview."
+  "jiraQuoteCreatedNote": "Created from Northstar Ops Customer Price Preview.",
+  "mcpStatusIdle": "IDLE",
+  "mcpStatusVerified": "VERIFIED",
+  "mcpIdleHint": "Ready — click \"Run MCP scan\" to invoke /api/mcp",
+  "mcpLatencyTemplate": "{ms} ms · live /api/mcp",
+  "mcpSourceLive": "Live geo/market data",
+  "mcpSourceBaseline": "Verified baseline",
+  "mcpStepReadySuffix": "ready"
 }

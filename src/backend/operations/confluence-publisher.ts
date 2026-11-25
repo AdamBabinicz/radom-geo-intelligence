@@ -3,7 +3,12 @@ import {
   resolveServiceLabel,
   type IndustryId,
 } from "../../config/industries";
-import { formatPrice } from "../../lib/currency";
+import {
+  formatPrice,
+  getLocaleCurrencyConfig,
+  normalizeDisplayCurrency,
+  type DisplayCurrency,
+} from "../../lib/currency";
 import {
   formatTemplate,
   resolveLocale,
@@ -34,8 +39,13 @@ export async function exportStrategyToConfluence(input: {
   topPainPoint?: string;
   detectedIndustryLabel?: string;
   locale?: Locale;
+  currency?: DisplayCurrency;
 }): Promise<ConfluenceExportResult> {
   const locale = resolveLocale(input.locale);
+  const currency = normalizeDisplayCurrency(
+    input.currency,
+    getLocaleCurrencyConfig(locale).currency,
+  );
   const t = translations[locale];
   const industryId = input.industryId ?? "upholstery";
   const template = INDUSTRY_TEMPLATES[industryId];
@@ -76,6 +86,7 @@ export async function exportStrategyToConfluence(input: {
     townsInRadius: input.townsInRadius,
     competitorsTracked: input.competitorsTracked,
     locale,
+    currency,
   });
   const campaign = generateLocalizedCampaign({
     season: input.season,
@@ -186,9 +197,9 @@ export async function exportStrategyToConfluence(input: {
                     100,
                 )
               : 0;
-            const ourPriceStr = formatPrice(row.ourPricePln, locale);
+            const ourPriceStr = formatPrice(row.ourPricePln, locale, currency);
             const marketAvgCell = hasLocalAvg
-              ? formatPrice(row.localPricePln, locale)
+              ? formatPrice(row.localPricePln, locale, currency)
               : "—";
             const deltaStr = hasLocalAvg
               ? `${delta > 0 ? "+" : ""}${delta}%`
