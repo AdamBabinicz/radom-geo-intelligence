@@ -170,13 +170,18 @@ export const mcpTools = [
   {
     name: "calculateServiceFee",
     description:
-      "Estimate travel fee and order total for any target town and optional distanceKm.",
+      "Estimate travel fee and order total for any target town, optional distanceKm, and display currency (PLN, USD, EUR, GBP).",
     inputSchema: {
       type: "object",
       properties: {
         town: { type: "string" },
         orderValue: { type: "number", minimum: 0 },
         distanceKm: { type: "number", minimum: 0 },
+        locale: { type: "string", enum: [...SUPPORTED_LOCALES] },
+        currency: {
+          type: "string",
+          enum: [...SUPPORTED_DISPLAY_CURRENCIES],
+        },
       },
       required: ["town", "orderValue"],
     },
@@ -316,6 +321,9 @@ export async function callMcpTool(name: string, args: Record<string, unknown>) {
       town: String(args.town ?? "Radom"),
       orderValue: Number(args.orderValue ?? 249),
       distanceKm: parseOptionalNumber(args.distanceKm),
+      locale:
+        args.locale !== undefined ? resolveLocale(args.locale) : undefined,
+      currency: parseOptionalCurrency(args.currency),
     });
   }
   if (name === "generateLocalizedCampaign") {
@@ -384,6 +392,7 @@ export async function handleMcpJsonRpc(body: {
   params?: Record<string, unknown>;
 }) {
   const id = body.id ?? null;
+
   if (body.method === "initialize") {
     return {
       jsonrpc: "2.0",
@@ -395,9 +404,11 @@ export async function handleMcpJsonRpc(body: {
       },
     };
   }
+
   if (body.method === "tools/list") {
     return { jsonrpc: "2.0", id, result: { tools: mcpTools } };
   }
+
   if (body.method === "tools/call") {
     const name = String(body.params?.name ?? "");
     const args = (body.params?.arguments ?? {}) as Record<string, unknown>;
@@ -411,6 +422,7 @@ export async function handleMcpJsonRpc(body: {
       },
     };
   }
+
   return {
     jsonrpc: "2.0",
     id,

@@ -18,6 +18,7 @@ import {
 import type {
   CouncilDebateResult,
   CouncilDecisionOption,
+  CouncilPolicyViolationRule,
 } from "@/src/backend/ai/council-engine";
 import type { CouncilExecutionContext } from "@/src/backend/index";
 import {
@@ -106,6 +107,22 @@ function isTimeoutFailure(error: unknown, status?: number): boolean {
   return false;
 }
 
+function policyRuleLabel(
+  rule: CouncilPolicyViolationRule,
+  t: AppDictionary,
+): string {
+  switch (rule) {
+    case "human_cap":
+      return t.councilRuleHumanCap;
+    case "human_floor":
+      return t.councilRuleHumanFloor;
+    case "max_step_pct":
+      return t.councilRuleMaxStep;
+    case "positive_price":
+      return t.councilRulePositivePrice;
+  }
+}
+
 export function AiCouncilPanel({
   t,
   market,
@@ -127,7 +144,6 @@ export function AiCouncilPanel({
   const [selectedOptionId, setSelectedOptionId] = useState<"safe" | "margin">(
     "safe",
   );
-
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishedConfluence, setPublishedConfluence] =
     useState<ConfluenceExportResult | null>(null);
@@ -238,6 +254,7 @@ export function AiCouncilPanel({
           lessonsLearned: lessons,
         }),
       });
+
       const data = await readJsonSafe<CouncilDebateResult & { error?: string }>(
         response,
       );
@@ -310,7 +327,7 @@ export function AiCouncilPanel({
       ...(debate.policyMeasurement
         ? {
             policyMeasurement: {
-              passed: debate.policyMeasurement.enforcedCorrections === 0,
+              passed: debate.policyMeasurement.passed,
               checksPassed: debate.policyMeasurement.checksPassed,
               checksTotal: debate.policyMeasurement.checksTotal,
               enforcedCorrections: debate.policyMeasurement.enforcedCorrections,
@@ -406,7 +423,6 @@ export function AiCouncilPanel({
 
       const confluenceResult = confJson?.result?.structuredContent ?? null;
       const jiraResult = jiraJson?.result?.structuredContent ?? null;
-
       if (!confluenceResult && !jiraResult) {
         setDebateError(t.councilPublishErrorGeneric);
         return;
@@ -432,7 +448,6 @@ export function AiCouncilPanel({
             radiusKm,
             option: chosen.title,
           });
-
       const nextLessons = Array.from(
         new Set([newLessonSummary, ...lessons]),
       ).slice(0, 6);
@@ -452,6 +467,17 @@ export function AiCouncilPanel({
     if (verdict === "challenge") return t.councilCriticChallenge;
     if (verdict === "caution") return t.councilCriticCaution;
     return t.councilCriticRevise;
+  };
+
+  const resolveViolationServiceLabel = (serviceKey: string): string => {
+    const matchedRow = market.benchmarks.find(
+      (row) => row.serviceKey === serviceKey,
+    );
+    if (matchedRow) return resolveServiceLabel(matchedRow, t, locale);
+    const matchedOptionAdj = debate?.round3Synthesis.options
+      .flatMap((opt) => opt.priceAdjustments)
+      .find((adj) => adj.serviceKey === serviceKey);
+    return matchedOptionAdj?.label || serviceKey;
   };
 
   const confluenceHref = toSafeHttpUrl(publishedConfluence?.pageUrl);
@@ -581,31 +607,62 @@ export function AiCouncilPanel({
           </div>
 
           {debate.policyMeasurement && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 text-[11px] dark:border-slate-800 dark:bg-slate-900/50">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded bg-teal-50 px-2 py-0.5 text-[10px] font-bold tracking-wider text-teal-800 dark:bg-teal-950/70 dark:text-teal-200">
-                  {t.councilMeasureBadge}
-                </span>
-                <span className="font-semibold text-slate-800 dark:text-slate-100">
-                  {formatTemplate(t.councilMeasurePassedTemplate, {
-                    passed: debate.policyMeasurement.checksPassed,
-                    total: debate.policyMeasurement.checksTotal,
-                  })}
+            <div className="space-y-2 rounded-lg border border-slate-200/80 bg-slate-50/80 px-3 py-2 text-[11px] dark:border-slate-800 dark:bg-slate-900/50">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded bg-teal-50 px-2 py-0.5 text-[10px] font-bold tracking-wider text-teal-800 dark:bg-teal-950/70 dark:text-teal-200">
+                    {t.councilMeasureBadge}
+                  </span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-100">
+                    {formatTemplate(t.councilMeasurePassedTemplate, {
+                      passed: debate.policyMeasurement.checksPassed,
+                      total: debate.policyMeasurement.checksTotal,
+                    })}
+                  </span>
+                </div>
+                <span
+                  className={
+                    debate.policyMeasurement.enforcedCorrections > 0
+                      ? "font-medium text-amber-800 dark:text-amber-300"
+                      : "font-medium text-emerald-700 dark:text-emerald-300"
+                  }
+                >
+                  {debate.policyMeasurement.enforcedCorrections > 0
+                    ? formatTemplate(t.councilMeasureEnforcedTemplate, {
+                        count: debate.policyMeasurement.enforcedCorrections,
+                      })
+                    : t.councilMeasureClean}
                 </span>
               </div>
-              <span
-                className={
-                  debate.policyMeasurement.enforcedCorrections > 0
-                    ? "font-medium text-amber-800 dark:text-amber-300"
-                    : "font-medium text-emerald-700 dark:text-emerald-300"
-                }
-              >
-                {debate.policyMeasurement.enforcedCorrections > 0
-                  ? formatTemplate(t.councilMeasureEnforcedTemplate, {
-                      count: debate.policyMeasurement.enforcedCorrections,
-                    })
-                  : t.councilMeasureClean}
-              </span>
+              {debate.policyMeasurement.violations.length > 0 && (
+                <ul className="space-y-1 border-t border-slate-200/70 pt-1.5 text-[10px] text-amber-900 dark:border-slate-800 dark:text-amber-200">
+                  {debate.policyMeasurement.violations.slice(0, 4).map((v) => (
+                    <li
+                      key={`${v.optionId}-${v.serviceKey}-${v.rule}-${v.requestedPricePln}`}
+                    >
+                      •{" "}
+                      {formatTemplate(t.councilMeasureAdjustmentTemplate, {
+                        option:
+                          v.optionId === "safe"
+                            ? t.councilOptionSafeTitle
+                            : t.councilOptionMarginTitle,
+                        service: resolveViolationServiceLabel(v.serviceKey),
+                        before: formatPrice(
+                          v.requestedPricePln,
+                          locale,
+                          currency,
+                        ),
+                        after: formatPrice(
+                          v.enforcedPricePln,
+                          locale,
+                          currency,
+                        ),
+                        rule: policyRuleLabel(v.rule, t),
+                      })}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
 
@@ -664,6 +721,9 @@ export function AiCouncilPanel({
                   {t.councilRound2Title}
                 </h3>
                 <div className="flex items-center gap-1.5">
+                  <span className="rounded bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    {debate.models.critic}
+                  </span>
                   <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:bg-amber-900/60 dark:text-amber-200">
                     {verdictLabel(debate.round2Critic.verdict)} ·{" "}
                     {t.councilRiskScoreLabel}: {debate.round2Critic.riskScore}%
@@ -682,6 +742,7 @@ export function AiCouncilPanel({
                     ))}
                   </ul>
                 </div>
+
                 {debate.round2Critic.counterProposals.length > 0 && (
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-wider text-teal-800 dark:text-teal-300">
@@ -748,6 +809,7 @@ export function AiCouncilPanel({
                     <p className="mt-1.5 text-[11px] text-slate-600 dark:text-slate-300">
                       {opt.summary}
                     </p>
+
                     {opt.priceAdjustments.length > 0 && (
                       <div className="mt-2.5 w-full space-y-1">
                         <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
@@ -778,6 +840,7 @@ export function AiCouncilPanel({
                         </div>
                       </div>
                     )}
+
                     <ul className="mt-2.5 space-y-1 text-[10px] text-slate-600 dark:text-slate-400">
                       {opt.actionItems.map((task) => (
                         <li key={task}>✓ {task}</li>

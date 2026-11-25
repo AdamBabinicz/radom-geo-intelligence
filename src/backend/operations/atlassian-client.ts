@@ -1,6 +1,6 @@
 import type { IndustryId } from "../../config/industries";
 import type { DisplayCurrency } from "../../lib/currency";
-import type { AppDictionary, Locale } from "../../locales";
+import { formatTemplate, type AppDictionary, type Locale } from "../../locales";
 import type { CompetitorAnalysisInput } from "../../types/market";
 
 export const ATLASSIAN_TIMEOUT_MS = 8000;
@@ -115,6 +115,7 @@ export function buildAdfDocument(paragraphs: string[]) {
   const safeParagraphs = paragraphs
     .map((text) => text.trim())
     .filter((text) => text.length > 0);
+
   return {
     type: "doc",
     version: 1,
@@ -125,6 +126,23 @@ export function buildAdfDocument(paragraphs: string[]) {
   };
 }
 
+export function formatPolicyMeasurementSummary(
+  policy: CouncilExecutionPolicySummary,
+  t: AppDictionary,
+): string {
+  const checksPart = formatTemplate(t.councilMeasurePassedTemplate, {
+    passed: policy.checksPassed,
+    total: policy.checksTotal,
+  });
+  const outcomePart =
+    policy.enforcedCorrections > 0
+      ? formatTemplate(t.councilMeasureEnforcedTemplate, {
+          count: policy.enforcedCorrections,
+        })
+      : t.councilMeasureClean;
+  return `${checksPart} — ${outcomePart}`;
+}
+
 export function buildConfluenceCouncilSection(
   ctx: CouncilExecutionContext,
   t: AppDictionary,
@@ -132,9 +150,11 @@ export function buildConfluenceCouncilSection(
   const modelsText = [ctx.strategistModel, ctx.criticModel]
     .filter(Boolean)
     .join(" ↔ ");
+
   const metaLines: string[] = [
     `<p><strong>${escapeHtml(t.councilApprovedOptionLabel)}:</strong> ${escapeHtml(ctx.selectedOptionTitle)}${ctx.selectedOptionSummary ? ` — ${escapeHtml(ctx.selectedOptionSummary)}` : ""}</p>`,
   ];
+
   if (modelsText) {
     const riskPart =
       typeof ctx.riskScore === "number"
@@ -144,11 +164,19 @@ export function buildConfluenceCouncilSection(
       `<p><strong>${escapeHtml(t.councilDebateModelsLabel)}:</strong> ${escapeHtml(modelsText)}${escapeHtml(riskPart)}</p>`,
     );
   }
+
   if (ctx.humanConstraint?.trim()) {
     metaLines.push(
       `<p><strong>${escapeHtml(t.councilHumanRuleLabel)}:</strong> ${escapeHtml(ctx.humanConstraint.trim())}</p>`,
     );
   }
+
+  if (ctx.policyMeasurement) {
+    metaLines.push(
+      `<p><strong>${escapeHtml(t.councilMeasureConfluenceLabel)}:</strong> ${escapeHtml(formatPolicyMeasurementSummary(ctx.policyMeasurement, t))}</p>`,
+    );
+  }
+
   const objectionsBlock =
     ctx.criticObjections && ctx.criticObjections.length > 0
       ? `<h3>${escapeHtml(t.councilKeyCriticObjectionsHeading)}</h3><ul>${ctx.criticObjections
@@ -156,6 +184,7 @@ export function buildConfluenceCouncilSection(
           .map((item) => `<li>${escapeHtml(item)}</li>`)
           .join("")}</ul>`
       : "";
+
   const actionsBlock =
     ctx.actionItems && ctx.actionItems.length > 0
       ? `<h3>${escapeHtml(t.councilApprovedActionPlanHeading)}</h3><ol>${ctx.actionItems

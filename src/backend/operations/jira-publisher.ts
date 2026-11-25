@@ -15,6 +15,7 @@ import type { JiraEpicResult } from "../../types/market";
 import {
   ATLASSIAN_TIMEOUT_MS,
   buildAdfDocument,
+  formatPolicyMeasurementSummary,
   getAtlassianConfig,
   readJsonSafe,
   resolveJiraProject,
@@ -110,6 +111,11 @@ export async function createJiraMarketingEpics(input: {
         `${t.councilHumanRuleLabel}: ${ctx.humanConstraint.trim()}`,
       );
     }
+    if (ctx.policyMeasurement) {
+      epicParagraphs.push(
+        `${t.councilMeasureConfluenceLabel}: ${formatPolicyMeasurementSummary(ctx.policyMeasurement, t)}`,
+      );
+    }
     if (ctx.criticObjections && ctx.criticObjections.length > 0) {
       epicParagraphs.push(
         `${t.councilJiraCriticObjectionLabel}: ${ctx.criticObjections[0]}`,
@@ -161,6 +167,7 @@ export async function createJiraMarketingEpics(input: {
             const parentCreated = await readJsonSafe<{ key?: string }>(
               parentRes,
             );
+
             if (parentCreated?.key) {
               const parentKey = parentCreated.key;
               const childType =
@@ -205,12 +212,13 @@ export async function createJiraMarketingEpics(input: {
                             issuetype: { id: taskType.id },
                           });
                         }
-
                         if (!childRes.ok) return null;
+
                         const childData = await readJsonSafe<{ key?: string }>(
                           childRes,
                         );
                         if (!childData?.key) return null;
+
                         return {
                           key: childData.key,
                           summary: item.summary,
@@ -275,13 +283,13 @@ export async function createCustomerQuote(
     input.unitLabel && typeof input.quantity === "number"
       ? ` (${input.quantity} ${input.unitLabel})`
       : "";
+
   const formattedUnit = formatPrice(input.unitPricePln, locale, currency);
   const formattedTravel = formatPrice(input.travelFeePln, locale, currency);
   const formattedTotal = formatPrice(input.totalPln, locale, currency);
   const summary = `${t.jiraQuotePrefix} ${serviceName}${qtySuffix} · ${input.town} · ${formattedTotal}`;
 
   const atlassian = getAtlassianConfig();
-
   if (atlassian) {
     try {
       const resolved = await resolveJiraProject(atlassian);

@@ -1,3 +1,6 @@
+import type { DisplayCurrency } from "../lib/currency";
+import type { Locale } from "../locales";
+
 export type Town =
   | "Radom"
   | "Pionki"
@@ -17,6 +20,11 @@ export interface CompetitorInsight {
   service: string;
   averagePricePln: number;
   ourPricePln: number;
+  currency?: DisplayCurrency;
+  averagePrice?: number;
+  ourPrice?: number;
+  formattedAveragePrice?: string;
+  formattedOurPrice?: string;
   reviewPainPoints: Array<{ topic: string; mentions: number }>;
   sourceStatus: "demo" | "connected";
 }
@@ -25,14 +33,21 @@ export interface ServiceFeeInput {
   town: string;
   orderValue: number;
   distanceKm?: number;
+  locale?: Locale;
+  currency?: DisplayCurrency;
 }
 
 export interface ServiceFeeQuote {
   town: string;
   orderValue: number;
+  currency?: DisplayCurrency;
   distanceKm?: number;
   travelFeePln: number;
   totalPln: number;
+  travelFee?: number;
+  total?: number;
+  formattedTravelFee?: string;
+  formattedTotal?: string;
   sourceStatus: "computed" | "demo" | "connected";
 }
 
