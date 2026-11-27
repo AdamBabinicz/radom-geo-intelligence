@@ -3,11 +3,13 @@
 > Parameterized Geo-Intelligence platform, Multi-Model AI Strategy Council, native Jira UI Kit dashboard, and Atlassian Forge Rovo + MCP ecosystem for local field-service operators.
 
 [![Live Production](https://img.shields.io/badge/Live_App-nsops.vercel.app-0d9488?style=flat-square)](https://nsops.vercel.app)
+[![Demo Video](<https://img.shields.io/badge/Demo_Video-YouTube_(4:01)-dc2626?style=flat-square&logo=youtube&logoColor=white>)](https://youtu.be/829W7ZoTmKs)
 [![Atlassian Forge](https://img.shields.io/badge/Atlassian_Forge-Runs_on_Atlassian-0052cc?style=flat-square)](https://developer.atlassian.com/platform/forge/)
 [![MCP JSON-RPC 2.0](https://img.shields.io/badge/Protocol-MCP_JSON--RPC_2.0-1e293b?style=flat-square)](https://nsops.vercel.app/api/mcp)
 [![Next.js 16.4](https://img.shields.io/badge/Next.js-16.4.6-000000?style=flat-square)](https://nextjs.org)
 
 - **Live Web Application:** https://nsops.vercel.app
+- **Demo Video (4:01, EN narrated + subtitles):** https://youtu.be/829W7ZoTmKs
 - **Web MCP Discovery & `llms.txt`:** https://nsops.vercel.app/api/mcp · https://nsops.vercel.app/llms.txt
 - **Privacy Policy & Terms:** https://nsops.vercel.app/privacy · https://nsops.vercel.app/terms
 - **Forge App ID:** `ari:cloud:ecosystem::app/0f3e249d-8d6d-42b2-a2a8-dc3aa49696d0` (`Runs on Atlassian` eligible — zero external egress)
